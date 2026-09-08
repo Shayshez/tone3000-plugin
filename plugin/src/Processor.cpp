@@ -1234,6 +1234,11 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       }
     }
 
+    // EQ in POST position: applied to wet signal before mixing with dry
+    if (!block->eq.isPre() && block->eq.isActive()) {
+      block->eq.process(buffer);
+    }
+
     // Apply per-block output gain (centered at 0.5 == unity) and mix with dry
     // Map normalized gain to linear: 0.5 -> 1.0, +/-0.5 -> +/-24 dB range.
     // Short (cab-like) IR blocks carry a fixed -18 dB pad on top: cab files
@@ -1281,15 +1286,6 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         block->swapFadeDone.store(true);
     }
 
-    // EQ in the POST position (default): the last stage of the block, applied
-    // after gain + mix so it shapes exactly what leaves the block. Skipped
-    // entirely when flat/bypassed (the PRE position ran before the model).
-    if (!block->eq.isPre() && block->eq.isActive()) {
-      block->eq.process(buffer);
-      // The mix-loop peak is pre-EQ; re-measure so the meter reflects the
-      // block's true output.
-      blockOutputPeak = bufferPeak(buffer, numChannels, numSamples);
-    }
 
     // Block output meter: post gain + mix + EQ, i.e. what this block hands to
     // the next one in the chain.

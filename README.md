@@ -270,15 +270,17 @@ flowchart LR
     BIN -. dry .-> MIX
     BIG --> PEQ["6-band EQ *\n(PRE position)"]
     PEQ --> MODEL["NAM model / IR\n(+ calibration or\nloudness normalize)"]
-    MODEL --> BOG["Out Gain\n±24 dB"]
+    MODEL --> BEQ["6-band EQ *\n(POST position)"]
+    BEQ --> BOG["Out Gain\n±24 dB"]
     BOG --> MIX["Dry/Wet Mix"]
-    MIX --> BEQ["6-band EQ *\n(POST position)"]
-    BEQ --> BOUT([block out])
+    MIX --> BOUT([block out])
 ```
 
-Each block's 6-band EQ runs in exactly one position: after the dry/wet mix
-(POST, the default) or between In Gain and the model (PRE), never both. A
-flat or bypassed EQ costs nothing on the audio thread.
+Each block's 6-band EQ runs in exactly one position: right after the model,
+before Out Gain and the dry/wet mix (POST, the default), or between In Gain
+and the model (PRE), never both. Either way the EQ only ever shapes the wet
+signal, never the mixed dry+wet output. A flat or bypassed EQ costs nothing
+on the audio thread.
 
 Meters tap the signal after input gain (input meters, pre-gate), after each
 block's In Gain plus its PRE-position EQ and after its final stage (block

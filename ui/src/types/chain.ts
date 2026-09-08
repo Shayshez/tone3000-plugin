@@ -45,6 +45,14 @@ export const EQ_MAX_FREQ_HZ = 20000;
 export const EQ_MAX_ABS_GAIN_DB = 15;
 export const EQ_MIN_Q = 0.1;
 export const EQ_MAX_Q = 10;
+export const DEFAULT_EQ_BANDS: EqBand[] = [
+  { type: "lowshelf", freqHz: 100, gainDb: 0, q: 0.71 },
+  { type: "bell", freqHz: 250, gainDb: 0, q: 1.0 },
+  { type: "bell", freqHz: 650, gainDb: 0, q: 1.0 },
+  { type: "bell", freqHz: 1600, gainDb: 0, q: 1.0 },
+  { type: "bell", freqHz: 3500, gainDb: 0, q: 1.4 },
+  { type: "highshelf", freqHz: 8000, gainDb: 0, q: 0.71 },
+];
 
 /** A bell/shelf band at ~0 dB is inert; cuts shape by nature. */
 export function isEqBandActive(band: EqBand): boolean {
