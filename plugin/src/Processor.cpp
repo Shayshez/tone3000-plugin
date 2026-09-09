@@ -1258,20 +1258,21 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     float blockOutputPeak = 0.0f;
     for (int i = 0; i < numSamples; ++i) {
       // wetFadeGain rides the mix (bypass-bound glides crossfade toward
-      // dry); swapWetMuteGain rides the wet term only (engine swaps dip the
-      // wet path to silence without exposing the dry input); see
-      // ChainBlock.h.
-      const float g = block->outputGainSmoother.getNextValue() *
-                      block->swapWetMuteGain.getNextValue();
+      // dry); swapWetMuteGain rides the wet term only, pre-mix (engine swaps
+      // dip the wet path to silence without exposing the dry input); see
+      // ChainBlock.h. Out Gain applies to the combined dry+wet signal,
+      // post-mix (issue #99): it's the block's output stage, not a wet trim.
+      const float wetMute = block->swapWetMuteGain.getNextValue();
+      const float outGain = block->outputGainSmoother.getNextValue();
       const float m = block->mixSmoother.getNextValue() * block->wetFadeGain.getNextValue();
-      float wetL = buffer.getWritePointer(0)[i] * g;
+      float wetL = buffer.getWritePointer(0)[i] * wetMute;
       float dryL = dryScratch.getReadPointer(0)[i];
-      buffer.getWritePointer(0)[i] = dryL * (1.0f - m) + wetL * m;
+      buffer.getWritePointer(0)[i] = (dryL * (1.0f - m) + wetL * m) * outGain;
       blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(0)[i]));
       if (numChannels > 1) {
-        float wetR = buffer.getWritePointer(1)[i] * g;
+        float wetR = buffer.getWritePointer(1)[i] * wetMute;
         float dryR = dryScratch.getReadPointer(1)[i];
-        buffer.getWritePointer(1)[i] = dryR * (1.0f - m) + wetR * m;
+        buffer.getWritePointer(1)[i] = (dryR * (1.0f - m) + wetR * m) * outGain;
         blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(1)[i]));
       }
     }

@@ -25,6 +25,7 @@ target_sources(DspTests PRIVATE
     src/local_load_tests.cpp
     src/midi_map_tests.cpp
     src/multicore_tests.cpp
+    src/outgain_tests.cpp
     src/predelay_tests.cpp
     src/preset_tests.cpp
     src/processor_tests.cpp
