@@ -116,6 +116,7 @@ StandaloneAudioSettings::StandaloneAudioSettings(TONE3000Processor& p,
   jassert(isAvailable());
   if (auto* dm = deviceManager())
     dm->addChangeListener(this);
+  applyRawInputMode();
   ensureInitialPolicies();
 }
 
@@ -133,6 +134,7 @@ void StandaloneAudioSettings::changeListenerCallback(juce::ChangeBroadcaster*) {
   // Fires for every device-manager change: our own setters, hot-plugs,
   // devices vanishing mid-session, vendor control panel edits. Re-run the
   // sync policies, then push the UI to re-pull state.
+  applyRawInputMode();
   ensureInitialPolicies();
   applyMonitoringPolicy();
   if (onDeviceStateChanged)
@@ -798,6 +800,36 @@ void StandaloneAudioSettings::rememberCurrentSetup() {
   if (auto* obj = remembered.getDynamicObject())
     obj->setProperty(currentSetupKey(), entryVar);
   p->setValue(kRememberedSetupsKey, juce::JSON::toString(remembered, true));
+}
+
+void StandaloneAudioSettings::applyRawInputMode() {
+#if JUCE_IOS
+  auto* dm = deviceManager();
+  auto* device = dm != nullptr ? dm->getCurrentAudioDevice() : nullptr;
+  if (device == nullptr)
+    return;
+
+  // JUCE opens the session with setCategory: and no mode, so it stays in
+  // AVAudioSessionModeDefault - the voice chain. Its AGC levels the guitar
+  // before the model ever sees it (pick attack and the guitar's volume knob
+  // stop coming through), and the processing inflates
+  // AVAudioSession.inputLatency, the figure the settings UI reports.
+  // setAudioPreprocessingEnabled(false) is Measurement mode, the raw path.
+  //
+  // setCategory: clears the session mode, and JUCE calls it every time a
+  // device opens, so this cannot be done once at startup. Device opens and
+  // route changes both end up at the device manager's change broadcast, which
+  // is where this is re-applied from.
+  //
+  // The retry covers a USB route restart, where the first setMode: can be
+  // dropped while the route is still settling. Nothing is reported on a second
+  // refusal: JUCE returns `session.mode == mode`, an NSString pointer
+  // comparison rather than isEqualToString:, so a false is not evidence the
+  // mode failed to take, and a log built on it would send someone chasing a
+  // session that is already in Measurement mode.
+  if (!device->setAudioPreprocessingEnabled(false))
+    device->setAudioPreprocessingEnabled(false);
+#endif
 }
 
 void StandaloneAudioSettings::applyMonitoringPolicy() {

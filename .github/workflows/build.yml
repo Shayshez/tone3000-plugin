@@ -521,7 +521,7 @@ jobs:
           signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
           files-folder: ${{ github.workspace }}\build
-          files-folder-filter: "*-setup.exe"
+          files-folder-filter: "*.exe"
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -531,7 +531,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TONE3000-v${{ env.T3K_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: build/TONE3000-v*-setup.exe
+          path: build/TONE3000-v*-${{ matrix.os }}-${{ matrix.arch }}.exe
           if-no-files-found: error
 
       # Linux: tarball with install script (the usual convention on Linux).
@@ -563,4 +563,80 @@ jobs:
         with:
           name: TONE3000-v${{ env.T3K_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
           path: build/TONE3000-v*-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # iOS Simulator: configure and build the Standalone app for the iPad
+  # Simulator so the iOS target cannot silently rot. No signing, no
+  # installer: the unsigned Simulator .app is uploaded for QA. Xcode is the
+  # generator here (the iOS presets need it for the app bundle and the
+  # multi-config build), and it does not honour the sccache compiler
+  # launchers, so this job builds cold.
+  ios-simulator:
+    name: iOS Simulator
+    runs-on: macos-14
+    environment: builds
+    env:
+      VITE_T3K_PUBLISHABLE_KEY: ${{ secrets.VITE_T3K_PUBLISHABLE_KEY }}
+      VITE_T3K_UPDATE_NOTICE: ${{ vars.VITE_T3K_UPDATE_NOTICE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Read version
+        run: echo "T3K_VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+
+      - name: Cache CPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            libs/juce
+            libs/googletest
+            libs/clap-juce-extensions
+          key: cpm-deps-ios-${{ hashFiles('CMakeLists.txt', 'plugin/CMakeLists.txt') }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      # Same order as the desktop job: configure first so CPM fetches JUCE,
+      # which the UI build needs, then reconfigure so the content-hashed UI
+      # assets are picked up (plugin/CMakeLists.txt globs them at configure).
+      - name: Configure CMake (iOS Simulator bootstrap)
+        run: cmake --preset ios-simulator
+
+      - name: Build UI
+        run: |
+          cd ui
+          npm ci
+          npm run build
+          cd ..
+
+      - name: Reconfigure CMake (iOS Simulator)
+        run: cmake --preset ios-simulator
+
+      - name: Build Standalone (iOS Simulator)
+        run: |
+          cmake --build build-ios --config ${{ env.BUILD_TYPE }} \
+            --target TONE3000_Standalone --parallel -- -sdk iphonesimulator
+
+      - name: Package Simulator app
+        run: |
+          set -euo pipefail
+          APP="build-ios/plugin/TONE3000_artefacts/${{ env.BUILD_TYPE }}/Standalone/TONE3000.app"
+          test -d "$APP"
+          ditto -c -k --keepParent "$APP" \
+            "build-ios/TONE3000-v${T3K_VERSION}-ios-simulator.zip"
+
+      - name: Upload artifacts (iOS Simulator)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TONE3000-v${{ env.T3K_VERSION }}-ios-simulator
+          path: build-ios/TONE3000-v*-ios-simulator.zip
           if-no-files-found: error

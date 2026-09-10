@@ -1068,7 +1068,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
 
       // EQ in the PRE position: between the block's input gain and its model,
       // shaping what drives the amp/IR. Skipped entirely when flat/bypassed
-      // (or in the default post position; see the post-block stage below).
+      // (or in the default post position; see the POST stage below).
       if (block->eq.isPre() && block->eq.isActive()) {
         block->eq.process(buffer);
         // Re-measure so the input meter still reads what the model receives.
@@ -1234,45 +1234,56 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       }
     }
 
-    // EQ in POST position: applied to wet signal before mixing with dry
+    // EQ in the POST position (default): shapes the wet signal after the
+    // model, before the dry/wet mix, so the dry share of Mix passes
+    // untouched. Skipped entirely when flat/bypassed (the PRE position ran
+    // before the model).
     if (!block->eq.isPre() && block->eq.isActive()) {
       block->eq.process(buffer);
     }
 
-    // Apply per-block output gain (centered at 0.5 == unity) and mix with dry
-    // Map normalized gain to linear: 0.5 -> 1.0, +/-0.5 -> +/-24 dB range.
-    // Short (cab-like) IR blocks carry a fixed -18 dB pad on top: cab files
-    // are peak-normalized to 0 dBFS and spectrally concentrated, far too hot
-    // at unity. Long (reverb-like) IRs get no pad; unit-energy
-    // normalization already puts them at ≈ dry level (see irIsLong in
-    // ChainBlock.h). The UI knob still reads relative dB (0 at center); the
-    // pad is invisible chain gain staging (see gainDbScale in knobScale.ts).
-    // Classified at load, so changes ride the engine-swap fade.
+    // Per-block output stage: blend the wet signal with dry, then apply Out
+    // Gain (centered at 0.5 == unity, ±24 dB) to the combined result. The
+    // knob is the block's output fader, not a wet trim, so it has to move
+    // the dry share of Mix too.
+    //
+    // Short (cab-like) IR blocks pad the wet term by a fixed -18 dB: cab
+    // files are peak-normalized to 0 dBFS and spectrally concentrated, far
+    // too hot at unity. The pad stays on the wet term, never the blend; at
+    // mix < 100% the dry share passes at its natural level. Long
+    // (reverb-like) IRs get no pad; unit-energy normalization already puts
+    // them at ≈ dry level (see irIsLong in ChainBlock.h). The UI knob still
+    // reads relative dB (0 at center); the pad is invisible chain gain
+    // staging (see gainDbScale in knobScale.ts). Classified at load, so pad
+    // steps land while the engine-swap fade holds the wet term silent.
     const float irOffsetDb =
         (block->type == ChainBlockType::IR && !block->irIsLong) ? -18.0f : 0.0f;
-    const float gainDb = (block->outputGainNormalized - 0.5f) * 48.0f + irOffsetDb;
-    const float targetLinear = juce::Decibels::decibelsToGain(gainDb);
-    block->outputGainSmoother.setTargetValue(targetLinear);
+    const float cabPadGain = juce::Decibels::decibelsToGain(irOffsetDb);
+    const float gainDb = (block->outputGainNormalized - 0.5f) * 48.0f;
+    block->outputGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(gainDb));
     block->mixSmoother.setTargetValue(juce::jlimit(0.0f, 1.0f, block->mixNormalized));
 
     float blockOutputPeak = 0.0f;
     for (int i = 0; i < numSamples; ++i) {
       // wetFadeGain rides the mix (bypass-bound glides crossfade toward
-      // dry); swapWetMuteGain rides the wet term only, pre-mix (engine swaps
-      // dip the wet path to silence without exposing the dry input); see
-      // ChainBlock.h. Out Gain applies to the combined dry+wet signal,
-      // post-mix (issue #99): it's the block's output stage, not a wet trim.
-      const float wetMute = block->swapWetMuteGain.getNextValue();
+      // dry) and glides the post-mix Out Gain to unity in step, so a
+      // completed fade lands exactly on the skipped block's pass-through.
+      // swapWetMuteGain and the cab pad ride the wet term only, pre-mix
+      // (engine swaps dip the wet path to silence without exposing the dry
+      // input); see ChainBlock.h.
+      const float wetGain = block->swapWetMuteGain.getNextValue() * cabPadGain;
       const float outGain = block->outputGainSmoother.getNextValue();
-      const float m = block->mixSmoother.getNextValue() * block->wetFadeGain.getNextValue();
-      float wetL = buffer.getWritePointer(0)[i] * wetMute;
+      const float fade = block->wetFadeGain.getNextValue();
+      const float m = block->mixSmoother.getNextValue() * fade;
+      const float postGain = 1.0f + (outGain - 1.0f) * fade;
+      float wetL = buffer.getWritePointer(0)[i] * wetGain;
       float dryL = dryScratch.getReadPointer(0)[i];
-      buffer.getWritePointer(0)[i] = (dryL * (1.0f - m) + wetL * m) * outGain;
+      buffer.getWritePointer(0)[i] = (dryL * (1.0f - m) + wetL * m) * postGain;
       blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(0)[i]));
       if (numChannels > 1) {
-        float wetR = buffer.getWritePointer(1)[i] * wetMute;
+        float wetR = buffer.getWritePointer(1)[i] * wetGain;
         float dryR = dryScratch.getReadPointer(1)[i];
-        buffer.getWritePointer(1)[i] = (dryR * (1.0f - m) + wetR * m) * outGain;
+        buffer.getWritePointer(1)[i] = (dryR * (1.0f - m) + wetR * m) * postGain;
         blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(1)[i]));
       }
     }
@@ -1287,9 +1298,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         block->swapFadeDone.store(true);
     }
 
-
-    // Block output meter: post gain + mix + EQ, i.e. what this block hands to
-    // the next one in the chain.
+    // Block output meter: post EQ + mix + Out Gain, i.e. what this block
+    // hands to the next one in the chain.
     const float blockOutputDb =
         blockOutputPeak > 0.0f ? juce::Decibels::gainToDecibels(blockOutputPeak) : -60.0f;
     block->outputMeterDb.store(std::max(-60.0f, blockOutputDb));

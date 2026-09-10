@@ -3,7 +3,17 @@ cmake_minimum_required(VERSION 3.22.1)
 # Minimum macOS version; see the comment in the root CMakeLists.txt. Repeated
 # here (before project()) so a standalone configure of this directory gets the
 # same floor instead of the build host's macOS version.
-if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+# See the comment in the root CMakeLists.txt: iOS needs an iOS version here,
+# not the macOS floor. Repeated for a standalone configure of this directory.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(T3K_IOS TRUE)
+endif()
+
+if(T3K_IOS)
+    if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "16.0" CACHE STRING "Minimum iOS version" FORCE)
+    endif()
+elseif(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version" FORCE)
 endif()
 
@@ -32,13 +42,24 @@ option(BUILD_LV2 "Build LV2 format (native Linux plugin standard)" ON)
 option(BUILD_CLAP "Build CLAP format (via clap-juce-extensions)" ON)
 set(_plugin_formats "VST3") # Default plugin format
 
+# iOS has no desktop plugin host, so none of the plugin formats apply: VST3,
+# AU (the desktop v2 wrapper), AAX, LV2 and CLAP are all macOS/Windows/Linux
+# only. The app that ships on an iPad is the Standalone. AUv3 would be the
+# in-host format there and is deliberately out of scope for this spike.
+if (T3K_IOS)
+    set(_plugin_formats "")
+    set(BUILD_AAX OFF)
+    set(BUILD_LV2 OFF)
+    set(BUILD_CLAP OFF)
+endif()
+
 # Build for Desktop or Embedded
 if (NOT HEADLESS)
     set(JUCE_WEB_BROWSER_VALUE 1)               # Webview UI for Desktop
     set(NEEDS_WEB_BROWSER_VALUE TRUE)           # enable, need browser for webview on linux
     list(APPEND _plugin_formats "Standalone")   # Add Standalone format
     # Enable AU (Apple) format on macOS
-    if (APPLE)
+    if (APPLE AND NOT T3K_IOS)
         list(APPEND _plugin_formats "AU")
     endif()
     if (BUILD_AAX)
@@ -63,7 +84,18 @@ else()
     add_compile_definitions(HEADLESS=1)
 endif()
 
-add_subdirectory(NeuralAmpModelerCore)
+# NeuralAmpModelerCore's own CMakeLists only knows Darwin, Linux and Windows
+# and hard-fails with "Unrecognized Platform!" on anything else, iOS included.
+# Nothing in this build actually needs it: the NAM static library below is
+# compiled here from NAM_SRC precisely to keep the submodule pristine, and the
+# include paths and NAM_ENABLE_A2_FAST definition it would set are directory
+# scoped (they never reached this target anyway; both are set explicitly
+# below). The only things it contributes are the submodule's own dev tools,
+# which are excluded from the default build a few lines down. So skip it on
+# iOS and leave every other platform on the existing path.
+if (NOT T3K_IOS)
+    add_subdirectory(NeuralAmpModelerCore)
+endif()
 
 # The NAM dev tools (benchmarks, render, run_tests) are only used by the
 # submodule's own CI; nothing in the plugin build needs them. They also don't
@@ -107,10 +139,61 @@ target_compile_definitions(NAM PRIVATE NAM_ENABLE_A2_FAST)
 # bakes in Apple's icon grid: a rounded-rect chip with margins on a transparent
 # canvas. Windows wants the full-bleed square. Both derive from the t3k mark;
 # regen notes in design/app-icon-macos.svg.
-if(APPLE)
+# iOS masks the icon itself (the springboard applies the squircle), so it wants
+# the full-bleed square like Windows, not the macOS artwork with baked-in margins.
+if(APPLE AND NOT T3K_IOS)
     set(_app_icon "${CMAKE_CURRENT_SOURCE_DIR}/icon/icon-macos.png")
 else()
     set(_app_icon "${CMAKE_CURRENT_SOURCE_DIR}/icon/icon.png")
+endif()
+
+# Extra juce_add_plugin arguments for the iOS app. Kept in one list so the
+# call below stays a single unchanged block on every other platform.
+#
+# - BUNDLE_ID: T3K_IOS_BUNDLE_ID, defaulting to the project's own id. Pass
+#   -DT3K_IOS_BUNDLE_ID=<your id> to sign under a personal team; changing it
+#   on a device that already holds the app gives a fresh, empty Documents.
+# - BACKGROUND_AUDIO_ENABLED: without the "audio" UIBackgroundModes entry iOS
+#   suspends the audio session the moment the app leaves the foreground, which
+#   also breaks Inter-App Audio style use next to a DAW.
+# - FILE_SHARING_ENABLED / DOCUMENT_BROWSER_ENABLED: the local .nam and IR
+#   story on iOS is the Files app. These two put the app's Documents folder in
+#   Files (UIFileSharingEnabled + LSSupportsOpeningDocumentsInPlace) so a user
+#   can drop captures in, and let juce::FileChooser open them in place.
+# - IPAD_SCREEN_ORIENTATIONS: the faceplate is landscape by design. iPhone is
+#   out of scope for this PR, so no iPhone orientation list.
+# - BUILD_VERSION: CFBundleVersion, which JUCE otherwise defaults to the
+#   marketing version. App Store Connect refuses a build number it has already
+#   seen for that marketing version, so with the default every upload after the
+#   first bounces. T3K_IOS_BUILD_NUMBER is a plain integer for CI to override.
+# The microphone and Bluetooth permission strings the plugin already declares
+# are the same keys iOS wants, so they are left in the shared block below.
+set(_t3k_ios_args "")
+if (T3K_IOS)
+    set(T3K_IOS_BUNDLE_ID "com.TONE3000.TONE3000" CACHE STRING
+        "Bundle identifier for the iOS app (override to sign under a personal team)")
+    set(T3K_IOS_BUILD_NUMBER "1" CACHE STRING
+        "CFBundleVersion for the iOS app: bump on every upload of one marketing version")
+    set(_t3k_ios_args
+        BUNDLE_ID "${T3K_IOS_BUNDLE_ID}"
+        BUILD_VERSION "${T3K_IOS_BUILD_NUMBER}"
+        BACKGROUND_AUDIO_ENABLED TRUE
+        FILE_SHARING_ENABLED TRUE
+        DOCUMENT_BROWSER_ENABLED TRUE
+        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+    )
+endif()
+
+# LSMinimumSystemVersion is a macOS Launch Services key; on iOS the deployment
+# target already rides in the binary and MinimumOSVersion, so merging a macOS
+# key there would just be noise in the plist.
+if (T3K_IOS)
+    # The app's only encryption is standard HTTPS, which is exempt. Declaring
+    # that here answers App Store Connect's export-compliance question once
+    # instead of on every TestFlight upload.
+    set(_t3k_plist_to_merge PLIST_TO_MERGE "<plist version=\"1.0\"><dict><key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>")
+else()
+    set(_t3k_plist_to_merge PLIST_TO_MERGE "<plist version=\"1.0\"><dict><key>LSMinimumSystemVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string></dict></plist>")
 endif()
 
 juce_add_plugin(${PROJECT_NAME}
@@ -146,9 +229,78 @@ juce_add_plugin(${PROJECT_NAME}
     # Finder's Get Info read LSMinimumSystemVersion, and without it the app
     # looks installable on any macOS. One value for the universal binary: the
     # Intel floor, since every arm64 Mac runs 11.0 or later anyway.
-    PLIST_TO_MERGE "<plist version=\"1.0\"><dict><key>LSMinimumSystemVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string></dict></plist>"
+    ${_t3k_plist_to_merge}
+    ${_t3k_ios_args}
     ICON_BIG "${_app_icon}"
 )
+
+# What App Store Connect checks on upload. Nothing here changes how the app
+# behaves; without it the upload is rejected or the icon goes missing.
+if (T3K_IOS)
+    # Apple's privacy manifest. An upload whose binary calls a "required
+    # reason" API the manifest does not declare is rejected with ITMS-91053.
+    # It belongs to the app target rather than the shared code, and iOS
+    # bundles are flat, so "Resources" is the bundle root.
+    set(_t3k_privacy "${CMAKE_CURRENT_SOURCE_DIR}/PrivacyInfo.xcprivacy")
+    target_sources(${PROJECT_NAME}_Standalone PRIVATE "${_t3k_privacy}")
+    set_source_files_properties("${_t3k_privacy}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
+    # The 1024 App Store icon must carry no alpha channel: with one, App Store
+    # Connect returns ITMS-90717 and the icon never appears in TestFlight.
+    # juceaide writes every icon RGBA no matter what the source is - its own
+    # opaque pass reallocates through the native image type, which is 32-bit
+    # ARGB on macOS - so the channel is dropped here, after juce_add_plugin
+    # generated the icon set and before actool compiles it into Assets.car.
+    # The pixels are already opaque; only the channel goes.
+    # JUCE writes the icon set under the shared-code target's generated sources
+    # but in a folder named for the format target that owns the bundle.
+    get_target_property(_t3k_gen ${PROJECT_NAME} JUCE_GENERATED_SOURCES_DIRECTORY)
+    set(_t3k_iconset "${_t3k_gen}/${PROJECT_NAME}_Standalone/Images.xcassets/AppIcon.appiconset")
+    find_program(T3K_MAGICK NAMES magick convert)
+    if (NOT EXISTS "${_t3k_iconset}")
+        message(WARNING "iOS: no icon set at ${_t3k_iconset}. JUCE has moved it, so the icons "
+                        "keep their alpha channel and an App Store Connect upload is rejected "
+                        "with ITMS-90717.")
+    elseif (NOT T3K_MAGICK)
+        message(WARNING "iOS: ImageMagick (magick/convert) not found, so the app icons keep "
+                        "their alpha channel. A Simulator build is fine; an App Store Connect "
+                        "upload is rejected with ITMS-90717. brew install imagemagick, then "
+                        "reconfigure.")
+    else()
+        file(GLOB _t3k_icons "${_t3k_iconset}/*.png")
+        set(_t3k_flat "${CMAKE_CURRENT_BINARY_DIR}/_t3k_icon_opaque.png")
+        set(_t3k_missed "")
+        foreach(_png ${_t3k_icons})
+            execute_process(COMMAND "${T3K_MAGICK}" "${_png}" -alpha off "PNG24:${_t3k_flat}"
+                            RESULT_VARIABLE _t3k_rc OUTPUT_QUIET ERROR_QUIET)
+            if (_t3k_rc EQUAL 0 AND EXISTS "${_t3k_flat}")
+                file(RENAME "${_t3k_flat}" "${_png}")
+            else()
+                get_filename_component(_t3k_name "${_png}" NAME)
+                list(APPEND _t3k_missed "${_t3k_name}")
+            endif()
+        endforeach()
+        if (_t3k_missed)
+            message(WARNING "iOS: ImageMagick could not flatten ${_t3k_missed}. Those icons keep "
+                            "their alpha channel, and an App Store Connect upload is rejected "
+                            "with ITMS-90717 if Icon-AppStore-1024.png is among them.")
+        else()
+            message(STATUS "iOS: app icons flattened to opaque")
+        endif()
+    endif()
+
+    # juceaide never enlarges the source (RectanglePlacement::onlyReduceInSize),
+    # so anything under 1024 leaves the App Store icon sitting at its own size
+    # in the middle of a blank 1024 field. Width lives at byte 16 of a PNG.
+    file(READ "${_app_icon}" _t3k_png_head HEX LIMIT 20)
+    string(SUBSTRING "${_t3k_png_head}" 32 8 _t3k_png_width)
+    math(EXPR _t3k_png_width "0x${_t3k_png_width}")
+    if (_t3k_png_width LESS 1024)
+        message(WARNING "iOS: ${_app_icon} is ${_t3k_png_width}px wide. The App Store icon is "
+                        "1024x1024 and is not upscaled, so it will show the artwork at "
+                        "${_t3k_png_width}px on a blank field. Export the icon at 1024.")
+    endif()
+endif()
 
 target_sources(${PROJECT_NAME}
     PRIVATE
@@ -250,7 +402,10 @@ target_link_libraries(${PROJECT_NAME}
         juce::juce_gui_extra
         # NAM: force_load/whole-archive so static factory::Helper initializers
         # (ConvNet, LSTM, WaveNet) are not stripped by the linker
-        $<$<PLATFORM_ID:Darwin>:-Wl,-force_load,$<TARGET_FILE:NAM>>
+        # PLATFORM_ID is "iOS" (not "Darwin") when cross-compiling for iOS, so
+        # both have to be listed or the iOS link drops every model architecture
+        # and NAM loads fail with "No config parser registered for ...".
+        $<$<PLATFORM_ID:Darwin,iOS>:-Wl,-force_load,$<TARGET_FILE:NAM>>
         # Linux: flags and library must be separate link items. A single
         # "-Wl,--whole-archive,NAM,-Wl,..." item gets comma-split by the GCC
         # driver, passing a literal "-Wl" to ld ("unrecognized option '-Wl'").
@@ -337,12 +492,18 @@ if (UNIX AND NOT APPLE)
     target_compile_definitions(${PROJECT_NAME} PUBLIC JUCE_USE_XINPUT=0)
 endif()
 
-# Use native macOS title bar for standalone app
-if (APPLE AND NOT HEADLESS)
+# Use native macOS title bar for standalone app. On iOS there is no title bar
+# and no resizable window: kiosk mode is exactly what a full-screen iPad app
+# wants, so leave JUCE's default (on) alone there.
+if (APPLE AND NOT HEADLESS AND NOT T3K_IOS)
     target_compile_definitions(${PROJECT_NAME}
         PUBLIC JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE=0
     )
-    # AVFoundation: query/request the OS microphone permission (AudioPermissions.mm).
+endif()
+
+if (APPLE AND NOT HEADLESS)
+    # AVFoundation: query/request the OS microphone permission
+    # (AudioPermissions.mm; AVCaptureDevice on macOS, AVAudioSession on iOS).
     find_library(AVFOUNDATION_FRAMEWORK AVFoundation)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${AVFOUNDATION_FRAMEWORK})
 endif()

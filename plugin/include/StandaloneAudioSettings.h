@@ -137,6 +137,10 @@ private:
   bool applyRememberedSetup(const juce::var& saved);
   void rememberCurrentSetup();
 
+  /** iOS: hold the audio session in Measurement mode (see the .cpp). Does
+      nothing on any other platform. */
+  void applyRawInputMode();
+
   /** Follow the feedback-risk heuristic unless the user has overridden. */
   void applyMonitoringPolicy();
   bool computeFeedbackRisk() const;

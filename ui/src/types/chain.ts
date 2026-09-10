@@ -17,8 +17,9 @@
 export type ChainSide = 'left' | 'right';
 
 /**
- * Per-block 6-band EQ. Runs after the block's output gain + mix by default,
- * or between the block's input gain and its model when `pre` is on.
+ * Per-block 6-band EQ. Runs on the block's wet signal after its model by
+ * default (before the dry/wet mix), or between the block's
+ * input gain and its model when `pre` is on.
  * Band curve types match BlockEq::BandType on the native side.
  */
 export type EqBandType = 'lowcut' | 'lowshelf' | 'bell' | 'highshelf' | 'highcut';
@@ -34,7 +35,7 @@ export interface BlockEqParams {
   /** EQ power/bypass. Band settings persist while disabled. */
   enabled: boolean;
   /** Position: true = before the block's model (after its input gain),
-      false = after the block (default). */
+      false = after the model on the wet path (default). */
   pre: boolean;
   bands: EqBand[];
 }
@@ -45,14 +46,6 @@ export const EQ_MAX_FREQ_HZ = 20000;
 export const EQ_MAX_ABS_GAIN_DB = 15;
 export const EQ_MIN_Q = 0.1;
 export const EQ_MAX_Q = 10;
-export const DEFAULT_EQ_BANDS: EqBand[] = [
-  { type: "lowshelf", freqHz: 100, gainDb: 0, q: 0.71 },
-  { type: "bell", freqHz: 250, gainDb: 0, q: 1.0 },
-  { type: "bell", freqHz: 650, gainDb: 0, q: 1.0 },
-  { type: "bell", freqHz: 1600, gainDb: 0, q: 1.0 },
-  { type: "bell", freqHz: 3500, gainDb: 0, q: 1.4 },
-  { type: "highshelf", freqHz: 8000, gainDb: 0, q: 0.71 },
-];
 
 /** A bell/shelf band at ~0 dB is inert; cuts shape by nature. */
 export function isEqBandActive(band: EqBand): boolean {
@@ -113,6 +106,44 @@ export interface BlockParams {
   /** Normalized 0..1 -> 0-1000ms, delay before the wet signal enters the
       IR's convolver. IR blocks only; inert for NAM blocks. */
   predelay: number;
+  /** IR envelope: a 2-segment Attack/Decay shape (Space Designer-style) over
+      the block's own detected content (irContentLengthMs, frozen at load).
+      IR blocks only; inert for NAM blocks. Set via `setBlockIrDecay`, not
+      `setBlockParam`: unlike this list's other continuous params (real-time
+      smoothers), it rebuilds the convolver engine off-thread, and all six
+      values travel together in one call so a drag on one can't clobber
+      another's in-flight value.
+
+      `decayLength` is the TOTAL truncated length - the real "End" position,
+      a fraction of the full detected content, matching the old standalone
+      Length knob's own convention. `attackLength` is NOT an independent
+      length - it's a fraction *of that total*, marking where the envelope's
+      peak (the Attack/Decay boundary) sits within it, naturally bounded to
+      [0, the total] by construction: dragging Attack Length alone can never
+      change the total window length, only Decay Length does that.
+
+      `initLevel` is the level at sample 0 (the origin, not part of either
+      segment). The Attack segment runs from there up to unity/0dB - pinned,
+      not adjustable: standard AD-envelope semantics (Attack always reaches
+      full level; only Decay's target level is adjustable) - at
+      `attackLength`'s position; the Decay segment continues from that peak
+      to the truncated content's end (`decayLevel`). Both adjustable levels
+      are normalized 0..1, unipolar attenuation-only (via percentScale: 1.0
+      = unity/0dB, 0.0 = genuine silence - see decayEnvelope.ts's levelToDb,
+      mirroring prepareIrShapeRebuild's own native formula). Defaults
+      (attackLength 0.0, decayLength 1.0, every level 1.0) are a genuine
+      no-op: no attack ramp, decay spans the full content, flat/unity
+      envelope. */
+  initLevel: number;
+  attackLength: number;
+  /** Continuous per-segment envelope shape, normalized 0..1: 0.5 (default)
+      is a linear-in-dB ramp, sweeping toward more front-loaded below and
+      more back-loaded above - see knobScale.ts's curveScale and
+      decayEnvelope.ts's shared curve formula. */
+  attackCurve: number;
+  decayLength: number;
+  decayLevel: number;
+  decayCurve: number;
   /** Per-block 6-band EQ. Flat = skipped entirely on the audio thread. */
   eq: BlockEqParams;
 }
@@ -193,6 +224,10 @@ export interface ToneBlock {
       once the model loads. Drives the Mix knob's default (long = 50% wet)
       and the Out knob help (long IRs carry no -18 dB pad). */
   irLong: boolean;
+  /** Detected IR content length in ms (native, RMS-threshold based): where
+      the waveform display's auto-fit trims to. 0 for NAM blocks and IR
+      blocks not yet loaded. */
+  irContentLengthMs: number;
   /** NAM calibration metadata (dBu) off the loaded model; absent when the
       model carries none (or nothing is loaded yet). `inputLevelDbu` feeds
       input calibration; `outputLevelDbu` feeds the mid-chain calibrated

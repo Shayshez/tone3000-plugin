@@ -86,11 +86,27 @@ export interface ChainActions {
   /** The block's NAM A2 size (0 = lite, 1 = full); retiers the loaded
       engine natively. Backs the header LITE/FULL toggle. */
   setBlockSlimSize: (blockId: string, slimSize: number) => void;
+  /** IR envelope: a 2-segment Attack/Decay shape (see BlockParams.initLevel/
+      attackLength/attackCurve/decayLength/decayLevel/decayCurve). Not
+      fire-and-forget-safe at knob-drag rates - rebuilds the convolver
+      off-thread, so callers should debounce (see ChainBlock.tsx's shaping
+      row). All six values arrive together (like setBlockEqBand's
+      whole-band updates) so a drag on one can't clobber another's in-flight
+      value. */
+  setBlockIrDecay: (
+    blockId: string,
+    initLevelNormalized: number,
+    attackLengthNormalized: number,
+    attackCurveNormalized: number,
+    decayLengthNormalized: number,
+    decayLevelNormalized: number,
+    decayCurveNormalized: number
+  ) => void;
   /** Fire-and-forget whole-band EQ setter (see useChainState). */
   setBlockEqBand: (blockId: string, bandIndex: number, band: EqBand) => void;
   /** EQ power/bypass: band settings persist, processing is skipped. */
   setBlockEqEnabled: (blockId: string, enabled: boolean) => void;
-  /** EQ position: pre = before the block's model, off = after the block. */
+  /** EQ position: pre = before the block's model, off = after the model (wet only). */
   setBlockEqPre: (blockId: string, pre: boolean) => void;
   resetBlockEq: (blockId: string) => void;
   /**

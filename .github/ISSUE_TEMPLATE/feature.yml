@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Sign-in, catalog browse, and tone3000.com go to [support@tone3000.com](mailto:support@tone3000.com), not here.
+        Sign-in, catalog browse, and anything else on tone3000.com go to [tone-3000/tone-3000-feature-requests](https://github.com/tone-3000/tone-3000-feature-requests/issues), not here.
 
   - type: checkboxes
     id: searched

@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: TONE3000 website
+    url: https://github.com/tone-3000/tone-3000-feature-requests/issues
+    about: Bugs and feature requests for tone3000.com, including sign-in and the catalog.
   - name: TONE3000 support
     url: https://www.tone3000.com
-    about: Sign-in and catalog. Email support@tone3000.com. Not plugin bugs.
+    about: Email support@tone3000.com for account questions, takedowns, or anything private.
   - name: NAM Core
     url: https://github.com/sdatkinson/NeuralAmpModelerCore
     about: NAM inference library (vendored in this plugin).
