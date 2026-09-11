@@ -235,10 +235,7 @@ export const HELP = {
   blockOutIr: knobHelp('Out', 'block output gain, ±24 dB (IR pre-trimmed -18 dB).'),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
-  blockCabPan: knobHelp(
-    'Pan',
-    'stereo placement. No effect yet with a single cabinet slot.'
-  ),
+  blockCabPan: knobHelp('Pan', 'stereo placement. No effect yet with a single cabinet slot.'),
   // IR shaping row: a 2-segment Attack/Decay envelope (Space Designer-style)
   // over the truncated content. Decay Length sets the TOTAL trimmed length
   // (the real "End" position); Attack Length is a position *within* that
@@ -300,8 +297,7 @@ export const HELP = {
   shareTone: 'Share: copy TONE3000 link.',
   modelSelectSignedOut: 'Models: sign in to TONE3000 to switch models.',
   backToChain: 'Back: chain overview.',
-  prevBlock: 'Previous: the block before this one.',
-  nextBlock: 'Next: the block after this one.',
+  addBlockAfter: 'Add: insert a new block after this one.',
 
   // EQ editor
   eqFader: `Band Fader: gain, ±15 dB. ${shift('drag')}: fine · double-click / ${alt(

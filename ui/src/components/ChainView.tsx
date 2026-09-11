@@ -106,7 +106,9 @@ type Lanes = Record<ChainSide, ChainItem[]>;
     blockId (explicit Back — the block still exists, see onBack) or a lane +
     index (the open block vanished out from under us — trash, undo, redo...
     see the scroll-restore effect in ChainView). */
-type PendingScroll = { kind: 'id'; blockId: string } | { kind: 'index'; side: ChainSide; index: number };
+type PendingScroll =
+  | { kind: 'id'; blockId: string }
+  | { kind: 'index'; side: ChainSide; index: number };
 
 /** Id of the ⌥-duplicate stand-in: the inert copy of the dragged block that
     holds its home slot while the standard drag machinery runs untouched. */
@@ -449,25 +451,29 @@ export const ChainView: React.FC<ChainViewProps> = ({
     // Another enabled+loaded NAM after this block in its lane. This mirrors the
     // DSP's lastNamIndex scan (Processor.cpp): with calibration on, such a
     // block hands off at calibrated output level instead of normalizing.
-    const detailLane = chain.some((item) => item.blockId === detailBlock.blockId)
-      ? chain
-      : (chainRight ?? []);
+    const isLeftLane = chain.some((item) => item.blockId === detailBlock.blockId);
+    const detailLane = isLeftLane ? chain : (chainRight ?? []);
+    const detailSide: ChainSide = isLeftLane ? 'left' : 'right';
     const detailIndex = detailLane.findIndex((item) => item.blockId === detailBlock.blockId);
 
-    // Prev/Next (issue #83): step within this same lane only — a branch taps
-    // the signal into the other lane but never reorders or merges the two
-    // arrays, so "next" staying lane-local is correct in stereo too, branched
-    // or not. Skips insert slots (nothing to open there); clamps at the
-    // lane's ends rather than wrapping.
-    const stepBlock = (dir: 1 | -1): ToneBlock | null => {
-      for (let i = detailIndex + dir; i >= 0 && i < detailLane.length; i += dir) {
-        const item = detailLane[i];
-        if (!isInsertSlot(item)) return item;
-      }
-      return null;
-    };
-    const prevBlock = stepBlock(-1);
-    const nextBlock = stepBlock(1);
+    // Chain-map strip (issue #83's replacement for the old Prev/Next
+    // chevrons): every tone block in this same lane, in order — lane-local
+    // like Prev/Next was, since a branch only taps the other lane's signal
+    // and never merges the two arrays (correct in stereo, branched or not).
+    const chainStripBlocks = detailLane.filter((item): item is ToneBlock => !isInsertSlot(item));
+
+    // The strip's + targets the nearest insert slot at/after the open
+    // block's position, falling back to the nearest one before it. True
+    // "insert directly between two blocks" would need splicing the lane
+    // array — out of scope for this pass — so this reuses the exact same
+    // slot-targeted mechanism the gallery's own "+" tiles already use (see
+    // addModel/loadTone), just auto-aimed at the closest slot instead of a
+    // manually clicked one. Null only if the lane somehow has no insert slot
+    // at all (shouldn't happen: normalizeLaneInserts always keeps one).
+    const nextInsertSlot =
+      detailLane.slice(detailIndex + 1).find(isInsertSlot) ??
+      [...detailLane.slice(0, detailIndex)].reverse().find(isInsertSlot) ??
+      null;
 
     const namDownstream = detailLane
       .slice(detailIndex + 1)
@@ -502,10 +508,11 @@ export const ChainView: React.FC<ChainViewProps> = ({
             pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
             setDetailBlockId(null);
           }}
-          hasPrev={prevBlock != null}
-          onPrev={() => prevBlock && setDetailBlockId(prevBlock.blockId)}
-          hasNext={nextBlock != null}
-          onNext={() => nextBlock && setDetailBlockId(nextBlock.blockId)}
+          chainStripBlocks={chainStripBlocks}
+          onJumpToBlock={setDetailBlockId}
+          onAddBlockAfter={
+            nextInsertSlot ? () => actions.addModel(detailSide, nextInsertSlot.blockId) : null
+          }
           onFillToFaceplate={onFillToFaceplate}
         />
       </div>

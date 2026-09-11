@@ -3,8 +3,6 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   Bookmark,
-  ChevronLeft,
-  ChevronRight,
   Download,
   Equal,
   FolderClosed,
@@ -14,6 +12,7 @@ import {
   Share,
   Trash2,
 } from './icons';
+import { ChainMapStrip } from './ChainMapStrip';
 import { ToneImage } from './GearIcon';
 import { WaveformDisplay } from './WaveformDisplay';
 import { IrEnvelopeGraph } from './IrEnvelopeGraph';
@@ -292,12 +291,16 @@ interface ChainBlockProps {
   namSlimSizeDefault: number;
   /** Return to the chain gallery (← BLOCK sits above the bordered card). */
   onBack: () => void;
-  /** Step to the previous/next block in this same lane (issue #83), skipping
-      insert slots; false/no-op at the lane's ends (no wraparound). */
-  hasPrev: boolean;
-  onPrev: () => void;
-  hasNext: boolean;
-  onNext: () => void;
+  /** Chain-map strip (issue #83's replacement for the old Prev/Next
+      chevrons): every tone block in this block's lane, in chain order, for
+      the persistent strip above the card. See ChainMapStrip. */
+  chainStripBlocks: ToneBlock[];
+  /** Jump the detail view straight to another block (any block in the lane,
+      not just the adjacent one — see ChainMapStrip.onSelect). */
+  onJumpToBlock: (blockId: string) => void;
+  /** Add a block right after this one via the existing add-tone flow; null
+      when no insert slot is resolvable (see ChainMapStrip.onAdd). */
+  onAddBlockAfter: (() => void) | null;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
 }
@@ -311,10 +314,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   sampleRate,
   namSlimSizeDefault,
   onBack,
-  hasPrev,
-  onPrev,
-  hasNext,
-  onNext,
+  chainStripBlocks,
+  onJumpToBlock,
+  onAddBlockAfter,
   onFillToFaceplate,
 }) => {
   const { blockId, tone, params } = block;
@@ -742,32 +744,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     }
   };
 
-  // Left/Right steps to the adjacent block (issue #83), ignored while typing
-  // or with a native <select>/editable element focused so it doesn't fight
-  // normal text/option navigation. Scoped to this component's own mount
-  // lifetime, so it's only live while the detail view is actually open.
-  // isSwitchingModel also guards it: switchModel has no cancel handle, so a
-  // step mid-switch is just ignored rather than left to race.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof Element &&
-        e.target.closest('input, textarea, select, [contenteditable]')
-      ) {
-        return;
-      }
-      if (e.key === 'ArrowLeft' && hasPrev && !isSwitchingModel) {
-        e.preventDefault();
-        onPrev();
-      } else if (e.key === 'ArrowRight' && hasNext && !isSwitchingModel) {
-        e.preventDefault();
-        onNext();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [hasPrev, hasNext, isSwitchingModel, onPrev, onNext]);
-
   // A model download/prepare is in flight (switch, swap or first load). The
   // previous model keeps playing during a switch (`loaded` stays true), so
   // loading affordances key off `modelLoading`, not `loaded`.
@@ -870,64 +846,49 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           padding: showInfo ? '24rem 0' : 0,
         }}
       >
-        {/* ← BLOCK sits above the bordered card (Figma: 16px mono, gap 16);
-            Prev/Next (issue #83) share the row, right-aligned. */}
-        <div
+        {/* ← BLOCK sits above the bordered card (Figma: 16px mono, gap 16). */}
+        <button
+          type="button"
+          onClick={onBack}
+          {...helpProps(HELP.backToChain)}
           style={{
+            alignSelf: 'flex-start',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            gap: '16rem',
             marginBottom: '16rem',
             flexShrink: 0,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            color: WHITE,
           }}
         >
-          <button
-            type="button"
-            onClick={onBack}
-            {...helpProps(HELP.backToChain)}
+          <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+          <span
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16rem',
-              flexShrink: 0,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              padding: 0,
-              cursor: 'pointer',
-              color: WHITE,
+              fontFamily: FONT_MONO,
+              fontSize: '16rem',
+              fontWeight: 400,
+              textTransform: 'uppercase',
+              lineHeight: 1.4,
             }}
           >
-            <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-            <span
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: '16rem',
-                fontWeight: 400,
-                textTransform: 'uppercase',
-                lineHeight: 1.4,
-              }}
-            >
-              Block
-            </span>
-          </button>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8rem' }}>
-            <ChromeIconButton
-              help={HELP.prevBlock}
-              onClick={onPrev}
-              disabled={!hasPrev || isSwitchingModel}
-            >
-              <ChevronLeft />
-            </ChromeIconButton>
-            <ChromeIconButton
-              help={HELP.nextBlock}
-              onClick={onNext}
-              disabled={!hasNext || isSwitchingModel}
-            >
-              <ChevronRight />
-            </ChromeIconButton>
-          </div>
-        </div>
+            Block
+          </span>
+        </button>
+
+        {/* Chain-map strip (issue #83's replacement for the old Prev/Next
+            chevrons): every block in this lane, always visible here so any
+            block is one click away, not just the adjacent one. */}
+        <ChainMapStrip
+          blocks={chainStripBlocks}
+          currentBlockId={blockId}
+          onSelect={onJumpToBlock}
+          onAdd={onAddBlockAfter}
+        />
 
         <div
           style={{
