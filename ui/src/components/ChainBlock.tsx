@@ -905,6 +905,40 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             onSelect={onJumpToBlock}
             onAdd={onAddBlockAt}
           />
+
+          {/* Invisible mirror of the ← BLOCK button: ChainMapStrip centers
+              itself within its own flex:1 slot, but that slot only starts
+              after the button, so without this the strip visually skews
+              right (centered in the row minus the button's width, not in
+              the row as a whole). A same-markup, visibility:hidden twin
+              claims exactly the button's own layout width on the other
+              side — self-maintaining if the label/icon ever changes,
+              unlike a hardcoded width that could silently drift out of
+              sync. */}
+          <div
+            aria-hidden
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '16rem',
+              flexShrink: 0,
+              visibility: 'hidden',
+              pointerEvents: 'none',
+            }}
+          >
+            <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: '16rem',
+                fontWeight: 400,
+                textTransform: 'uppercase',
+                lineHeight: 1.4,
+              }}
+            >
+              Block
+            </span>
+          </div>
         </div>
 
         <div
