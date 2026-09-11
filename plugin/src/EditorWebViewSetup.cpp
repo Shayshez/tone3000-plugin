@@ -808,6 +808,15 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
 #endif
             return juce::var(true);
           }))
+#if JUCE_IOS
+      // Platform flag for the web UI, injected at document start so the very
+      // first paint already knows. iOS is the only build whose window is a
+      // fixed, full-screen box the UI cannot resize, which changes how the UI
+      // fits its design box (see useUiScale) and which pointer gestures it
+      // offers. Set only here, so every desktop build's injected script is
+      // byte-identical to before.
+      .withUserScript(R"(window.__T3K_PLATFORM__ = 'ios';)")
+#endif
       .withUserScript(R"(
             document.documentElement.style.backgroundColor = '#000000';
             // This script runs at document start, where document.body is still

@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint src",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\""
+    "lint": "eslint src test",
+    "test": "node --test \"test/*.test.ts\"",
+    "format": "prettier --write \"{src,test}/**/*.{ts,tsx,css}\"",
+    "format:check": "prettier --check \"{src,test}/**/*.{ts,tsx,css}\""
   },
   "dependencies": {
     "@dnd-kit/helpers": "^0.5.0",

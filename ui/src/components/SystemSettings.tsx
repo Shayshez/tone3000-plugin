@@ -575,7 +575,18 @@ export const SystemSettings: React.FC<SystemSettingsProps> = ({ device }) => {
               ariaLabel="Sample rate"
             />
             {rateCaption(state) && <p style={captionStyle}>{rateCaption(state)}</p>}
-            <InlineBannerAlert id="rate-not-48k" state={state} />
+            {/* iOS: the Bluetooth route is why the rate list is short and the
+                rate is low, so it goes first and the generic note is dropped
+                when it fires (one explanation, not two). */}
+            <InlineBannerAlert id="bluetooth-route" state={state} />
+            <InlineBannerAlert
+              id="rate-not-48k"
+              state={state}
+              show={
+                !bannerRuleById['bluetooth-route']?.when(state) &&
+                bannerRuleById['rate-not-48k'].when(state)
+              }
+            />
           </FieldRow>
         )}
 

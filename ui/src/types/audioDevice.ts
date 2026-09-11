@@ -50,7 +50,38 @@ export interface AudioDeviceState {
   midiInputs: MidiInputDevice[];
   /** OS Bluetooth MIDI pairing dialog exists (macOS). */
   btMidiAvailable: boolean;
+  /** iOS only: the audio session's current route is Bluetooth (HFP, A2DP or
+      LE). Always false on desktop, where the OS does not force a route on
+      us. Drives the Bluetooth tip (see shouldShowBluetoothTip). */
+  bluetoothRoute: boolean;
 }
+
+/**
+ * Should the Bluetooth tip show? Pure, so it can be tested without React.
+ *
+ * Two ways in: the route itself is Bluetooth, or the session came up below
+ * 44.1 kHz, which on iOS effectively only happens on a headset (HFP) route
+ * capped at 16 or 24 kHz. The rate arm is the safety net for a route the
+ * port-type list does not name; the caller gates the whole thing to iOS.
+ */
+export const shouldShowBluetoothTip = (state: AudioDeviceState): boolean =>
+  state.deviceOpen && (state.bluetoothRoute || (state.sampleRate > 0 && state.sampleRate < 44100));
+
+/**
+ * The headline the tip can stand behind. Only a route the session reports as
+ * Bluetooth gets named as Bluetooth; a low rate on any other route (a USB
+ * interface opened at 32 kHz, say) is described as what it is, a low rate,
+ * so the banner never claims a cause it cannot see. Pure, tested.
+ */
+export const bluetoothTipHeadline = (state: AudioDeviceState): string => {
+  const kHz = `${Math.round(state.sampleRate / 1000)} kHz`;
+  const capped = state.sampleRate > 0 && state.sampleRate < 44100;
+  if (state.bluetoothRoute)
+    return capped
+      ? `Bluetooth headphones are limiting audio to ${kHz} and add latency.`
+      : 'Bluetooth headphones add latency.';
+  return `This audio route is running at ${kHz}, which limits fidelity and adds latency.`;
+};
 
 export interface MidiInputDevice {
   /** OS device identifier (stable key for enable/disable). */

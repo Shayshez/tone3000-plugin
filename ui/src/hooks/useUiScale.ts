@@ -17,6 +17,23 @@ let committedDesignHeight = DESIGN_HEIGHT;
 let pendingDesignHeight: number | undefined;
 let pendingTimer: number | undefined;
 
+/**
+ * True in the iOS app, where native injects the flag at document start (see
+ * the JUCE_IOS user script in EditorWebViewSetup.cpp). iOS is the only build
+ * whose window is a fixed, full-screen box: there is no corner drag, no host
+ * resize request, and the screen's aspect (4:3 on every iPad) is nothing like
+ * the design box's 1024:578. Everywhere else this is false and the code below
+ * behaves exactly as it always has.
+ */
+export const IS_IOS =
+  (window as unknown as { __T3K_PLATFORM__?: string }).__T3K_PLATFORM__ === 'ios';
+
+// Stylesheet hook for the iOS-only rules in index.css (the 44 pt touch floor
+// and the safe-area padding). Set here rather than in a component so it is on
+// the element before the first paint, and set only on iOS, so every other
+// build's <html> carries no extra class.
+if (IS_IOS && typeof document !== 'undefined') document.documentElement.classList.add('t3k-ios');
+
 /** Largest scale at which a 1024 x designHeight box fits the viewport. The
  * floor covers 0-sized viewports during boot/teardown: pointer math divides
  * by the scale, so it must never be 0. */

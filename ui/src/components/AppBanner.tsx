@@ -1,5 +1,10 @@
 import React, { useCallback, useState } from 'react';
-import type { AudioDeviceState } from '../types/audioDevice';
+import {
+  bluetoothTipHeadline,
+  shouldShowBluetoothTip,
+  type AudioDeviceState,
+} from '../types/audioDevice';
+import { IS_IOS } from '../hooks/useUiScale';
 import { AlertIcon, type AlertVariant } from './controls';
 import { BORDER, MUTED } from './theme';
 
@@ -175,6 +180,24 @@ const BANNER_RULES: BannerRule[] = [
         <b>Noticeable delay?</b> Your buffer is {state.bufferSize} samples (
         {((state.bufferSize * 1000) / (state.sampleRate || 48000)).toFixed(1)} ms). Lowering it to
         256 or less will feel more responsive.
+      </>
+    ),
+    action: { label: 'Open Settings', kind: 'openSettings' },
+  },
+  {
+    // iOS only: with AirPods (or any headset) connected the session comes up
+    // on the Bluetooth route, which iOS caps at 16 or 24 kHz and gives extra
+    // latency. Ranked above rate-not-48k because it is the *cause* of the low
+    // rate, and the generic "runs lightest at 48 kHz" note explains nothing
+    // an iPad user can act on. Desktop never evaluates it (IS_IOS is false).
+    id: 'bluetooth-route',
+    variant: 'info',
+    dismissable: true,
+    when: (state) => IS_IOS && shouldShowBluetoothTip(state),
+    content: (state) => (
+      <>
+        <b>{bluetoothTipHeadline(state)}</b> For playing, use wired headphones, the iPad speaker, or
+        a USB audio interface.
       </>
     ),
     action: { label: 'Open Settings', kind: 'openSettings' },

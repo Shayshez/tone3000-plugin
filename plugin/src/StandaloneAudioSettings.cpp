@@ -1,6 +1,7 @@
 #include "StandaloneAudioSettings.h"
 
 #include "AudioPermissions.h"
+#include "IosAudioRoute.h"
 #include "Processor.h"
 
 // The standalone filter window header expects the full GUI/audio module set
@@ -116,6 +117,8 @@ StandaloneAudioSettings::StandaloneAudioSettings(TONE3000Processor& p,
   jassert(isAvailable());
   if (auto* dm = deviceManager())
     dm->addChangeListener(this);
+  // iOS: Measurement mode, and no Bluetooth headset mic route (see
+  // IosAudioRoute.h). No-op off iOS.
   applyRawInputMode();
   ensureInitialPolicies();
 }
@@ -239,6 +242,11 @@ juce::var StandaloneAudioSettings::getState() {
   // OS mic gate: on macOS a "denied" state silently kills all audio input,
   // so the UI surfaces it (banner + inline alert) with a jump to the fix.
   obj->setProperty("micPermission", micStatusString(AudioPermissions::getMicStatus()));
+
+  // iOS: a Bluetooth route caps the session at 16 or 24 kHz and adds
+  // latency; the UI turns this into one plain-language tip. Always false on
+  // desktop.
+  obj->setProperty("bluetoothRoute", IosAudioRoute::isBluetoothRoute());
 
   // MIDI inputs, re-enumerated per pull like the audio devices above (the UI
   // polls while the tab is open, which is also our hot-plug detection; the
@@ -804,31 +812,25 @@ void StandaloneAudioSettings::rememberCurrentSetup() {
 
 void StandaloneAudioSettings::applyRawInputMode() {
 #if JUCE_IOS
-  auto* dm = deviceManager();
-  auto* device = dm != nullptr ? dm->getCurrentAudioDevice() : nullptr;
-  if (device == nullptr)
-    return;
-
   // JUCE opens the session with setCategory: and no mode, so it stays in
   // AVAudioSessionModeDefault - the voice chain. Its AGC levels the guitar
   // before the model ever sees it (pick attack and the guitar's volume knob
   // stop coming through), and the processing inflates
   // AVAudioSession.inputLatency, the figure the settings UI reports.
-  // setAudioPreprocessingEnabled(false) is Measurement mode, the raw path.
+  // Measurement mode is the raw path.
+  //
+  // The mode goes in one setCategory:mode:options: call together with the
+  // category options, never through setMode: alone: on iPadOS 26 a bare
+  // setMode: from Default mode cleared the category options to MixWithOthers
+  // only, which cost the A2DP, AirPlay and DefaultToSpeaker options JUCE
+  // asked for. The same call drops AllowBluetoothHFP, the option that lets a
+  // headset mic cap the whole session at 16 or 24 kHz (see IosAudioRoute.h).
   //
   // setCategory: clears the session mode, and JUCE calls it every time a
   // device opens, so this cannot be done once at startup. Device opens and
   // route changes both end up at the device manager's change broadcast, which
   // is where this is re-applied from.
-  //
-  // The retry covers a USB route restart, where the first setMode: can be
-  // dropped while the route is still settling. Nothing is reported on a second
-  // refusal: JUCE returns `session.mode == mode`, an NSString pointer
-  // comparison rather than isEqualToString:, so a false is not evidence the
-  // mode failed to take, and a log built on it would send someone chasing a
-  // session that is already in Measurement mode.
-  if (!device->setAudioPreprocessingEnabled(false))
-    device->setAudioPreprocessingEnabled(false);
+  IosAudioRoute::configureSession();
 #endif
 }
 

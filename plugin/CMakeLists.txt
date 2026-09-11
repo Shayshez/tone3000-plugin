@@ -162,6 +162,11 @@ endif()
 #   can drop captures in, and let juce::FileChooser open them in place.
 # - IPAD_SCREEN_ORIENTATIONS: the faceplate is landscape by design. iPhone is
 #   out of scope for this PR, so no iPhone orientation list.
+# - REQUIRES_FULL_SCREEN: App Store validation refuses a landscape-only iPad
+#   app unless it opts out of multitasking with UIRequiresFullScreen
+#   (ITMS-90474). On iPadOS 26 the key no longer blocks windowing at runtime,
+#   so it changes nothing there; on older iPadOS it disables Split View, which
+#   the landscape faceplate never supported anyway.
 # - BUILD_VERSION: CFBundleVersion, which JUCE otherwise defaults to the
 #   marketing version. App Store Connect refuses a build number it has already
 #   seen for that marketing version, so with the default every upload after the
@@ -181,6 +186,7 @@ if (T3K_IOS)
         FILE_SHARING_ENABLED TRUE
         DOCUMENT_BROWSER_ENABLED TRUE
         IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        REQUIRES_FULL_SCREEN TRUE
     )
 endif()
 
@@ -252,40 +258,32 @@ if (T3K_IOS)
     # ARGB on macOS - so the channel is dropped here, after juce_add_plugin
     # generated the icon set and before actool compiles it into Assets.car.
     # The pixels are already opaque; only the channel goes.
+    #
+    # The rewrite uses ImageIO through a Swift script rather than a tool from
+    # the package manager: every machine that can build this target has Swift
+    # and ImageIO, and the GitHub macOS runner does not ship ImageMagick.
+    #
     # JUCE writes the icon set under the shared-code target's generated sources
     # but in a folder named for the format target that owns the bundle.
     get_target_property(_t3k_gen ${PROJECT_NAME} JUCE_GENERATED_SOURCES_DIRECTORY)
     set(_t3k_iconset "${_t3k_gen}/${PROJECT_NAME}_Standalone/Images.xcassets/AppIcon.appiconset")
-    find_program(T3K_MAGICK NAMES magick convert)
-    if (NOT EXISTS "${_t3k_iconset}")
+    file(GLOB _t3k_icons "${_t3k_iconset}/*.png")
+    if (NOT _t3k_icons)
         message(WARNING "iOS: no icon set at ${_t3k_iconset}. JUCE has moved it, so the icons "
                         "keep their alpha channel and an App Store Connect upload is rejected "
                         "with ITMS-90717.")
-    elseif (NOT T3K_MAGICK)
-        message(WARNING "iOS: ImageMagick (magick/convert) not found, so the app icons keep "
-                        "their alpha channel. A Simulator build is fine; an App Store Connect "
-                        "upload is rejected with ITMS-90717. brew install imagemagick, then "
-                        "reconfigure.")
     else()
-        file(GLOB _t3k_icons "${_t3k_iconset}/*.png")
-        set(_t3k_flat "${CMAKE_CURRENT_BINARY_DIR}/_t3k_icon_opaque.png")
-        set(_t3k_missed "")
-        foreach(_png ${_t3k_icons})
-            execute_process(COMMAND "${T3K_MAGICK}" "${_png}" -alpha off "PNG24:${_t3k_flat}"
-                            RESULT_VARIABLE _t3k_rc OUTPUT_QUIET ERROR_QUIET)
-            if (_t3k_rc EQUAL 0 AND EXISTS "${_t3k_flat}")
-                file(RENAME "${_t3k_flat}" "${_png}")
-            else()
-                get_filename_component(_t3k_name "${_png}" NAME)
-                list(APPEND _t3k_missed "${_t3k_name}")
-            endif()
-        endforeach()
-        if (_t3k_missed)
-            message(WARNING "iOS: ImageMagick could not flatten ${_t3k_missed}. Those icons keep "
-                            "their alpha channel, and an App Store Connect upload is rejected "
-                            "with ITMS-90717 if Icon-AppStore-1024.png is among them.")
-        else()
+        execute_process(
+            COMMAND xcrun swift "${CMAKE_CURRENT_SOURCE_DIR}/../script/flatten-icon-alpha.swift"
+                    ${_t3k_icons}
+            RESULT_VARIABLE _t3k_rc
+            ERROR_VARIABLE _t3k_err)
+        if (_t3k_rc EQUAL 0)
             message(STATUS "iOS: app icons flattened to opaque")
+        else()
+            message(WARNING "iOS: could not flatten the app icons (${_t3k_err}). They keep their "
+                            "alpha channel, and an App Store Connect upload is rejected with "
+                            "ITMS-90717.")
         endif()
     endif()
 
@@ -350,6 +348,8 @@ if (NOT HEADLESS)
     # OS microphone-permission shim: AVFoundation (ObjC++) on macOS, a
     # best-effort stub elsewhere (see AudioPermissions.h).
     target_sources(${PROJECT_NAME} PRIVATE include/AudioPermissions.h)
+    # iOS audio-route shim; header-only no-op on Windows and Linux.
+    target_sources(${PROJECT_NAME} PRIVATE include/IosAudioRoute.h)
     # Webview session clearing is platform-specific: WKWebsiteDataStore needs
     # ObjC++ on Apple; elsewhere a best-effort JUCE fallback.
     if (APPLE)
@@ -359,6 +359,9 @@ if (NOT HEADLESS)
         # Space passthrough to the host DAW (see WindowKeyEvents.mm).
         target_sources(${PROJECT_NAME} PRIVATE src/WindowKeyEvents.mm)
         target_sources(${PROJECT_NAME} PRIVATE src/AudioPermissions.mm)
+        # AVAudioSession route query + the Bluetooth HFP opt-out (see
+        # IosAudioRoute.h).
+        target_sources(${PROJECT_NAME} PRIVATE src/IosAudioRoute.mm)
     else()
         target_sources(${PROJECT_NAME} PRIVATE src/WebViewCookies.cpp)
         # Space passthrough to the host DAW (see WindowKeyEvents.cpp).

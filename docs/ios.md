@@ -85,13 +85,19 @@ Simulator build.
   `juce_UIViewComponentPeer_ios.mm`, plus `mach_absolute_time`). An upload whose
   binary calls one of those without declaring it is rejected with ITMS-91053,
   so the list is worth re-deriving whenever the JUCE version moves.
-- The app icons are flattened to opaque at configure time with ImageMagick.
-  juceaide writes them RGBA whatever the source is, and an alpha channel on the
-  1024 icon means ITMS-90717 and no icon in TestFlight. Without ImageMagick the
-  configure step warns; Simulator builds are unaffected either way.
+- The app icons are flattened to opaque at configure time by
+  `script/flatten-icon-alpha.swift`, run through `xcrun swift`. juceaide writes
+  them RGBA whatever the source is, and an alpha channel on the 1024 icon means
+  ITMS-90717 and no icon in TestFlight. It uses ImageIO rather than a tool from
+  a package manager because every machine that can build this target already
+  has both, the GitHub macOS runner included.
 - `ITSAppUsesNonExemptEncryption` is false in the Info.plist. The app's only
   encryption is standard HTTPS, and declaring it here answers the
   export-compliance question once instead of on every upload.
+- `UIRequiresFullScreen` is true. A landscape-only iPad app must either list
+  all four orientations or declare itself full-screen; without the key the
+  upload is refused with ITMS-90474. It costs nothing at runtime on
+  iPadOS 26 (see the multitasking note below).
 - `plugin/icon/icon.png` is 512x512 and juceaide never enlarges a source, so the
   App Store icon is currently that 512 artwork centred on a blank 1024 field.
   Exporting the icon at 1024 fixes it; the configure step warns until then.
@@ -100,6 +106,13 @@ Simulator build.
   version, so a second upload of one version needs
   `-DT3K_IOS_BUILD_NUMBER=<n>`. Without the setting at all, JUCE uses the
   marketing version as the build number and the second upload always bounces.
+- The **Deploy to TestFlight** workflow
+  (`.github/workflows/deploy-testflight.yml`) does the upload: publishing a
+  GitHub Release builds, signs and uploads, and `workflow_dispatch` runs the
+  same pipeline against any ref. Signing and upload both use an App Store
+  Connect API key from the `builds` environment, so no keychain or stored
+  profile is involved, and the build number is the workflow run number. A
+  repository without those credentials skips the job instead of failing.
 - App Store Connect requires uploads built against a current iOS SDK. A runner
   pinned to an older Xcode builds and signs fine and is then refused at upload,
   which reads as a signing problem and is not one.
@@ -117,12 +130,48 @@ Simulator build.
   file name under the current stash folder; a path that still exists is used
   as-is, which is every desktop case. Presets and project state were never
   affected: they embed the model bytes.
+- **Bluetooth headphones cap the whole session at 16 or 24 kHz.** We hit this
+  on an iPad with AirPods: `prepareToPlay: sampleRate=24000` and a sample-rate
+  warning in Settings with nothing saying why. JUCE opens the iOS
+  session as `PlayAndRecord` with `AllowBluetoothHFP`
+  (`juce_Audio_ios.cpp`, `setAudioSessionCategory`), so a headset with a
+  microphone wins the route and iOS refuses the requested 48 kHz. Two answers
+  ship together, both in `IosAudioRoute` (the Haptics / AudioPermissions
+  shim pattern, header-only no-op off iOS):
+  - `configureSession()` makes one `setCategory:mode:options:` call: the
+    category and options JUCE asked for, minus `AllowBluetoothHFP`, with
+    Measurement mode (the raw input path). `AllowBluetoothA2DP` stays, so
+    Bluetooth output-only listening still works and only the low-rate
+    headset *mic* route goes away. Mode and options go in one call on
+    purpose: on iPadOS 26 a bare `setMode:` clears category options.
+    Measured on an iPad Pro: from Default mode `0x69` became `0x1` (A2DP,
+    AirPlay and DefaultToSpeaker all gone); with the mode already
+    Measurement, a repeated `setMode:` turned `0x69` into `0x61`
+    (DefaultToSpeaker gone). It is not a JUCE text patch: JUCE sets the
+    category when it *opens* a device and never on its own route-change
+    `restart()` path, so re-applying it on every device-manager change is
+    enough and the JUCE tree stays untouched. On the same iPad Pro, with
+    AirPods Pro connected and reading `AVAudioSession` from the app log:
+    the first open with HFP allowed came up at 24 kHz; after the call the
+    device reopened at 48 kHz on the built-in mic. With a USB interface
+    unplugged mid-session, the route went to the built-in mic at 48 kHz,
+    then to built-in mic plus AirPods A2DP output at 48 kHz, and back to
+    the interface when it was plugged in again, with options `0x69` and
+    Measurement mode held through every change.
+  - `isBluetoothRoute()` feeds `bluetoothRoute` in the settings state, and
+    the UI turns that (or any session under 44.1 kHz) into one plain tip in
+    Settings > System Settings, next to Sample Rate: use wired headphones,
+    the iPad speaker, or a USB audio interface. The generic "runs lightest
+    at 48 kHz" note is suppressed while it shows, so there is one
+    explanation instead of two.
 - `xcrun simctl privacy grant microphone` does not suppress the prompt;
   `AVAudioSession` still asks once.
 - **`UIRequiresFullScreen` no longer opts an app out of multitasking** on
   iPadOS 26: a second app dragged from the Dock windows itself over this one
-  regardless. The key is therefore not set. The app is not resized by it (the
-  other app floats), so the layout is unaffected.
+  regardless. The app is not resized by it (the other app floats), so the
+  layout is unaffected. The key is set anyway because App Store validation
+  still requires it for a landscape-only iPad app (ITMS-90474) — it changes
+  runtime behaviour only on older iPadOS, where it disables Split View.
 - The `NAM` static library must be force-loaded on iOS as well as macOS.
   `$<PLATFORM_ID:...>` reports `iOS`, not `Darwin`, when cross-compiling, so
   without both the linker strips the model-architecture registrations and

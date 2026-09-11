@@ -119,7 +119,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: ui/package-lock.json
 
@@ -200,11 +200,12 @@ jobs:
           npm run build
           cd ..
 
-      - name: Lint UI (Linux)
+      - name: Lint and test UI (Linux)
         if: matrix.os == 'linux'
         run: |
           cd ui
           npm run lint
+          npm run test
 
       - name: Reconfigure CMake (macOS arm64)
         if: matrix.os == 'macos'
@@ -600,7 +601,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: ui/package-lock.json
 
