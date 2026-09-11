@@ -456,25 +456,6 @@ export const ChainView: React.FC<ChainViewProps> = ({
     const detailSide: ChainSide = isLeftLane ? 'left' : 'right';
     const detailIndex = detailLane.findIndex((item) => item.blockId === detailBlock.blockId);
 
-    // Chain-map strip (issue #83's replacement for the old Prev/Next
-    // chevrons): every tone block in this same lane, in order — lane-local
-    // like Prev/Next was, since a branch only taps the other lane's signal
-    // and never merges the two arrays (correct in stereo, branched or not).
-    const chainStripBlocks = detailLane.filter((item): item is ToneBlock => !isInsertSlot(item));
-
-    // The strip's + targets the nearest insert slot at/after the open
-    // block's position, falling back to the nearest one before it. True
-    // "insert directly between two blocks" would need splicing the lane
-    // array — out of scope for this pass — so this reuses the exact same
-    // slot-targeted mechanism the gallery's own "+" tiles already use (see
-    // addModel/loadTone), just auto-aimed at the closest slot instead of a
-    // manually clicked one. Null only if the lane somehow has no insert slot
-    // at all (shouldn't happen: normalizeLaneInserts always keeps one).
-    const nextInsertSlot =
-      detailLane.slice(detailIndex + 1).find(isInsertSlot) ??
-      [...detailLane.slice(0, detailIndex)].reverse().find(isInsertSlot) ??
-      null;
-
     const namDownstream = detailLane
       .slice(detailIndex + 1)
       .some(
@@ -508,11 +489,9 @@ export const ChainView: React.FC<ChainViewProps> = ({
             pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
             setDetailBlockId(null);
           }}
-          chainStripBlocks={chainStripBlocks}
+          chainStripItems={detailLane}
           onJumpToBlock={setDetailBlockId}
-          onAddBlockAfter={
-            nextInsertSlot ? () => actions.addModel(detailSide, nextInsertSlot.blockId) : null
-          }
+          onAddBlockAt={(insertBlockId) => actions.addModel(detailSide, insertBlockId)}
           onFillToFaceplate={onFillToFaceplate}
         />
       </div>

@@ -297,7 +297,6 @@ export const HELP = {
   shareTone: 'Share: copy TONE3000 link.',
   modelSelectSignedOut: 'Models: sign in to TONE3000 to switch models.',
   backToChain: 'Back: chain overview.',
-  addBlockAfter: 'Add: insert a new block after this one.',
 
   // EQ editor
   eqFader: `Band Fader: gain, ±15 dB. ${shift('drag')}: fine · double-click / ${alt(

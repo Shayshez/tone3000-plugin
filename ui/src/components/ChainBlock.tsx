@@ -41,7 +41,7 @@ import { BlockInfoPanel } from './BlockInfoPanel';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { useParameter } from '../hooks/useParameter';
-import type { BlockParamName, ToneBlock } from '../types/chain';
+import type { BlockParamName, ChainItem, ToneBlock } from '../types/chain';
 import { catalogModelCount, type Model, type Tone } from '../types/tone';
 import { isEqFlat, isSlimSizeFull, SLIM_SIZE_FULL, SLIM_SIZE_LITE } from '../types/chain';
 import {
@@ -292,15 +292,17 @@ interface ChainBlockProps {
   /** Return to the chain gallery (← BLOCK sits above the bordered card). */
   onBack: () => void;
   /** Chain-map strip (issue #83's replacement for the old Prev/Next
-      chevrons): every tone block in this block's lane, in chain order, for
-      the persistent strip above the card. See ChainMapStrip. */
-  chainStripBlocks: ToneBlock[];
+      chevrons): this block's whole lane, insert slots included, in chain
+      order — mirrors GalleryLane's own ChainItem[] so the strip's slot
+      order matches the real chain 1:1. See ChainMapStrip. */
+  chainStripItems: ChainItem[];
   /** Jump the detail view straight to another block (any block in the lane,
       not just the adjacent one — see ChainMapStrip.onSelect). */
   onJumpToBlock: (blockId: string) => void;
-  /** Add a block right after this one via the existing add-tone flow; null
-      when no insert slot is resolvable (see ChainMapStrip.onAdd). */
-  onAddBlockAfter: (() => void) | null;
+  /** Add a block at a specific insert slot via the existing add-tone flow
+      (same targeting GalleryLane's own "+" tiles use). See
+      ChainMapStrip.onAdd. */
+  onAddBlockAt: (insertBlockId: string) => void;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
 }
@@ -314,9 +316,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   sampleRate,
   namSlimSizeDefault,
   onBack,
-  chainStripBlocks,
+  chainStripItems,
   onJumpToBlock,
-  onAddBlockAfter,
+  onAddBlockAt,
   onFillToFaceplate,
 }) => {
   const { blockId, tone, params } = block;
@@ -846,49 +848,64 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           padding: showInfo ? '24rem 0' : 0,
         }}
       >
-        {/* ← BLOCK sits above the bordered card (Figma: 16px mono, gap 16). */}
-        <button
-          type="button"
-          onClick={onBack}
-          {...helpProps(HELP.backToChain)}
+        {/* ← BLOCK (Figma: 16px mono, gap 16) shares its row with the
+            chain-map strip (issue #83's replacement for the old Prev/Next
+            chevrons) so the strip doesn't add a row of its own height —
+            that pushed the card down far enough to clip its bottom controls
+            (e.g. Spread) in a typical-height window. Back stays fixed-width;
+            the strip takes the remaining width and scrolls internally. */}
+        <div
           style={{
-            alignSelf: 'flex-start',
             display: 'flex',
+            flexDirection: 'row',
             alignItems: 'center',
             gap: '16rem',
             marginBottom: '16rem',
             flexShrink: 0,
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            padding: 0,
-            cursor: 'pointer',
-            color: WHITE,
           }}
         >
-          <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-          <span
+          <button
+            type="button"
+            onClick={onBack}
+            {...helpProps(HELP.backToChain)}
             style={{
-              fontFamily: FONT_MONO,
-              fontSize: '16rem',
-              fontWeight: 400,
-              textTransform: 'uppercase',
-              lineHeight: 1.4,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '16rem',
+              flexShrink: 0,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              color: WHITE,
             }}
           >
-            Block
-          </span>
-        </button>
+            <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: '16rem',
+                fontWeight: 400,
+                textTransform: 'uppercase',
+                lineHeight: 1.4,
+              }}
+            >
+              Block
+            </span>
+          </button>
 
-        {/* Chain-map strip (issue #83's replacement for the old Prev/Next
-            chevrons): every block in this lane, always visible here so any
-            block is one click away, not just the adjacent one. */}
-        <ChainMapStrip
-          blocks={chainStripBlocks}
-          currentBlockId={blockId}
-          onSelect={onJumpToBlock}
-          onAdd={onAddBlockAfter}
-        />
+          {/* Every item in this block's lane, insert slots included, in
+              chain order — so any block is one click away and every gap in
+              the chain is a visible "+" at its real position, not just a
+              trailing add button. */}
+          <ChainMapStrip
+            items={chainStripItems}
+            currentBlockId={blockId}
+            onSelect={onJumpToBlock}
+            onAdd={onAddBlockAt}
+          />
+        </div>
 
         <div
           style={{
