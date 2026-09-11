@@ -374,7 +374,19 @@ export const ChainView: React.FC<ChainViewProps> = ({
   // underneath us, there's nothing left to look it up by id, so the effect
   // below falls back to this instead.
   const lastDetailPositionRef = useRef<{ side: ChainSide; index: number } | null>(null);
+  // The most recent detailBlockId that has actually resolved to a real block
+  // at least once. Distinguishes a genuine "vanished out from under us"
+  // (trash/undo/redo — this id WAS showing, and now isn't) from "chain/
+  // chainRight just haven't caught up yet" on this exact render — e.g. a
+  // ChainMapStrip "+" add reopens the view via a brand-new ChainView mount
+  // (the tone browser fully unmounted the old one), landing detailBlockId on
+  // the freshly created block before its native chain-state sync has landed
+  // in props. Only the former should clear detailBlockId and fall back to a
+  // scroll position; the latter should just wait for the next render instead
+  // of discarding the id and stranding the gallery scrolled to the far left.
+  const confirmedDetailBlockIdRef = useRef<string | null>(null);
   if (detailBlock != null) {
+    confirmedDetailBlockIdRef.current = detailBlockId;
     const side = laneOf(detailBlock.blockId);
     const index =
       side != null ? lanes[side].findIndex((i) => i.blockId === detailBlock.blockId) : -1;
@@ -403,12 +415,18 @@ export const ChainView: React.FC<ChainViewProps> = ({
 
     // detailBlockId only reaches null a step ahead of us, via onBack itself
     // (which seeds pendingScrollTargetRef in the same breath it clears this
-    // state). Landing here with detailBlockId still set means the block the
-    // takeover was open on disappeared out from under us instead — trash,
-    // undo, redo, anything native-initiated — so there's no explicit Back to
-    // rely on: fall back to its last known position, and drop the now-
-    // dangling id (otherwise it lingers in state and sessionStorage forever).
+    // state). Landing here with detailBlockId still set means either the
+    // block genuinely disappeared out from under us (trash, undo, redo,
+    // anything native-initiated - no explicit Back to rely on) or this id
+    // has never resolved yet on THIS ChainView instance (a brand-new mount
+    // whose chain/chainRight props haven't caught up to a just-created block
+    // - see confirmedDetailBlockIdRef). Only the former is a real vanish:
+    // treating the latter the same way would discard a valid pending
+    // navigation and strand the gallery scrolled to the far left the moment
+    // chain/chainRight do catch up (nothing left to restore, since
+    // lastDetailPositionRef never got a chance to record this id either).
     if (detailBlockId != null) {
+      if (confirmedDetailBlockIdRef.current !== detailBlockId) return;
       setDetailBlockId(null);
       if (lastDetailPositionRef.current != null) {
         pendingScrollTargetRef.current = { kind: 'index', ...lastDetailPositionRef.current };

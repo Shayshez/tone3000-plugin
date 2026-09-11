@@ -3,7 +3,7 @@ import { Plus } from './icons';
 import { ChromeIconButton, ChromeTextButton } from './ChromeIconButton';
 import { HELP } from './helpText';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
-import { DISABLED_OPACITY } from './theme';
+import { BORDER, BRAND_YELLOW, DISABLED_OPACITY } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
 import { isInsertSlot } from '../types/chain';
 
@@ -100,7 +100,12 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
               key={item.blockId}
               help={HELP.addTile}
               onClick={() => onAdd(item.blockId)}
-              style={{ width: `${CHIP_WIDTH}rem`, height: `${CHIP_HEIGHT}rem` }}
+              // Plain ChromeIconButton chrome has a transparent border (fine
+              // floating beside a knob, but it read as a bare icon here,
+              // next to chips that all carry a real idle border) - match the
+              // tone chips' own idle frame so the "+" reads as one more
+              // uniform member of the row, not a stray icon.
+              style={{ width: `${CHIP_WIDTH}rem`, height: `${CHIP_HEIGHT}rem`, border: BORDER }}
             >
               <Plus />
             </ChromeIconButton>
@@ -112,18 +117,23 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
                 item.params.enabled ? '' : ' · Bypassed'
               }`}
               open={item.blockId === currentBlockId}
-              // Active (non-bypassed) chips pop with the same BRAND_YELLOW
-              // fill this app already uses to mean "actively engaged" (see
-              // the EQ button's `armed={eqActive}` a few lines down in
-              // ChainBlock.tsx) rather than a new color; bypassed chips stay
-              // on the plain idle look (transparent/bordered), further
-              // dimmed like any other off control (DISABLED_OPACITY) so the
-              // contrast is a real color difference, not just opacity.
-              armed={item.params.enabled}
               style={{
                 width: `${CHIP_WIDTH}rem`,
                 height: `${CHIP_HEIGHT}rem`,
                 fontSize: `${CHIP_FONT_SIZE}rem`,
+                // Active (non-bypassed), not the one currently open: a thin
+                // BRAND_YELLOW outline on the plain idle chrome (no fill) -
+                // enough to read as "on" at a glance without turning most of
+                // the strip solid yellow (a full armed fill, tried first,
+                // overwhelmed the row since most blocks in a chain are
+                // active and only a couple are usually bypassed). The
+                // currently-open chip already reads as unambiguously current
+                // via its own white `open` fill, so it skips this accent.
+                ...(item.params.enabled && item.blockId !== currentBlockId
+                  ? { border: `1rem solid ${BRAND_YELLOW}` }
+                  : null),
+                // Bypassed: dim like any other off control in this app
+                // (DISABLED_OPACITY), on top of whatever chrome above.
                 ...(item.params.enabled ? null : { opacity: DISABLED_OPACITY }),
               }}
             >
