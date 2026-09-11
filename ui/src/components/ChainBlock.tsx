@@ -29,6 +29,7 @@ import {
   attackLengthMsScale,
   curveScale,
   percentScale,
+  cabPanScale,
 } from './knobScale';
 import type { KnobScale } from './knobScale';
 import { BusyOverlay, LoadingDots } from './LoadingDots';
@@ -335,6 +336,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const [outputGain, setOutputGain] = useState(params.outputGain ?? 0.5);
   const [mix, setMix] = useState(params.mix ?? 1.0);
   const [predelay, setPredelay] = useState(params.predelay ?? 0);
+  const [cabPan, setCabPan] = useState(params.cabPan ?? 0.5);
   const [initLevel, setInitLevel] = useState(params.initLevel ?? 1.0);
   const [attackLength, setAttackLength] = useState(params.attackLength ?? 0.0);
   const [attackCurve, setAttackCurve] = useState(params.attackCurve ?? 0.5);
@@ -389,6 +391,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => {
     if (!knobDragRef.current) setPredelay(params.predelay ?? 0);
   }, [params.predelay]);
+  useEffect(() => {
+    if (!knobDragRef.current) setCabPan(params.cabPan ?? 0.5);
+  }, [params.cabPan]);
   useEffect(() => {
     if (!knobDragRef.current) setInitLevel(params.initLevel ?? 1.0);
   }, [params.initLevel]);
@@ -769,6 +774,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const modelBusy = block.modelLoading || (!block.loaded && !block.loadFailed);
 
   const isNam = tone.format?.toLowerCase() === 'nam';
+  // Real ChainBlockType::CAB block (site tones tagged gear === "cab"; see
+  // ToneBlock.blockType) - structurally minimal natively (no predelay/
+  // envelope fields, single convolver), so the sections built for those
+  // fields never render for one: nothing back there to show. NOT the same
+  // as IrCategory === 'cab' (a still-live classification on plain IR
+  // blocks); that one keeps the full IR Player feature set, just with the
+  // -18dB pad and 100% mix default.
+  const isCab = block.blockType === 'cab';
   // POC: static waveform display replaces the artwork image for IR blocks
   // only (see WaveformDisplay.tsx). `!isNam` in the gate skips the native
   // fetch entirely for NAM blocks; falls back to the image while unfetched
@@ -777,7 +790,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // that (see useIrWaveform's doc comment).
   const irWaveform = useIrWaveform(
     blockId,
-    !isNam && block.loaded,
+    !isNam && !isCab && block.loaded,
     block.activeModelId,
     block.modelLoading
   );
@@ -819,7 +832,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // Cab loads full wet by default, IrPlayer half wet (native sets the mix on
   // first load from the block's IR category); Alt-click reset on Mix must
   // agree.
-  const defaultMix = block.irCategory === 'cab' ? 1 : 0.5;
+  const defaultMix = isCab || block.irCategory === 'cab' ? 1 : 0.5;
   // Every NAM block in the chain is A2 (the browser filters the catalog and
   // local drops are validated), so NAM badges always carry the A2 mark.
   const formatBadge = formatLabel(tone.format);
@@ -964,7 +977,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 />
               )}
 
-              {!isNam && (
+              {/* Not for CAB: that's a real, separate block type now (see
+                ToneBlock.blockType) - IrCategory is meaningless on it. */}
+              {!isNam && !isCab && (
                 <IrCategoryControl category={irCategory} onChange={handleSetIrCategory} />
               )}
 
@@ -1220,12 +1235,13 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         defaultValue={0.5}
                         help={HELP.blockIn}
                       />
-                      {/* IR blocks only: predelay before the wet signal
+                      {/* IR blocks only (not CAB - no predelay field exists
+                        on that type at all): predelay before the wet signal
                         enters the convolver - a real-time DSP stage
                         (BlockPredelay), not part of the off-thread envelope
                         rebuild, so it stays a knob here rather than joining
                         the shaping row's faders. */}
-                      {!isNam && (
+                      {!isNam && !isCab && (
                         <KnobControl
                           label="Delay"
                           value={predelay}
@@ -1240,6 +1256,27 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           scale={predelayMsScale}
                           defaultValue={0}
                           help={HELP.blockPredelay}
+                        />
+                      )}
+                      {/* CAB blocks only: stereo placement. Inert in v1's
+                        single-cabinet-slot processing (see
+                        ChainBlock::cabPanNormalized) - becomes live once a
+                        second slot exists to pan against. */}
+                      {isCab && (
+                        <KnobControl
+                          label="Pan"
+                          value={cabPan}
+                          onChange={(val) => {
+                            setCabPan(val);
+                            setParam('cabPan', val);
+                          }}
+                          onDragStateChange={handleKnobDragState}
+                          size={KNOB_SIZE_SECONDARY}
+                          labelBottom={false}
+                          thumb="secondary"
+                          scale={cabPanScale}
+                          defaultValue={0.5}
+                          help={HELP.blockCabPan}
                         />
                       )}
                     </div>
@@ -1265,7 +1302,13 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     justifyContent: 'flex-start',
                   }}
                 >
-                  {showInfo || isNam ? (
+                  {/* CAB takes this simpler image+title layout too - the
+                    "else" branch below (waveform strip, shaping rows,
+                    IrEnvelopeGraph) is the full IR Player feature set, which
+                    a CAB block's data model has nothing to back (no
+                    predelay/envelope/waveform fields at all; see
+                    ToneBlock.blockType and ChainBlock::cabPanNormalized). */}
+                  {showInfo || isNam || isCab ? (
                     <div
                       style={{
                         display: 'flex',
@@ -1845,7 +1888,11 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         thumb="secondary"
                         scale={gainDbScale}
                         defaultValue={0.5}
-                        help={isNam || block.irCategory !== 'cab' ? HELP.blockOut : HELP.blockOutIr}
+                        help={
+                          !isNam && (isCab || block.irCategory === 'cab')
+                            ? HELP.blockOutIr
+                            : HELP.blockOut
+                        }
                       />
                     </div>
                   </div>

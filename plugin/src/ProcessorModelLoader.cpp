@@ -1148,9 +1148,10 @@ TONE3000Processor::PreparedBlockModel TONE3000Processor::prepareBlockModelOffThr
     return out;
   }
 
-  juce::Logger::writeToLog("[ModelLoader] Preparing " +
-                           juce::String(type == ChainBlockType::NAM ? "NAM" : "IR") + " model: " +
-                           filename + " (" + juce::String((juce::int64)modelData.size()) + " bytes)");
+  juce::Logger::writeToLog(
+      "[ModelLoader] Preparing " +
+      juce::String(type == ChainBlockType::NAM ? "NAM" : type == ChainBlockType::CAB ? "CAB" : "IR") +
+      " model: " + filename + " (" + juce::String((juce::int64)modelData.size()) + " bytes)");
 
   const int domainBlockSize = chainDomainBlockSize();
   out.preparedBlockSize = domainBlockSize;
@@ -1266,8 +1267,11 @@ TONE3000Processor::PreparedBlockModel TONE3000Processor::prepareBlockModelOffThr
       // what the source file contains. Everything else (IrPlayer, or a
       // category that isn't known yet - local file loads, pre-migration
       // saved state) keeps the existing generous safety cap; its engine gets
-      // decided below from real detected content, not this bound.
-      const bool isCabKnown = knownCategory.has_value() && *knownCategory == IrCategory::Cab;
+      // decided below from real detected content, not this bound. A real
+      // ChainBlockType::CAB block is cab content by construction - always
+      // known-Cab, no IrCategory involved at all.
+      const bool isCabKnown = type == ChainBlockType::CAB ||
+                              (knownCategory.has_value() && *knownCategory == IrCategory::Cab);
       const double captureSeconds = isCabKnown ? kCabMaxSeconds : kMaxIrSeconds;
 
       // The load cap is a time bound, not a fixed sample count; truncating
@@ -1745,6 +1749,40 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
 
     block.loaded = true;
     block.loadFailed = false;
+  } else if (newType == ChainBlockType::CAB && prepared.convolverMono != nullptr) {
+    // Cab Block (ChainBlockType::CAB): structurally minimal by design - no
+    // envelope/predelay/waveform fields exist on this type at all, so there
+    // is nothing analogous to reset/reapply here. Cab content by
+    // construction (prepareBlockModelOffThread already hard-capped and
+    // uniform-engined it unconditionally, see isCabKnown), so no IrCategory
+    // guessing either - this mirrors only the parts of the IR branch above
+    // that a single-cabinet-slot block actually needs.
+    block.type = newType;
+    std::swap(block.namEngine, prepared.namEngine);            // null in, any old NAM out
+    std::swap(block.convolverMono, prepared.convolverMono);
+    std::swap(block.convolverStereo, prepared.convolverStereo);  // always null for CAB v1
+    block.irNumChannels = prepared.irNumChannels;
+    block.irLengthBaseSamples = prepared.irLengthBaseSamples;
+    block.irIsLong = false;  // CAB is always the uniform engine; never meaningful here
+
+    // Blocks added mid-session were never seen by prepareChain, so
+    // (re)prepare the base-rate island here - same reasoning as the IR
+    // branch above.
+    block.irBaseRateIsland.prepare(chainOversampleFactor.load(),
+                                   juce::jmax(1, chainBaseBlockSize()));
+
+    // Cab content always replaces the signal (fully wet) - no category
+    // branch needed, a CAB block only ever has one answer. Swaps/model
+    // switches on an already-loaded block keep the user's mix.
+    if (block.applyDefaultMixOnLoad)
+      block.mixNormalized = 1.0f;
+
+    block.irNormalizationGainLinear = prepared.irNormalizationGainLinear;
+    block.irNormalizationSmoother.reset(chainSampleRate(), 0.05f);
+    block.irNormalizationSmoother.setCurrentAndTargetValue(block.irNormalizationGainLinear);
+
+    block.loaded = true;
+    block.loadFailed = false;
   } else {
     DBG("Prepared model type/engine mismatch; dropping block from processing");
     block.loaded = false;
@@ -1771,7 +1809,9 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
   block.mixSmoother.setCurrentAndTargetValue(block.mixNormalized);
   block.irPadGainSmoother.reset(chainSampleRate(), 0.05f);
   block.irPadGainSmoother.setCurrentAndTargetValue(
-      block.irCategory == IrCategory::Cab ? juce::Decibels::decibelsToGain(-18.0f) : 1.0f);
+      (block.irCategory == IrCategory::Cab || block.type == ChainBlockType::CAB)
+          ? juce::Decibels::decibelsToGain(-18.0f)
+          : 1.0f);
 
   // Splice-in fade: the new engine enters from silence instead of jumping
   // in mid-waveform, mirroring how the outgoing one left (see

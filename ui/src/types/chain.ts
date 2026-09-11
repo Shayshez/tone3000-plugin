@@ -103,6 +103,11 @@ export interface BlockParams {
   outputGain: number;
   /** Dry/wet: 0 = dry, 1 = wet. */
   mix: number;
+  /** CAB blocks only (ChainBlockType::CAB): stereo placement, 0 = hard left,
+      1 = hard right, 0.5 = center. Persisted and settable now, but inert in
+      v1's single-cabinet-slot processing - becomes live once a second slot
+      exists to pan against. Meaningless for every other block type. */
+  cabPan: number;
   /** Normalized 0..1 -> 0-1000ms, delay before the wet signal enters the
       IR's convolver. IR blocks only; inert for NAM blocks. */
   predelay: number;
@@ -203,6 +208,14 @@ export interface ToneSummary {
 export interface ToneBlock {
   blockId: string;
   kind: 'tone';
+  /** Real native block type. 'cab' is a genuine ChainBlockType::CAB block
+      (site tones tagged gear === "cab"): structurally minimal, no predelay/
+      envelope/waveform - see CabBlockCard, rendered instead of the full
+      ChainBlock detail card. 'ir'/'nam' render the existing full card;
+      tone.format still reports "ir" for a cab block (that's the catalog's
+      format, not the native split), so this field - not tone.format - is
+      the thing to branch on. */
+  blockType: 'nam' | 'ir' | 'cab';
   /** Tone metadata for rendering (slim projection of the API tone). */
   tone: ToneSummary;
   activeModelId: number;
@@ -353,7 +366,8 @@ export type BlockParamName =
   | 'inputGain'
   | 'outputGain'
   | 'mix'
-  | 'predelay';
+  | 'predelay'
+  | 'cabPan';
 
 /** Payload of the native `getMeterLevels` function (all values dB, -60 floor).
     Main meters ship as [L, R] pairs; mono sources report L == R. */

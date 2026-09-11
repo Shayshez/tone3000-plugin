@@ -87,9 +87,10 @@ IrCategory irCategoryFromGear(const juce::String& gear) {
 }
 
 // The engine type a tone requires, from its parsed JSON (`format`, with the
-// legacy `platform` fallback). While a tone swap is in flight the block's own
-// `type` still describes the *old* engine (which keeps processing until the
-// new model is applied), so loads must key off the tone, not the block.
+// legacy `platform` fallback, and `gear` for the Cab Block split). While a
+// tone swap is in flight the block's own `type` still describes the *old*
+// engine (which keeps processing until the new model is applied), so loads
+// must key off the tone, not the block.
 ChainBlockType toneEngineType(const juce::var& toneVar, ChainBlockType fallback) {
   auto* obj = toneVar.getDynamicObject();
   if (obj == nullptr)
@@ -99,6 +100,8 @@ ChainBlockType toneEngineType(const juce::var& toneVar, ChainBlockType fallback)
     format = obj->getProperty("platform").toString().toLowerCase();
   if (format.isEmpty())
     return fallback;
+  if (format != "nam" && obj->getProperty("gear").toString().toLowerCase() == "cab")
+    return ChainBlockType::CAB;
   return format == "nam" ? ChainBlockType::NAM : ChainBlockType::IR;
 }
 
@@ -134,9 +137,19 @@ ParsedTone parseToneForLoading(const juce::String& toneJsonString) {
   out.firstModelId = firstModel->getProperty("id");
   out.modelUrl = firstModel->getProperty("model_url").toString();
   out.modelName = firstModel->getProperty("name").toString();
-  out.type = (format == "nam") ? ChainBlockType::NAM : ChainBlockType::IR;
   out.gear = toneObj->getProperty("gear").toString().toLowerCase();
   out.local = static_cast<bool>(toneObj->getProperty("local"));
+  // `gear == "cab"` is the catalog's exclusive tag for real cabinet content
+  // (see irCategoryFromGear above) - a site-loaded cab tone gets a real
+  // ChainBlockType::CAB block, not IR. Local file drops never carry a `gear`
+  // tag (see finishLocalToneLoad), so they're unaffected and keep defaulting
+  // to IR/NAM exactly as before.
+  if (format == "nam")
+    out.type = ChainBlockType::NAM;
+  else if (out.gear == "cab")
+    out.type = ChainBlockType::CAB;
+  else
+    out.type = ChainBlockType::IR;
 
   // Store only the model being loaded; native persists just the active
   // model; the catalog stays on the API. Local tones are the exception:
@@ -1008,6 +1021,12 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   struct BlockRow {
     juce::String id;
     bool isInsert = false;
+    // Shipped for every tone row so the UI can tell a real ChainBlockType::
+    // CAB block apart from IR/NAM without inferring it from tone.format
+    // (CAB tones still report format "ir" from the catalog - gear is what
+    // actually distinguishes them, and native has already resolved that
+    // into the block's real type by load time).
+    ChainBlockType blockType = ChainBlockType::IR;
     juce::var toneSummary;
     int toneId = 0;
     int activeModelId = 0;
@@ -1022,6 +1041,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     float initLevel = 1.0f;
     float attackLength = 0.0f, attackCurve = 0.5f;
     float decayLength = 1.0f, decayLevel = 1.0f, decayCurve = 0.5f;
+    float cabPan = 0.5f;
     juce::var eq;
     bool rtFailed = false;
   };
@@ -1061,6 +1081,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
           out.push_back(std::move(row));
           continue;
         }
+        row.blockType = block->type;
         row.toneSummary = block->toneSummary;
         row.toneId = block->toneId;
         row.activeModelId = block->activeModelId;
@@ -1100,6 +1121,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.decayLength = block->decayLengthNormalized;
         row.decayLevel = block->decayLevelNormalized;
         row.decayCurve = block->decayCurveNormalized;
+        row.cabPan = block->cabPanNormalized;
         row.eq = block->eq.toVar();
         out.push_back(std::move(row));
       }
@@ -1134,6 +1156,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
 
       juce::DynamicObject::Ptr item = new juce::DynamicObject();
       item->setProperty("blockId", row.id);
+      item->setProperty("blockType", chainBlockTypeToString(row.blockType));
 
       if (row.isInsert) {
         item->setProperty("kind", "insert");
@@ -1186,6 +1209,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("inputGain", row.inputGain);
       params->setProperty("outputGain", row.outputGain);
       params->setProperty("mix", row.mix);
+      params->setProperty("cabPan", row.cabPan);
       params->setProperty("predelay", row.predelay);
       params->setProperty("initLevel", row.initLevel);
       params->setProperty("attackLength", row.attackLength);
@@ -1541,8 +1565,8 @@ bool TONE3000Processor::setBlockParam(const std::string& blockId, const juce::St
     return false;
 
   // Validate before recording history, so failed calls never leave an entry.
-  const bool isContinuous =
-      param == "inputGain" || param == "outputGain" || param == "mix" || param == "predelay";
+  const bool isContinuous = param == "inputGain" || param == "outputGain" || param == "mix" ||
+                            param == "predelay" || param == "cabPan";
   const bool isKnown = isContinuous || param == "enabled" || param == "normalize";
   if (!isKnown) {
     DBG("setBlockParam: unknown param: " << param);
@@ -1567,6 +1591,10 @@ bool TONE3000Processor::setBlockParam(const std::string& blockId, const juce::St
     block->predelayNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(value));
     block->predelay.setDelayMs(block->predelayNormalized * BlockPredelay::kMaxDelayMs);
     refreshIrTailLength();
+  } else if (param == "cabPan") {
+    // CAB blocks only (ChainBlockType::CAB); genuinely inert in v1's
+    // single-slot processing - see ChainBlock::cabPanNormalized.
+    block->cabPanNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(value));
   }
 
   // Continuous drags settle into one bump after the gesture ends; discrete

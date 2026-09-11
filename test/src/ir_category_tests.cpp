@@ -121,13 +121,22 @@ TEST(IrCategoryTest, GearMapsToCategory) {
            "\"model_url\":\"https://test.invalid/m.wav\"}]}";
   };
 
+  // gear == "cab" now routes to a real ChainBlockType::CAB block (see
+  // parseToneForLoading/toneEngineType in ProcessorChain.cpp) rather than an
+  // IR block with IrCategory::Cab - that's the whole point of the Cab Block
+  // split. IrCategory stays meaningful only for actual IR blocks (every
+  // other gear tag, or none at all).
   struct Case {
     const char* gear;
-    const char* expectedCategory;
+    const char* expectedBlockType;
+    const char* expectedCategory;  // nullptr: not an IR block, irCategory is meaningless
   };
   const Case cases[] = {
-      {"cab", "cab"},   {"space", "irPlayer"}, {"outboard", "irPlayer"},
-      {"experimental", "irPlayer"}, {"ir", "irPlayer"},
+      {"cab", "cab", nullptr},
+      {"space", "ir", "irPlayer"},
+      {"outboard", "ir", "irPlayer"},
+      {"experimental", "ir", "irPlayer"},
+      {"ir", "ir", "irPlayer"},
   };
 
   for (const auto& c : cases) {
@@ -136,7 +145,9 @@ TEST(IrCategoryTest, GearMapsToCategory) {
     ASSERT_FALSE(blockId.empty()) << c.gear;
     const juce::var block = firstToneBlock(proc);
     ASSERT_FALSE(block.isVoid()) << c.gear;
-    EXPECT_EQ(block["irCategory"].toString(), juce::String(c.expectedCategory)) << c.gear;
+    EXPECT_EQ(block["blockType"].toString(), juce::String(c.expectedBlockType)) << c.gear;
+    if (c.expectedCategory != nullptr)
+      EXPECT_EQ(block["irCategory"].toString(), juce::String(c.expectedCategory)) << c.gear;
   }
 }
 

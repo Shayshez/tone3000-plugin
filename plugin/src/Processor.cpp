@@ -432,10 +432,13 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       } else {
         DBG("Warning: NAM block " << block->id << " has no engine to prepare");
       }
-    } else if (block->type == ChainBlockType::IR && block->convolverMono != nullptr) {
+    } else if ((block->type == ChainBlockType::IR || block->type == ChainBlockType::CAB) &&
+               block->convolverMono != nullptr) {
       // Convolvers always run at the base rate behind the block's island
       // (see ChainBlock::irBaseRateIsland), so their spec only tracks the
-      // base block size, never the oversampling factor.
+      // base block size, never the oversampling factor. CAB blocks reuse
+      // this same convolverMono/island machinery directly (single-slot v1;
+      // see ChainBlockType::CAB) rather than a separate field.
       juce::dsp::ProcessSpec spec{kChainBaseSampleRate,
                                   static_cast<juce::uint32>(chainBaseBlockSize()), 2};
       block->convolverMono->prepare(spec);
@@ -448,18 +451,21 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
         block->irNormalizationSmoother.setCurrentAndTargetValue(block->irNormalizationGainLinear);
       }
 
-      DBG("IR convolvers re-prepared for block: " << block->id);
+      DBG("IR/CAB convolvers re-prepared for block: " << block->id);
     }
 
-    // Every IR block keeps its base-rate island in step with the live factor
-    // (bypass at ×1). Prepared even while unloaded; a later engine apply
-    // re-prepares anyway, this just keeps the invariant simple.
-    if (block->type == ChainBlockType::IR) {
+    // Every IR/CAB block keeps its base-rate island in step with the live
+    // factor (bypass at ×1). Prepared even while unloaded; a later engine
+    // apply re-prepares anyway, this just keeps the invariant simple.
+    if (block->type == ChainBlockType::IR || block->type == ChainBlockType::CAB) {
       block->irBaseRateIsland.prepare(chainOversampleFactor.load(),
                                       juce::jmax(1, chainBaseBlockSize()));
+    }
+    if (block->type == ChainBlockType::IR) {
       // Always at the base rate (see BlockPredelay), and snapped to the
       // stored value, not ramped: a host resample/oversampling re-prepare
-      // has no live signal continuity to protect.
+      // has no live signal continuity to protect. IR only - CAB has no
+      // predelay field at all (structurally minimal by design).
       block->predelay.prepare(kChainBaseSampleRate,
                               block->predelayNormalized * BlockPredelay::kMaxDelayMs);
     }
@@ -476,7 +482,9 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
     block->outputGainSmoother.setCurrentAndTargetValue(1.0f);  // updated on first process
     block->mixSmoother.setCurrentAndTargetValue(block->mixNormalized);
     block->irPadGainSmoother.setCurrentAndTargetValue(
-        block->irCategory == IrCategory::Cab ? juce::Decibels::decibelsToGain(-18.0f) : 1.0f);
+        (block->irCategory == IrCategory::Cab || block->type == ChainBlockType::CAB)
+            ? juce::Decibels::decibelsToGain(-18.0f)
+            : 1.0f);
     block->namNormalizationSmoother.setCurrentAndTargetValue(1.0f);
     block->wetFadeGain.reset(chainRate, kWetFadeSeconds);
     block->wetFadeGain.setCurrentAndTargetValue(block->enabled ? 1.0f : 0.0f);
@@ -503,6 +511,10 @@ void TONE3000Processor::refreshIrTailLength() {
         const int predelaySamples = static_cast<int>(std::llround(
             b->predelayNormalized * BlockPredelay::kMaxDelayMs * 0.001 * kChainBaseSampleRate));
         maxSamples = std::max(maxSamples, b->irLengthBaseSamples + predelaySamples);
+      } else if (b->type == ChainBlockType::CAB && b->convolverMono != nullptr) {
+        // No predelay field on CAB (structurally minimal by design) - just
+        // the kernel length.
+        maxSamples = std::max(maxSamples, b->irLengthBaseSamples);
       }
   irTailBaseSamples.store(maxSamples);
 }
@@ -1235,6 +1247,41 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       } catch (const std::exception& e) {
         DBG("Error in IR processing for block " << block->id << ": " << e.what());
       }
+    } else if (block->type == ChainBlockType::CAB && block->convolverMono != nullptr) {
+      // Cab Block processing (ChainBlockType::CAB, single-slot v1). Mono
+      // kernel always applied to every channel present - convolverStereo is
+      // never built for CAB, so there's no useStereoIr-style choice to make.
+      // Deliberately NOT sharing the IR branch above despite the similar
+      // shape: that branch's lambda runs block->predelay.process() on every
+      // call, and CAB has no predelay field at all (never prepared for this
+      // type - see prepareChain) - reusing it here would process a stale,
+      // zero-capacity ring buffer, the same class of bug that crashed the
+      // very first version of this block (see cabPanNormalized's comment in
+      // ChainBlock.h for the pan side of "not built yet"). cabPanNormalized
+      // is likewise not applied yet: with one slot there is nothing to pan
+      // against.
+      try {
+        block->irBaseRateIsland.processBaseRateIsland(
+            buffer.getArrayOfWritePointers(), numChannels, numSamples,
+            [&convolver = *block->convolverMono, numChannels](float* const* baseChannels,
+                                                               int baseFrames) {
+              juce::dsp::AudioBlock<float> irBlock(baseChannels, static_cast<size_t>(numChannels),
+                                                   static_cast<size_t>(baseFrames));
+              convolver.process(juce::dsp::ProcessContextReplacing<float>(irBlock));
+            });
+
+        // Unit-energy normalization, same rule as a plain IR block's.
+        block->irNormalizationSmoother.setTargetValue(
+            juce::jlimit(0.0f, 1.0f, block->irNormalizationGainLinear));
+        for (int i = 0; i < numSamples; ++i) {
+          const float g = block->irNormalizationSmoother.getNextValue();
+          for (int ch = 0; ch < numChannels; ++ch) {
+            buffer.getWritePointer(ch)[i] *= g;
+          }
+        }
+      } catch (const std::exception& e) {
+        DBG("Error in Cab Block processing for block " << block->id << ": " << e.what());
+      }
     }
 
     // EQ in the POST position (default): shapes the wet signal after the
@@ -1260,9 +1307,13 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     // is invisible chain gain staging (see gainDbScale in knobScale.ts).
     // Pulled from a smoothed value every block (not just at load), so a
     // live setBlockIrCategory change glides through it instead of clicking.
-    const float irOffsetDb =
-        (block->type == ChainBlockType::IR && block->irCategory == IrCategory::Cab) ? -18.0f
-                                                                                     : 0.0f;
+    // A Cab Block (ChainBlockType::CAB) is cab content by construction -
+    // always the pad, no category to check.
+    const float irOffsetDb = ((block->type == ChainBlockType::IR &&
+                               block->irCategory == IrCategory::Cab) ||
+                              block->type == ChainBlockType::CAB)
+                                 ? -18.0f
+                                 : 0.0f;
     block->irPadGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(irOffsetDb));
     const float gainDb = (block->outputGainNormalized - 0.5f) * 48.0f;
     block->outputGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(gainDb));

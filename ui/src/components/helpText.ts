@@ -235,6 +235,10 @@ export const HELP = {
   blockOutIr: knobHelp('Out', 'block output gain, ±24 dB (IR pre-trimmed -18 dB).'),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
+  blockCabPan: knobHelp(
+    'Pan',
+    'stereo placement. No effect yet with a single cabinet slot.'
+  ),
   // IR shaping row: a 2-segment Attack/Decay envelope (Space Designer-style)
   // over the truncated content. Decay Length sets the TOTAL trimmed length
   // (the real "End" position); Attack Length is a position *within* that

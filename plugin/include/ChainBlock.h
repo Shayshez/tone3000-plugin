@@ -13,13 +13,21 @@
 #include "ChainOversampler.h"
 #include "NamEngine.h"
 
-// Chain block types
-enum class ChainBlockType { NAM, IR, INSERT };
+// Chain block types. CAB is a real cabinet IR block (site tones tagged
+// gear == "cab"; see parseToneForLoading/toneEngineType in ProcessorChain.cpp):
+// structurally minimal by design - no predelay/envelope/waveform fields, a
+// single convolver, unconditionally the #89 fix's Cab truncation/pad/mix
+// (see prepareBlockModelOffThread/applyPreparedModelToChainBlock and the
+// -18dB pad in Processor.cpp). IR keeps carrying IrCategory::Cab for content
+// that was loaded before this split existed / local file drops guessed as
+// cab-length; that's a separate, still-live classification, not this type.
+enum class ChainBlockType { NAM, IR, INSERT, CAB };
 
 inline juce::String chainBlockTypeToString(ChainBlockType type) {
   switch (type) {
     case ChainBlockType::NAM: return "nam";
     case ChainBlockType::INSERT: return "insert";
+    case ChainBlockType::CAB: return "cab";
     case ChainBlockType::IR: break;
   }
   return "ir";
@@ -28,6 +36,7 @@ inline juce::String chainBlockTypeToString(ChainBlockType type) {
 inline ChainBlockType chainBlockTypeFromString(const juce::String& s) {
   if (s == "nam") return ChainBlockType::NAM;
   if (s == "insert") return ChainBlockType::INSERT;
+  if (s == "cab") return ChainBlockType::CAB;
   return ChainBlockType::IR;
 }
 
@@ -322,6 +331,14 @@ struct ChainBlock {
   juce::LinearSmoothedValue<float> outputGainSmoother;
   float mixNormalized{1.0f};  // 0 = dry, 1 = wet
   juce::LinearSmoothedValue<float> mixSmoother;
+
+  // CAB blocks only (ChainBlockType::CAB): stereo placement, 0 = hard left,
+  // 1 = hard right, 0.5 = center. Persisted and settable now, but genuinely
+  // inert in v1's single-cabinet-slot processing (Processor.cpp never reads
+  // it yet) - it becomes live once a second slot exists to pan against (see
+  // TONE3000 issue #121 item 3). Not a `LinearSmoothedValue` for the same
+  // reason: nothing consumes it on the audio thread yet.
+  float cabPanNormalized{0.5f};
 
   // Per-block meter levels (dB, -60 floor). Written by the audio thread every
   // block, read by the UI via getMeterLevels(). Input is measured post
