@@ -513,6 +513,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     });
   }, [actions, blockId]);
 
+  const handleResetEq = useCallback(() => {
+    actions.resetBlockEq(blockId);
+  }, [actions, blockId]);
+
   const handleShare = useCallback(async () => {
     if (await actions.shareBlock(block)) toast.show('Link Copied');
   }, [actions, block, toast]);
@@ -1030,6 +1034,18 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         <EqCurveIcon />
                       </button>
                     </div>
+                    <span
+                      className={uiOffClass(!eqOn)}
+                      style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
+                    >
+                      <ChromeTextButton
+                        armed={false}
+                        help="Reset all EQ bands to default (flat)"
+                        onClick={handleResetEq}
+                      >
+                        FLAT
+                      </ChromeTextButton>
+                    </span>
                   </>
                 )}
                 <ChromeTextButton
