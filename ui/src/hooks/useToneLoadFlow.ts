@@ -4,12 +4,20 @@ import { DETAIL_BLOCK_STORAGE_KEY } from '../components/ChainView';
 import type { ChainSide } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
-/** Land on the new/swapped block's expanded detail view as soon as it lands
-    in the chain, matching what tapping an existing tile does (issue #114).
-    Flip to false to fall back to just scrolling it into view in the gallery
+/** Land on the swapped block's expanded detail view as soon as it lands
+    (issue #114) — a swap always targets an already-open or already-tapped
+    block, so re-showing its (now different) tone is never a surprise. Flip
+    to false to fall back to just scrolling it into view in the gallery
     instead — the sessionStorage handoff below stays the same either way, so
-    that's a one-line change, not a re-implementation. */
-const OPEN_DETAIL_ON_BLOCK_ADD = true;
+    that's a one-line change, not a re-implementation.
+
+    Adding a new block is a separate decision (see NAVIGATE_ON_ADD_KEY /
+    ChainActions.addModel's `navigateToDetail`): the gallery's own "+" tiles
+    stay on the gallery (no forced navigation), while ChainMapStrip's "+"
+    (added from within another block's detail view) does jump to the new
+    block, since staying there mid-chain-edit is more useful than bouncing
+    out to the gallery. */
+const OPEN_DETAIL_ON_SWAP = true;
 
 type ChainStateActions = ReturnType<typeof useChainState>['actions'];
 
@@ -19,6 +27,10 @@ type ChainStateActions = ReturnType<typeof useChainState>['actions'];
 // Native falls back gracefully when an id went stale.
 const SWAP_STORAGE_KEY = 't3k.pendingSwapBlockId';
 const INSERT_TARGET_STORAGE_KEY = 't3k.pendingInsertBlockId';
+/** Set only when the pending add should open the new block's detail view
+    once it lands (ChainMapStrip's "+" — see ChainActions.addModel's
+    `navigateToDetail`); absent for the gallery's own "+" tiles. */
+const NAVIGATE_ON_ADD_KEY = 't3k.pendingAddNavigate';
 
 /** Sanity cap for dropped files; real .nam files and IRs are a few MB, and
     the bytes ride the native bridge as base64 strings. */
@@ -120,7 +132,7 @@ export function useToneLoadFlow({
       if (swapBlockId) {
         const swapped = await actions.swapTone(swapBlockId, toneJson);
         if (swapped) {
-          if (OPEN_DETAIL_ON_BLOCK_ADD) {
+          if (OPEN_DETAIL_ON_SWAP) {
             sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, swapBlockId);
           }
           setShowToneBrowser(false);
@@ -129,13 +141,19 @@ export function useToneLoadFlow({
         console.warn('Swap target no longer exists; adding tone as a new block');
       }
 
+      // Only ChainMapStrip's "+" asks for this (see handleAddModel); the
+      // gallery's own "+" tiles leave the key unset, so an add from there
+      // lands back on the gallery instead of the new block's detail view.
+      const navigateToDetail = sessionStorage.getItem(NAVIGATE_ON_ADD_KEY) === '1';
+      sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
+
       const blockId = await actions.loadTone(toneJson, insertBlockId ?? undefined);
       if (!blockId) {
         console.error('Failed to load tone');
         setShowToneBrowser(false);
         return;
       }
-      if (OPEN_DETAIL_ON_BLOCK_ADD) sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, blockId);
+      if (navigateToDetail) sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, blockId);
       setShowToneBrowser(false);
     },
     [actions, setShowToneBrowser]
@@ -145,10 +163,12 @@ export function useToneLoadFlow({
   // side also goes to native state (it has to survive the OAuth redirect) as
   // the fallback for when the slot id goes stale, e.g. undone away mid-flow.
   const handleAddModel = useCallback(
-    (side: ChainSide, insertBlockId: string) => {
+    (side: ChainSide, insertBlockId: string, options?: { navigateToDetail?: boolean }) => {
       requireConnection(async () => {
         sessionStorage.removeItem(SWAP_STORAGE_KEY);
         sessionStorage.setItem(INSERT_TARGET_STORAGE_KEY, insertBlockId);
+        if (options?.navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_ADD_KEY, '1');
+        else sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
         if (stereoEnabled) await actions.setActiveSide(side);
         setShowToneBrowser(true);
       });
@@ -162,6 +182,7 @@ export function useToneLoadFlow({
     (blockId: string) => {
       requireConnection(() => {
         sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
+        sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
         sessionStorage.setItem(SWAP_STORAGE_KEY, blockId);
         setShowToneBrowser(true);
       });
@@ -226,6 +247,7 @@ export function useToneLoadFlow({
   const clearPendingTargets = useCallback(() => {
     sessionStorage.removeItem(SWAP_STORAGE_KEY);
     sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
+    sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
   }, []);
 
   return {

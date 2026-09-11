@@ -15,6 +15,14 @@ const BLOCK_TYPE_LABEL: Record<ToneBlock['blockType'], string> = {
   cab: 'CAB',
 };
 
+/** Every chip (tone label or "+") is this exact box, regardless of label
+    length, so the strip reads as a uniform row rather than ragged pill
+    widths. Sized up from the shared TEXT_BOX_HEIGHT/ICON_BOX_SIZE default
+    (20rem) so chips feel like a real navigation control, not a footnote. */
+const CHIP_WIDTH = 44;
+const CHIP_HEIGHT = 28;
+const CHIP_FONT_SIZE = 13;
+
 interface ChainMapStripProps {
   /** The open block's whole lane, insert slots included, in chain order —
       the same ChainItem[] GalleryLane renders, so the strip's slot order
@@ -42,12 +50,21 @@ interface ChainMapStripProps {
  * the old Prev/Next chevrons, issue #83): the open block's whole lane
  * rendered left to right in chain order — a compact NAM/IR/CAB chip for
  * every tone block, a "+" for every insert slot at its real position — with
- * the open block highlighted and bypassed blocks dimmed. Hovering a chip
- * surfaces the tone's name (and bypass state) via the shared faceplate help
- * readout (see helpText.ts); clicking one jumps straight to that block, or
- * (for a "+") adds a new block right there. Chips never shrink or wrap —
- * the row scrolls horizontally instead once a chain overflows the
- * available width.
+ * the open block highlighted and bypassed blocks visually flat. Hovering a
+ * chip surfaces the tone's name (and bypass state) via the shared faceplate
+ * help readout (see helpText.ts); clicking one jumps straight to that
+ * block, or (for a "+") adds a new block right there.
+ *
+ * Every chip is the same fixed size (uniform width/height regardless of
+ * label) and the whole row centers itself within the header when it fits.
+ * The centering is the classic flex "shrink-to-content, cap at the parent"
+ * trick rather than a measured/JS toggle, so it degrades cleanly on old
+ * WebKit too (see vite.config's build target note): the outer flex box
+ * always centers; the inner scroller sizes to its content up to
+ * `max-width: 100%` of that outer box, so once the chips overflow, the
+ * inner fills the full available width (centering a full-width box is a
+ * no-op) and scrolls internally from the left, exactly like the old
+ * left-aligned behavior — no measurement, no resize listener.
  */
 export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
   items,
@@ -58,45 +75,63 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
   const wheelScrollRef = useHorizontalWheelScroll<HTMLDivElement>();
   return (
     <div
-      ref={wheelScrollRef}
-      className="hide-scrollbar"
       style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: '6rem',
+        justifyContent: 'center',
         flex: 1,
         minWidth: 0,
-        overflowX: 'auto',
-        overflowY: 'hidden',
       }}
     >
-      {items.map((item) =>
-        isInsertSlot(item) ? (
-          <ChromeIconButton
-            key={item.blockId}
-            help={HELP.addTile}
-            onClick={() => onAdd(item.blockId)}
-          >
-            <Plus />
-          </ChromeIconButton>
-        ) : (
-          <ChromeTextButton
-            key={item.blockId}
-            onClick={() => onSelect(item.blockId)}
-            help={`${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
-              item.params.enabled ? '' : ' · Bypassed'
-            }`}
-            open={item.blockId === currentBlockId}
-            // Bypassed blocks dim like any other off/disabled chrome in this
-            // app (see ChromeIconButton's own disabled treatment) rather than
-            // a bespoke color, so it reads as "off" at a glance without
-            // fighting the open/idle chrome underneath it.
-            style={item.params.enabled ? undefined : { opacity: DISABLED_OPACITY }}
-          >
-            {BLOCK_TYPE_LABEL[item.blockType]}
-          </ChromeTextButton>
-        )
-      )}
+      <div
+        ref={wheelScrollRef}
+        className="hide-scrollbar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6rem',
+          maxWidth: '100%',
+          overflowX: 'auto',
+          overflowY: 'hidden',
+        }}
+      >
+        {items.map((item) =>
+          isInsertSlot(item) ? (
+            <ChromeIconButton
+              key={item.blockId}
+              help={HELP.addTile}
+              onClick={() => onAdd(item.blockId)}
+              style={{ width: `${CHIP_WIDTH}rem`, height: `${CHIP_HEIGHT}rem` }}
+            >
+              <Plus />
+            </ChromeIconButton>
+          ) : (
+            <ChromeTextButton
+              key={item.blockId}
+              onClick={() => onSelect(item.blockId)}
+              help={`${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
+                item.params.enabled ? '' : ' · Bypassed'
+              }`}
+              open={item.blockId === currentBlockId}
+              // Active (non-bypassed) chips pop with the same BRAND_YELLOW
+              // fill this app already uses to mean "actively engaged" (see
+              // the EQ button's `armed={eqActive}` a few lines down in
+              // ChainBlock.tsx) rather than a new color; bypassed chips stay
+              // on the plain idle look (transparent/bordered), further
+              // dimmed like any other off control (DISABLED_OPACITY) so the
+              // contrast is a real color difference, not just opacity.
+              armed={item.params.enabled}
+              style={{
+                width: `${CHIP_WIDTH}rem`,
+                height: `${CHIP_HEIGHT}rem`,
+                fontSize: `${CHIP_FONT_SIZE}rem`,
+                ...(item.params.enabled ? null : { opacity: DISABLED_OPACITY }),
+              }}
+            >
+              {BLOCK_TYPE_LABEL[item.blockType]}
+            </ChromeTextButton>
+          )
+        )}
+      </div>
     </div>
   );
 };

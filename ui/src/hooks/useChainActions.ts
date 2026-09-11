@@ -13,8 +13,15 @@ import type { Model, Tone } from '../types/tone';
  * it is either a `useChainState` action (stable) or a stable callback.
  */
 export interface ChainActions {
-  /** Launch the Select flow, adding into the clicked insert slot. */
-  addModel: (side: ChainSide, insertBlockId: string) => void;
+  /** Launch the Select flow, adding into the clicked insert slot.
+      `navigateToDetail` (default false, the gallery's own "+" tiles): when
+      true (ChainMapStrip's "+"), open the newly added block's detail view
+      once it lands instead of leaving the caller wherever it was. */
+  addModel: (
+    side: ChainSide,
+    insertBlockId: string,
+    options?: { navigateToDetail?: boolean }
+  ) => void;
   /** Load a drop on a tile: a .nam / .wav file (NAM must be A2), or a folder
       of them (one block, one model per file). An insert slot adds; an
       existing tone tile swaps in place. Resolves to a user-facing error

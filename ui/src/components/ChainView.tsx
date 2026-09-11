@@ -491,7 +491,9 @@ export const ChainView: React.FC<ChainViewProps> = ({
           }}
           chainStripItems={detailLane}
           onJumpToBlock={setDetailBlockId}
-          onAddBlockAt={(insertBlockId) => actions.addModel(detailSide, insertBlockId)}
+          onAddBlockAt={(insertBlockId) =>
+            actions.addModel(detailSide, insertBlockId, { navigateToDetail: true })
+          }
           onFillToFaceplate={onFillToFaceplate}
         />
       </div>
