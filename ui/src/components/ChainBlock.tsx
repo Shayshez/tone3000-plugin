@@ -1791,35 +1791,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   </div>
                 )}
 
-                {/* Predelay knob: IR blocks only, between Mix and the output rail */}
-                {!showInfo && !isNam && (
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'flex-end',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <KnobControl
-                      label="Pre"
-                      value={predelay}
-                      onChange={(val) => {
-                        setPredelay(val);
-                        setParam('predelay', val);
-                      }}
-                      onDragStateChange={handleKnobDragState}
-                      size={KNOB_SIZE_SECONDARY}
-                      labelBottom={false}
-                      thumb="secondary"
-                      scale={predelayMsScale}
-                      defaultValue={0}
-                      help={HELP.blockPredelay}
-                    />
-                  </div>
-                )}
-
                 {/* Output rail: meter above Out (+ optional normalize). The rail
                 right-aligns and the meter wrapper is knob-wide, so the meter
                 stays centered over the Out knob whether or not the normalize
