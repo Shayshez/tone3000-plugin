@@ -22,6 +22,7 @@ target_sources(DspTests PRIVATE
     src/dsp_tests.cpp
     src/duplicate_tests.cpp
     src/eq_post_routing_tests.cpp
+    src/ir_category_tests.cpp
     src/ir_content_length_tests.cpp
     src/ir_decay_tests.cpp
     src/ir_temp_file_tests.cpp

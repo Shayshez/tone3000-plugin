@@ -74,6 +74,7 @@ export function useChainState() {
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setBlockIrDecay: backend.getPluginFunction('setBlockIrDecay'),
+      setBlockIrCategory: backend.getPluginFunction('setBlockIrCategory'),
       setNamSlimSizeDefault: backend.getPluginFunction('setNamSlimSizeDefault'),
       setMultiCore: backend.getPluginFunction('setMultiCore'),
       setActiveEditChain: backend.getPluginFunction('setActiveEditChain'),
@@ -204,6 +205,10 @@ export function useChainState() {
           part of the chain state, so it lands in presets and undo. */
       setBlockSlimSize: (blockId: string, slimSize: number) =>
         run<boolean>('setBlockSlimSize', () => native.setBlockSlimSize(blockId, slimSize)),
+      /** Explicit IR content category (see ToneBlock.irCategory); resets Mix
+          (and the -18 dB cab pad) to the new category's fixed default. */
+      setBlockIrCategory: (blockId: string, category: 'cab' | 'irPlayer') =>
+        run<boolean>('setBlockIrCategory', () => native.setBlockIrCategory(blockId, category)),
       /** IR envelope: a 2-segment Attack/Decay shape (see BlockParams.
           initLevel/attackLength/attackCurve/decayLength/decayLevel/
           decayCurve). Rebuilds the convolver off-thread under a wet-mute

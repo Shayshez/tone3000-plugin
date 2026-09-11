@@ -138,6 +138,7 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
   blockState.setProperty("decayLength", block.decayLengthNormalized, nullptr);
   blockState.setProperty("decayLevel", block.decayLevelNormalized, nullptr);
   blockState.setProperty("decayCurve", block.decayCurveNormalized, nullptr);
+  blockState.setProperty("irCategory", irCategoryToString(block.irCategory), nullptr);
 
   if (block.type != ChainBlockType::INSERT) {
     blockState.setProperty("toneId", block.toneId, nullptr);
@@ -169,6 +170,22 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
       0.0f, 1.0f, static_cast<float>(blockState.getProperty("decayLevel", 1.0f)));
   block.decayCurveNormalized = juce::jlimit(
       0.0f, 1.0f, static_cast<float>(blockState.getProperty("decayCurve", 0.5f)));
+
+  // Empty ("" sentinel, via getProperty's default) means state saved before
+  // this field existed: seed it once the model (re)loads and its real
+  // content can be scanned, exactly like a fresh local-file load - never
+  // just default to IrPlayer, which would silently change an old cab
+  // block's pad/mix on next restore (see
+  // ChainBlock::irCategoryNeedsDurationGuess). A present value is a real,
+  // already-resolved setting; mixNormalized above is left exactly as saved
+  // either way.
+  const juce::String irCategoryStr = blockState.getProperty("irCategory", "").toString();
+  if (irCategoryStr.isNotEmpty()) {
+    block.irCategory = irCategoryFromString(irCategoryStr);
+    block.irCategoryNeedsDurationGuess = false;
+  } else if (block.type == ChainBlockType::IR) {
+    block.irCategoryNeedsDurationGuess = true;
+  }
 
   // States from before per-block sizes restore as lite (0.0). An engine the
   // restore keeps loaded (see reconcileChainFromTree) retiers in place: the
