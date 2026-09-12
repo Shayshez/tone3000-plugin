@@ -418,6 +418,10 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
             onTogglePower: handleTogglePower,
             onSwap: (e) => {
               e.stopPropagation();
+              // No navigateToDetail: this tile is on the gallery, not a
+              // detail view, so the swap should leave the user right there
+              // (mirrors the gallery's own "+" tiles - see ChainBlock.tsx's
+              // swap button for the opposite case).
               actions.swapBlock(blockId);
             },
             onRemove: (e) => {

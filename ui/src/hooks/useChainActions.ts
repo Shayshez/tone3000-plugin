@@ -34,8 +34,12 @@ export interface ChainActions {
       error message, or null on success or when the dialog is cancelled. */
   pickLocalFile: (targetBlockId: string, kind: 'file' | 'folder') => Promise<string | null>;
   removeBlock: (blockId: string) => void;
-  /** Launch the Select flow to replace this block's tone in place. */
-  swapBlock: (blockId: string) => void;
+  /** Launch the Select flow to replace this block's tone in place.
+      `navigateToDetail` (default false, the gallery tile's own swap action):
+      when true (the detail card's ⇄ button), land on the swapped block's
+      detail view once it lands instead of leaving the caller on the
+      gallery. Mirrors addModel's own option - see its doc comment. */
+  swapBlock: (blockId: string, options?: { navigateToDetail?: boolean }) => void;
   /** Copy the tone's TONE3000 URL; resolves true when it hit the clipboard. */
   shareBlock: (block: ToneBlock) => Promise<boolean>;
   /** Reorder one lane (full order including its insert slot). */

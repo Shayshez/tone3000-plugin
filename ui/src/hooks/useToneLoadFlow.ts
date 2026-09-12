@@ -4,21 +4,6 @@ import { DETAIL_BLOCK_STORAGE_KEY } from '../components/ChainView';
 import type { ChainSide } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
-/** Land on the swapped block's expanded detail view as soon as it lands
-    (issue #114) — a swap always targets an already-open or already-tapped
-    block, so re-showing its (now different) tone is never a surprise. Flip
-    to false to fall back to just scrolling it into view in the gallery
-    instead — the sessionStorage handoff below stays the same either way, so
-    that's a one-line change, not a re-implementation.
-
-    Adding a new block is a separate decision (see NAVIGATE_ON_ADD_KEY /
-    ChainActions.addModel's `navigateToDetail`): the gallery's own "+" tiles
-    stay on the gallery (no forced navigation), while ChainMapStrip's "+"
-    (added from within another block's detail view) does jump to the new
-    block, since staying there mid-chain-edit is more useful than bouncing
-    out to the gallery. */
-const OPEN_DETAIL_ON_SWAP = true;
-
 type ChainStateActions = ReturnType<typeof useChainState>['actions'];
 
 // Swap/insert targets must survive the Select flow's full-page OAuth
@@ -27,10 +12,20 @@ type ChainStateActions = ReturnType<typeof useChainState>['actions'];
 // Native falls back gracefully when an id went stale.
 const SWAP_STORAGE_KEY = 't3k.pendingSwapBlockId';
 const INSERT_TARGET_STORAGE_KEY = 't3k.pendingInsertBlockId';
-/** Set only when the pending add should open the new block's detail view
-    once it lands (ChainMapStrip's "+" — see ChainActions.addModel's
-    `navigateToDetail`); absent for the gallery's own "+" tiles. */
-const NAVIGATE_ON_ADD_KEY = 't3k.pendingAddNavigate';
+/** Set only when the pending add/swap should open its resulting block's
+    detail view once it lands (ChainMapStrip's "+", or the detail card's own
+    ⇄ swap button — see ChainActions.addModel's and .swapBlock's own
+    `navigateToDetail`); absent for the gallery's own "+" tiles and tile
+    swap action, both of which stay right where they were (issue: a gallery
+    swap was landing on the swapped block's detail view instead of staying
+    on the gallery, because this used to be a swap-only, unconditional
+    `OPEN_DETAIL_ON_SWAP = true` with no per-call-site distinction - it
+    assumed a swap always targets an already-open block, which the gallery
+    tile's own swap action disproves). Shared between add and swap since
+    exactly one of SWAP_STORAGE_KEY / INSERT_TARGET_STORAGE_KEY is ever
+    pending at a time, so one flag unambiguously describes whichever flow is
+    in flight. */
+const NAVIGATE_ON_PICK_KEY = 't3k.pendingPickNavigate';
 
 /** Sanity cap for dropped files; real .nam files and IRs are a few MB, and
     the bytes ride the native bridge as base64 strings. */
@@ -123,6 +118,11 @@ export function useToneLoadFlow({
 
       const toneJson = JSON.stringify(tone);
 
+      // Shared between the swap and add branches below - see its own
+      // comment. Read once, up front, same as the swap/insert targets.
+      const navigateToDetail = sessionStorage.getItem(NAVIGATE_ON_PICK_KEY) === '1';
+      sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
+
       // Closing the browser unmounts it and mounts a fresh ChainView (see
       // Plugin's showToneBrowser ternary), whose detail-view state reads
       // DETAIL_BLOCK_STORAGE_KEY once, at that mount. So the browser can only
@@ -132,20 +132,12 @@ export function useToneLoadFlow({
       if (swapBlockId) {
         const swapped = await actions.swapTone(swapBlockId, toneJson);
         if (swapped) {
-          if (OPEN_DETAIL_ON_SWAP) {
-            sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, swapBlockId);
-          }
+          if (navigateToDetail) sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, swapBlockId);
           setShowToneBrowser(false);
           return;
         }
         console.warn('Swap target no longer exists; adding tone as a new block');
       }
-
-      // Only ChainMapStrip's "+" asks for this (see handleAddModel); the
-      // gallery's own "+" tiles leave the key unset, so an add from there
-      // lands back on the gallery instead of the new block's detail view.
-      const navigateToDetail = sessionStorage.getItem(NAVIGATE_ON_ADD_KEY) === '1';
-      sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
 
       const blockId = await actions.loadTone(toneJson, insertBlockId ?? undefined);
       if (!blockId) {
@@ -167,8 +159,8 @@ export function useToneLoadFlow({
       requireConnection(async () => {
         sessionStorage.removeItem(SWAP_STORAGE_KEY);
         sessionStorage.setItem(INSERT_TARGET_STORAGE_KEY, insertBlockId);
-        if (options?.navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_ADD_KEY, '1');
-        else sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
+        if (options?.navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_PICK_KEY, '1');
+        else sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
         if (stereoEnabled) await actions.setActiveSide(side);
         setShowToneBrowser(true);
       });
@@ -177,13 +169,22 @@ export function useToneLoadFlow({
   );
 
   // Swap: remember the target block, then run the same browse flow as add.
-  // The pending swap id is consumed when the picked tone lands.
+  // The pending swap id is consumed when the picked tone lands. Was
+  // unconditionally `OPEN_DETAIL_ON_SWAP = true` (issue #114): a real trace
+  // (gallery-scroll-reset investigation) confirmed the gallery tile's own
+  // swap action shares this exact handler and was forcing its way into the
+  // swapped block's detail view instead of staying on the gallery, since
+  // nothing distinguished it from the detail card's ⇄ button. Mirrors
+  // handleAddModel's own per-call-site `navigateToDetail` for the same
+  // reason: the caller, not this shared handler, knows whether it's already
+  // showing a detail view worth staying in.
   const handleSwapBlock = useCallback(
-    (blockId: string) => {
+    (blockId: string, options?: { navigateToDetail?: boolean }) => {
       requireConnection(() => {
         sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
-        sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
         sessionStorage.setItem(SWAP_STORAGE_KEY, blockId);
+        if (options?.navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_PICK_KEY, '1');
+        else sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
         setShowToneBrowser(true);
       });
     },
@@ -247,7 +248,7 @@ export function useToneLoadFlow({
   const clearPendingTargets = useCallback(() => {
     sessionStorage.removeItem(SWAP_STORAGE_KEY);
     sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
-    sessionStorage.removeItem(NAVIGATE_ON_ADD_KEY);
+    sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
   }, []);
 
   return {
