@@ -41,7 +41,7 @@ import { BlockInfoPanel } from './BlockInfoPanel';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { useParameter } from '../hooks/useParameter';
-import type { BlockParamName, ChainItem, ToneBlock } from '../types/chain';
+import type { BlockParamName, ChainItem, ToneBlock, ToneSummary } from '../types/chain';
 import { catalogModelCount, type Model, type Tone } from '../types/tone';
 import { isEqFlat, isSlimSizeFull, SLIM_SIZE_FULL, SLIM_SIZE_LITE } from '../types/chain';
 import {
@@ -130,11 +130,20 @@ const chipStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-/** Downloads / bookmarks / models count with a leading icon (same pattern as ToneBrowser). */
-const CountStat: React.FC<{ icon: React.ReactNode; value: number }> = ({ icon, value }) => (
+/** Downloads / bookmarks / models count with a leading icon (same pattern as ToneBrowser).
+    `fontSize` defaults to the full card's size; the IR compact card's meta
+    row (see CompactToneMetaRow) passes a smaller one to fit its tighter
+    vertical budget. */
+const CountStat: React.FC<{ icon: React.ReactNode; value: number; fontSize?: number }> = ({
+  icon,
+  value,
+  fontSize = 14,
+}) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '8rem' }}>
     <span style={{ display: 'grid', placeItems: 'center', color: GRAY }}>{icon}</span>
-    <span style={{ fontSize: '14rem', fontWeight: 400, color: MUTED }}>{formatCount(value)}</span>
+    <span style={{ fontSize: `${fontSize}rem`, fontWeight: 400, color: MUTED }}>
+      {formatCount(value)}
+    </span>
   </div>
 );
 
@@ -143,14 +152,18 @@ const BookmarkStat: React.FC<{
   value: number;
   favorited: boolean;
   onToggle?: () => void;
-}> = ({ value, favorited, onToggle }) => {
+  iconSize?: number;
+  fontSize?: number;
+}> = ({ value, favorited, onToggle, iconSize = 16, fontSize = 14 }) => {
   const icon = (
-    <Bookmark size={16} fill={favorited ? WHITE : 'none'} color={favorited ? WHITE : GRAY} />
+    <Bookmark size={iconSize} fill={favorited ? WHITE : 'none'} color={favorited ? WHITE : GRAY} />
   );
   const body = (
     <>
       <span style={{ display: 'grid', placeItems: 'center' }}>{icon}</span>
-      <span style={{ fontSize: '14rem', fontWeight: 400, color: MUTED }}>{formatCount(value)}</span>
+      <span style={{ fontSize: `${fontSize}rem`, fontWeight: 400, color: MUTED }}>
+        {formatCount(value)}
+      </span>
     </>
   );
   const row: React.CSSProperties = {
@@ -177,6 +190,79 @@ const BookmarkStat: React.FC<{
     </button>
   );
 };
+
+/** Creator + downloads/favorites, condensed onto one line and dropped in
+    beside the IR compact card's gear+badge row (via that row's own
+    space-between) rather than as a row of its own - the IR compact layout's
+    fixed body-height budget has no vertical slack to spare (see
+    IR_WAVEFORM_HEIGHT's comment), only the gear+badge row's leftover
+    horizontal width. A smaller avatar and icon/font sizes throughout keep it
+    legible at that row's height rather than clipping or wrapping. Omitted
+    for local drops (no catalog creator/counts to show), same as the full
+    layout. */
+const CompactToneMetaRow: React.FC<{
+  tone: ToneSummary;
+  favoritesCount: number;
+  favorited: boolean;
+  onToggleFavorite?: () => void;
+}> = ({ tone, favoritesCount, favorited, onToggleFavorite }) => (
+  <div
+    style={{
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: '16rem',
+      minWidth: 0,
+    }}
+  >
+    <CountStat icon={<Download size={13} />} value={tone.downloads_count ?? 0} fontSize={12} />
+    <BookmarkStat
+      value={favoritesCount}
+      favorited={favorited}
+      onToggle={onToggleFavorite}
+      iconSize={13}
+      fontSize={12}
+    />
+    {tone.user && (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6rem',
+          minWidth: 0,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: '18rem',
+            height: '18rem',
+            borderRadius: '50%',
+            overflow: 'hidden',
+            flexShrink: 0,
+          }}
+        >
+          <AvatarImage src={tone.user.avatar_url} alt={tone.user.username} size={18} />
+        </div>
+        <span
+          style={{
+            fontSize: '12rem',
+            color: GRAY,
+            fontWeight: 400,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {tone.user.username}
+          {tone.published_at && (
+            <span style={{ color: MUTED }}> · {timeAgoShort(tone.published_at)}</span>
+          )}
+        </span>
+      </div>
+    )}
+  </div>
+);
 
 /** EQ view glyphs: 16×16, stroke inherits selected/muted color. */
 const EqSlidersIcon: React.FC = () => (
@@ -1141,7 +1227,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   <Share />
                 </ChromeIconButton>
               )}
-              <ChromeIconButton help={HELP.swapTone} onClick={() => actions.swapBlock(blockId)}>
+              <ChromeIconButton
+                help={HELP.swapTone}
+                onClick={() => actions.swapBlock(blockId, { navigateToDetail: true })}
+              >
                 <ArrowLeftRight />
               </ChromeIconButton>
               <ChromeIconButton
@@ -1349,12 +1438,20 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                             height: '100%',
                           }}
                         >
-                          {!isNam && irWaveform ? (
+                          {/* The envelope/waveform graphic is a compact-card
+                            stand-in for the artwork (see IR_WAVEFORM_HEIGHT's
+                            sibling above); the info panel always shows the
+                            real TONE3000 preview image instead, since that's
+                            what "i" is for. Prefers infoTone's own images
+                            (the freshly fetched full tone, once loaded) over
+                            the block's cached tone snapshot, so a stale
+                            cached image can't outlive the fetch. */}
+                          {!isNam && !showInfo && irWaveform ? (
                             <WaveformDisplay
                               mins={irWaveform.mins}
                               maxs={irWaveform.maxs}
-                              width={showInfo ? IMAGE_SIZE_INFO : IMAGE_SIZE}
-                              height={showInfo ? IMAGE_SIZE_INFO : IMAGE_SIZE}
+                              width={IMAGE_SIZE}
+                              height={IMAGE_SIZE}
                               contentLengthMs={block.irContentLengthMs}
                               cutFraction={cutFraction}
                               decay={{
@@ -1367,7 +1464,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                             />
                           ) : (
                             <ToneImage
-                              src={tone.images?.[0]}
+                              src={(showInfo && infoTone?.images?.[0]) || tone.images?.[0]}
                               alt={tone.title}
                               gear={tone.gear}
                               local={tone.local}
@@ -1527,11 +1624,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     </div>
                   ) : (
                     <>
-                      {/* Compact identity row: title + format badge only.
-                        Stats/creator are dropped here for vertical room (this
-                        is a deliberately temporary v1 layout - see
-                        IR_WAVEFORM_HEIGHT's comment); they're still reachable
-                        via the Info panel. */}
+                      {/* Compact identity row: title, then gear+badge sharing
+                        their row with a condensed creator/counts readout
+                        (CompactToneMetaRow) - restored here after the
+                        layout-refactor commit (d88e30d) that introduced the
+                        waveform strip dropped them for vertical room. Fit
+                        into the gear+badge row's own unused width (via
+                        space-between) rather than adding a whole new row, so
+                        the waveform strip below keeps its full original
+                        height - see CompactToneMetaRow's own comment. */}
                       <div
                         style={{
                           display: 'flex',
@@ -1558,15 +1659,39 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                             display: 'flex',
                             flexDirection: 'row',
                             alignItems: 'center',
+                            justifyContent: 'space-between',
                             gap: '12rem',
+                            minWidth: 0,
                           }}
                         >
-                          {tone.gear && (
-                            <span style={{ fontSize: '13rem', color: MUTED, fontWeight: 400 }}>
-                              {gearLabel(tone.gear)}
-                            </span>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              gap: '12rem',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {tone.gear && (
+                              <span style={{ fontSize: '13rem', color: MUTED, fontWeight: 400 }}>
+                                {gearLabel(tone.gear)}
+                              </span>
+                            )}
+                            {formatBadge && <FormatBadge label={formatBadge} a2={isNam} />}
+                          </div>
+                          {!isLocal && (
+                            <CompactToneMetaRow
+                              tone={tone}
+                              favoritesCount={favoritesCount}
+                              favorited={favorited}
+                              onToggleFavorite={
+                                actions.authenticated
+                                  ? () => void handleToggleFavorite()
+                                  : undefined
+                              }
+                            />
                           )}
-                          {formatBadge && <FormatBadge label={formatBadge} a2={isNam} />}
                         </div>
                       </div>
 
