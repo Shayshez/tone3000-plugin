@@ -52,6 +52,23 @@ import { isInsertSlot } from '../types/chain';
  */
 export const DETAIL_BLOCK_STORAGE_KEY = 't3k.detailBlockId';
 
+/**
+ * The gallery's scroll offset (design px, i.e. divided by getUiScale so it
+ * survives a window resize between unmount and remount), saved right before
+ * this component unmounts while showing the plain gallery. Every add/swap
+ * flow opens the tone browser in the same slot ChainView occupies (see
+ * Plugin.tsx's ternary), which unmounts ChainView - and with it, the
+ * gallery's own scroll container (useHorizontalWheelScroll) - entirely;
+ * there is no DOM node left afterward to have a scrollLeft worth reading.
+ * A fresh remount's scroll container always starts at 0, so without this,
+ * *any* gallery-initiated add (not just ChainMapStrip's "+" - see
+ * DETAIL_BLOCK_STORAGE_KEY's own restore path for that one) bounces the
+ * user to the far left the moment the browser closes, even though nothing
+ * about their position was ever supposed to change (policy: a gallery add
+ * leaves the user exactly where they were, no forced scroll of any kind).
+ */
+const GALLERY_SCROLL_STORAGE_KEY = 't3k.pendingGalleryScrollLeft';
+
 interface ChainViewProps {
   /** Left lane (the only lane in mono mode). */
   chain: ChainItem[];
@@ -394,13 +411,57 @@ export const ChainView: React.FC<ChainViewProps> = ({
   }
 
   const galleryScrollElRef = useRef<HTMLDivElement | null>(null);
+  // Persist the gallery's scroll position (see GALLERY_SCROLL_STORAGE_KEY)
+  // directly in the ref callback's detach call (el === null), reading the
+  // outgoing node BEFORE overwriting galleryScrollElRef.current - not in a
+  // useEffect cleanup. A diagnostic trace confirmed a useEffect cleanup runs
+  // too late for this: React already calls this ref callback with null
+  // (detaching it) during the synchronous unmount commit, before any
+  // passive-effect cleanup runs at all, so galleryScrollElRef.current was
+  // already null by the time such an effect's cleanup went to read it - the
+  // capture was silently a no-op on every single gallery add. The ref
+  // callback itself has no such ordering hazard: it fires exactly once,
+  // synchronously, at the real moment of detachment.
   const setGalleryScrollEl = useCallback(
     (el: HTMLDivElement | null) => {
       wheelScrollRef(el);
+      if (el == null) {
+        const prev = galleryScrollElRef.current;
+        if (prev) {
+          sessionStorage.setItem(
+            GALLERY_SCROLL_STORAGE_KEY,
+            String(prev.scrollLeft / getUiScale())
+          );
+        }
+      }
       galleryScrollElRef.current = el;
     },
     [wheelScrollRef]
   );
+
+  // Restore it on the other side of that unmount, once this is a fresh
+  // ChainView instance landing back on the gallery (detailBlockId null - a
+  // navigate-to-new-detail-block remount, e.g. ChainMapStrip's "+" or the
+  // detail card's own swap button, has its own restore need met entirely
+  // differently, by rendering that block directly - see the
+  // awaitingDetailBlock guard below). Clears the key either way so a stale
+  // value can never bleed into some later, unrelated remount.
+  useLayoutEffect(() => {
+    const raw = sessionStorage.getItem(GALLERY_SCROLL_STORAGE_KEY);
+    if (raw == null) return;
+    sessionStorage.removeItem(GALLERY_SCROLL_STORAGE_KEY);
+    if (detailBlockId != null) return;
+    const el = galleryScrollElRef.current;
+    if (el == null) return;
+    const target = parseFloat(raw) * getUiScale();
+    const max = el.scrollWidth - el.clientWidth;
+    el.scrollLeft = Math.max(0, Math.min(max, target));
+    // Runs once per mount (detailBlockId is only ever null here, since a
+    // non-null id returns above): re-running on every lanes/tile-size change
+    // would keep re-clamping and could fight a drag or the other
+    // scroll-restore effect below over the same scrollLeft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Center the just-closed (or just-vanished) block's tile instead of
   // leaving the gallery scrolled to wherever a freshly mounted scroller
@@ -464,6 +525,28 @@ export const ChainView: React.FC<ChainViewProps> = ({
     // tileSize are derived from lanes/branch/chainRight above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailBlock, detailBlockId, lanes, branchLayout, tileSize]);
+
+  // A brand-new mount (ChainMapStrip's "+" — see useToneLoadFlow's
+  // navigateToDetail) can land here with detailBlockId already pointing at a
+  // just-created block before this instance's chain/chainRight props have
+  // caught up to it: chain state resyncs off the native `chainChanged` push
+  // event (useChainState.ts), a separate round trip that lags a beat behind
+  // the loadTone call that already resolved with the new id. The layout
+  // effect above already knows not to discard detailBlockId or queue a scroll
+  // target during that gap (confirmedDetailBlockIdRef), but that alone still
+  // left this render falling through to the gallery return below - a real,
+  // visible flash of the gallery at whatever a freshly mounted scroller
+  // defaults to (the far left), then a snap into the detail view once
+  // chain/chainRight catch up. That flash *was* the "bounces back to the main
+  // screen, scrolled left" regression, even though nothing was ever
+  // technically "restored" to. Render nothing instead until it resolves.
+  const awaitingDetailBlock =
+    detailBlock == null &&
+    detailBlockId != null &&
+    confirmedDetailBlockIdRef.current !== detailBlockId;
+  if (awaitingDetailBlock) {
+    return null;
+  }
 
   if (detailBlock) {
     // Another enabled+loaded NAM after this block in its lane. This mirrors the
