@@ -114,47 +114,54 @@ export function chromeIcon(node: React.ReactNode, size?: number): React.ReactNod
   });
 }
 
-export const ChromeIconButton: React.FC<ChromeIconButtonProps> = ({
-  onClick,
-  help,
-  children,
-  tone = 'plain',
-  on = true,
-  filled = false,
-  open = false,
-  offsetY,
-  onMouseDown,
-  disabled = false,
-  style,
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    onMouseDown={onMouseDown}
-    disabled={disabled}
-    {...helpProps(help)}
-    style={{
-      ...iconButtonStyle(ICON_BOX_SIZE),
-      // Grid on the button itself: one centering context, no nested span.
-      display: 'grid',
-      placeItems: 'center',
-      ...toneChrome(tone, on, filled),
-      ...(open
-        ? {
-            color: BLACK,
-            backgroundColor: WHITE,
-            border: `1rem solid ${WHITE}`,
-          }
-        : {}),
-      opacity: disabled ? DISABLED_OPACITY : 1,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      transform: offsetY !== undefined ? `translateY(${offsetY}rem)` : undefined,
-      ...style,
-    }}
-  >
-    {chromeIcon(children, ICON_SIZE)}
-  </button>
+export const ChromeIconButton = React.forwardRef<HTMLButtonElement, ChromeIconButtonProps>(
+  (
+    {
+      onClick,
+      help,
+      children,
+      tone = 'plain',
+      on = true,
+      filled = false,
+      open = false,
+      offsetY,
+      onMouseDown,
+      disabled = false,
+      style,
+    },
+    ref
+  ) => (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      onMouseDown={onMouseDown}
+      disabled={disabled}
+      {...helpProps(help)}
+      style={{
+        ...iconButtonStyle(ICON_BOX_SIZE),
+        // Grid on the button itself: one centering context, no nested span.
+        display: 'grid',
+        placeItems: 'center',
+        ...toneChrome(tone, on, filled),
+        ...(open
+          ? {
+              color: BLACK,
+              backgroundColor: WHITE,
+              border: `1rem solid ${WHITE}`,
+            }
+          : {}),
+        opacity: disabled ? DISABLED_OPACITY : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        transform: offsetY !== undefined ? `translateY(${offsetY}rem)` : undefined,
+        ...style,
+      }}
+    >
+      {chromeIcon(children, ICON_SIZE)}
+    </button>
+  )
 );
+ChromeIconButton.displayName = 'ChromeIconButton';
 
 /**
  * Text chrome button (EQ, PRE). TEXT_BOX_HEIGHT / ICON_BOX_RADIUS.
@@ -165,6 +172,9 @@ export const ChromeIconButton: React.FC<ChromeIconButtonProps> = ({
  */
 interface ChromeTextButtonProps {
   onClick: () => void;
+  /** e.g. the chain-map strip's chip: double-click bypasses the block
+      instead of navigating (see ChainMapStrip.tsx). */
+  onDoubleClick?: () => void;
   help: string;
   children: React.ReactNode;
   armed?: boolean;
@@ -197,26 +207,24 @@ const textChrome = (
   };
 };
 
-export const ChromeTextButton: React.FC<ChromeTextButtonProps> = ({
-  onClick,
-  help,
-  children,
-  armed = false,
-  open = false,
-  style,
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    {...helpProps(help)}
-    style={{
-      ...textBoxStyle(),
-      ...textChrome(armed, open),
-      lineHeight: 1,
-      ...style,
-    }}
-  >
-    {/* cap-trim span: optical centering for the mono label (see index.css). */}
-    <span className="cap-trim">{children}</span>
-  </button>
+export const ChromeTextButton = React.forwardRef<HTMLButtonElement, ChromeTextButtonProps>(
+  ({ onClick, onDoubleClick, help, children, armed = false, open = false, style }, ref) => (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      {...helpProps(help)}
+      style={{
+        ...textBoxStyle(),
+        ...textChrome(armed, open),
+        lineHeight: 1,
+        ...style,
+      }}
+    >
+      {/* cap-trim span: optical centering for the mono label (see index.css). */}
+      <span className="cap-trim">{children}</span>
+    </button>
+  )
 );
+ChromeTextButton.displayName = 'ChromeTextButton';

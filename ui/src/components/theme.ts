@@ -59,6 +59,12 @@ export const uiOffClass = (off: boolean): string | undefined => (off ? 'ui-off' 
 export const BRAND_BLUE = '#0000FF';
 export const BRAND_YELLOW = '#FFFF00';
 export const BRAND_RED = '#FF0000';
+/** A secondary, non-error "shaped away from default" signal (e.g. the chain
+    map strip's EQ-modified mark) that has to read clearly on its own against
+    black - unlike BRAND_RED (already reads as error/destructive elsewhere)
+    or BRAND_YELLOW (already reads as active/armed), and unlike BRAND_BLUE,
+    whose low luminance nearly disappears as a small solid mark on black. */
+export const BRAND_ORANGE = '#FF8000';
 /** Inline doc / “Learn More” links in settings. */
 export const LINK_BLUE = '#40A6FF';
 

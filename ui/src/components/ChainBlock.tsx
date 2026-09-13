@@ -988,7 +988,23 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           <ChainMapStrip
             items={chainStripItems}
             currentBlockId={blockId}
-            onSelect={onJumpToBlock}
+            onSelect={(id) => {
+              onJumpToBlock(id);
+              // Deterministic destination: a plain chip always lands on the
+              // block's main content, regardless of whatever view (EQ,
+              // Info) was active on screen before the click. Only
+              // onSelectEq below ever turns showEq back on.
+              setShowEq(false);
+            }}
+            onSelectEq={(id) => {
+              onJumpToBlock(id);
+              // Same pair the header's own EQ toggle sets (line ~1216):
+              // showEq wins the body's render regardless of showInfo, but a
+              // stale showInfo would still leave the Info chip reading
+              // "open" underneath.
+              setShowEq(true);
+              setShowInfo(false);
+            }}
             onAdd={onAddBlockAt}
           />
 
