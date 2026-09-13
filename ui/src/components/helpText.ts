@@ -308,18 +308,31 @@ const HELP_DESKTOP = {
     'Decay segment’s envelope shape, front-loaded to back-loaded. Center: linear.'
   ),
   // Envelope graph (IrEnvelopeGraph.tsx): the same six values as the chips
-  // above, shaped directly on the waveform instead of typed in.
-  envelopeInitPoint: `Init: drag to set level at the IR\u2019s start. ${shift(
-    'drag'
-  )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
-  envelopePeakPoint: `Attack: drag to set the envelope\u2019s peak position. ${shift(
-    'drag'
-  )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
-  envelopeEndPoint: `Decay: drag to set trim length + end level. ${shift(
-    'drag'
-  )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
-  envelopeAttackCurve: `Attack Curve: drag the line to bow the rise. ${shift('drag')}: fine.`,
-  envelopeDecayCurve: `Decay Curve: drag the line to bow the fall. ${shift('drag')}: fine.`,
+  // above, shaped directly on the waveform instead of typed in. Touch has no
+  // Shift/Option modifiers, so those variants drop the fine-drag and
+  // click-to-reset mentions in favor of a plain double tap (touchify's blunt
+  // find/replace can't safely rewrite a modifier chord like "\u2325-click").
+  envelopeInitPoint: IS_COARSE_POINTER
+    ? 'Init: drag to set level at the IR\u2019s start. Double tap: reset.'
+    : `Init: drag to set level at the IR\u2019s start. ${shift(
+        'drag'
+      )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
+  envelopePeakPoint: IS_COARSE_POINTER
+    ? 'Attack: drag to set the envelope\u2019s peak position. Double tap: reset.'
+    : `Attack: drag to set the envelope\u2019s peak position. ${shift(
+        'drag'
+      )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
+  envelopeEndPoint: IS_COARSE_POINTER
+    ? 'Decay: drag to set trim length + end level. Double tap: reset.'
+    : `Decay: drag to set trim length + end level. ${shift(
+        'drag'
+      )}: fine \u00b7 ${alt('click')} / double-click: reset.`,
+  envelopeAttackCurve: IS_COARSE_POINTER
+    ? 'Attack Curve: drag the line to bow the rise.'
+    : `Attack Curve: drag the line to bow the rise. ${shift('drag')}: fine.`,
+  envelopeDecayCurve: IS_COARSE_POINTER
+    ? 'Decay Curve: drag the line to bow the fall.'
+    : `Decay Curve: drag the line to bow the fall. ${shift('drag')}: fine.`,
   blockNormalize: 'Normalize: level this block\u2019s loudness. Off: raw capture level.',
   blockNormalizeOverridden:
     'Normalize: overridden \u2014 calibration hands this model\u2019s true output level to the next NAM block.',
