@@ -53,21 +53,12 @@ import { isInsertSlot } from '../types/chain';
 export const DETAIL_BLOCK_STORAGE_KEY = 't3k.detailBlockId';
 
 /**
- * The gallery's scroll offset (design px, i.e. divided by getUiScale so it
- * survives a window resize between unmount and remount), saved right before
- * this component unmounts while showing the plain gallery. Every add/swap
- * flow opens the tone browser in the same slot ChainView occupies (see
- * Plugin.tsx's ternary), which unmounts ChainView - and with it, the
- * gallery's own scroll container (useHorizontalWheelScroll) - entirely;
- * there is no DOM node left afterward to have a scrollLeft worth reading.
- * A fresh remount's scroll container always starts at 0, so without this,
- * *any* gallery-initiated add (not just ChainMapStrip's "+" - see
- * DETAIL_BLOCK_STORAGE_KEY's own restore path for that one) bounces the
- * user to the far left the moment the browser closes, even though nothing
- * about their position was ever supposed to change (policy: a gallery add
- * leaves the user exactly where they were, no forced scroll of any kind).
+ * Gallery scroll offset in design px, persisted for the same reason: the
+ * scroller unmounts under the detail takeover, the tone browser, and the
+ * tuner, and coming back should land where the user left off (issue #82).
+ * Cleared from Plugin on preset load so a new chain starts at the left edge.
  */
-const GALLERY_SCROLL_STORAGE_KEY = 't3k.pendingGalleryScrollLeft';
+export const CHAIN_SCROLL_STORAGE_KEY = 't3k.chainScroll';
 
 interface ChainViewProps {
   /** Left lane (the only lane in mono mode). */
@@ -144,6 +135,36 @@ export const ChainView: React.FC<ChainViewProps> = ({
 }) => {
   const actions = useChainActions();
   const wheelScrollRef = useHorizontalWheelScroll<HTMLDivElement>();
+  // Live scroll-div node, kept only so the recenter effect below (see
+  // pendingScrollTargetRef) can read scrollWidth/clientWidth and override
+  // galleryScrollRef's raw-offset restore with a recomputed tile position.
+  const galleryScrollElRef = useRef<HTMLDivElement | null>(null);
+  // One callback ref wires the scroller: it restores the saved offset before
+  // first paint, persists it as the user scrolls, and attaches the wheel
+  // hook's panning. The hook returns a cleanup (and once a ref callback
+  // returns a cleanup React never calls it with null), so it must be
+  // forwarded here, not swallowed: StrictMode's dev double-attach would
+  // stack a second wheel listener.
+  const galleryScrollRef = useCallback(
+    (el: HTMLDivElement) => {
+      galleryScrollElRef.current = el;
+      // Stored in design px so a window rescale between visits lands in the
+      // same place; an offset past the end (the chain shrank) clamps on
+      // assignment.
+      const saved = Number(sessionStorage.getItem(CHAIN_SCROLL_STORAGE_KEY));
+      if (saved > 0) el.scrollLeft = saved * getUiScale();
+      const save = () =>
+        sessionStorage.setItem(CHAIN_SCROLL_STORAGE_KEY, String(el.scrollLeft / getUiScale()));
+      el.addEventListener('scroll', save, { passive: true });
+      const wheelCleanup = wheelScrollRef(el);
+      return () => {
+        el.removeEventListener('scroll', save);
+        if (typeof wheelCleanup === 'function') wheelCleanup();
+        galleryScrollElRef.current = null;
+      };
+    },
+    [wheelScrollRef]
+  );
   // Persisted so the detail takeover survives this component unmounting: a
   // swap from the detail view opens the tone browser (which replaces the whole
   // chain view, and may bounce through the tone3000.com OAuth redirect). The
@@ -410,67 +431,12 @@ export const ChainView: React.FC<ChainViewProps> = ({
     if (side != null && index !== -1) lastDetailPositionRef.current = { side, index };
   }
 
-  const galleryScrollElRef = useRef<HTMLDivElement | null>(null);
-  // Persist the gallery's scroll position (see GALLERY_SCROLL_STORAGE_KEY)
-  // directly in the ref callback's detach call (el === null), reading the
-  // outgoing node BEFORE overwriting galleryScrollElRef.current - not in a
-  // useEffect cleanup. A diagnostic trace confirmed a useEffect cleanup runs
-  // too late for this: React already calls this ref callback with null
-  // (detaching it) during the synchronous unmount commit, before any
-  // passive-effect cleanup runs at all, so galleryScrollElRef.current was
-  // already null by the time such an effect's cleanup went to read it - the
-  // capture was silently a no-op on every single gallery add. The ref
-  // callback itself has no such ordering hazard: it fires exactly once,
-  // synchronously, at the real moment of detachment.
-  const setGalleryScrollEl = useCallback(
-    (el: HTMLDivElement | null) => {
-      wheelScrollRef(el);
-      if (el == null) {
-        const prev = galleryScrollElRef.current;
-        if (prev) {
-          sessionStorage.setItem(
-            GALLERY_SCROLL_STORAGE_KEY,
-            String(prev.scrollLeft / getUiScale())
-          );
-        }
-      }
-      galleryScrollElRef.current = el;
-    },
-    [wheelScrollRef]
-  );
-
-  // Restore it on the other side of that unmount, once this is a fresh
-  // ChainView instance landing back on the gallery (detailBlockId null - a
-  // navigate-to-new-detail-block remount, e.g. ChainMapStrip's "+" or the
-  // detail card's own swap button, has its own restore need met entirely
-  // differently, by rendering that block directly - see the
-  // awaitingDetailBlock guard below). Clears the key either way so a stale
-  // value can never bleed into some later, unrelated remount.
-  useLayoutEffect(() => {
-    const raw = sessionStorage.getItem(GALLERY_SCROLL_STORAGE_KEY);
-    if (raw == null) return;
-    sessionStorage.removeItem(GALLERY_SCROLL_STORAGE_KEY);
-    if (detailBlockId != null) return;
-    const el = galleryScrollElRef.current;
-    if (el == null) return;
-    const target = parseFloat(raw) * getUiScale();
-    const max = el.scrollWidth - el.clientWidth;
-    el.scrollLeft = Math.max(0, Math.min(max, target));
-    // Runs once per mount (detailBlockId is only ever null here, since a
-    // non-null id returns above): re-running on every lanes/tile-size change
-    // would keep re-clamping and could fight a drag or the other
-    // scroll-restore effect below over the same scrollLeft.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Center the just-closed (or just-vanished) block's tile instead of
-  // leaving the gallery scrolled to wherever a freshly mounted scroller
-  // defaults (issue #82): the gallery's scroll div unmounts while the detail
-  // takeover is open (see useHorizontalWheelScroll), so there's no prior
-  // scrollLeft to restore. Recomputing the tile's position (rather than
-  // replaying a raw offset) also survives the chain reshaping while the
-  // takeover was open (the block moved, or a preceding block was
-  // deleted/inserted).
+  // Center the just-closed (or just-vanished) block's tile, overriding
+  // galleryScrollRef's raw sessionStorage restore above: recomputing the
+  // tile's position (rather than replaying a raw offset) survives the chain
+  // reshaping while the takeover was open (the block moved, or a preceding
+  // block was deleted/inserted) — a raw offset alone (issue #82's fix)
+  // would land on the wrong tile in that case.
   useLayoutEffect(() => {
     if (detailBlock != null) return;
 
@@ -673,7 +639,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
             </span>
           )}
           <div
-            ref={setGalleryScrollEl}
+            ref={galleryScrollRef}
             className="hide-scrollbar"
             style={{
               flex: 1,
