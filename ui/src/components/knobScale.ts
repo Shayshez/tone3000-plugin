@@ -165,20 +165,3 @@ export const panScale = (side: 'left' | 'right'): KnobScale => {
     editText: (n) => Math.round(toDisplay(n)).toString(),
   };
 };
-
-/**
- * Cab Block pan (single knob, full 0..1 range: 0 = hard left, 1 = hard
- * right, 0.5 = center) - unlike panScale's half-range pair, this is one
- * knob covering the whole span. Display matches panScale's L/C/R
- * convention (100 = hard, 0 = center).
- */
-export const cabPanScale: KnobScale = {
-  toDisplay: (n) => (n - 0.5) * 200,
-  fromDisplay: (d) => 0.5 + d / 200,
-  format: (n) => {
-    const amount = Math.round((n - 0.5) * 200);
-    if (amount === 0) return 'C';
-    return amount < 0 ? `${-amount}L` : `${amount}R`;
-  },
-  editText: (n) => Math.round((n - 0.5) * 200).toString(),
-};

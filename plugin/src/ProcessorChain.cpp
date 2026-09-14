@@ -998,6 +998,145 @@ void TONE3000Processor::switchModelInBackground(const std::string& blockId, int 
   }
 }
 
+bool TONE3000Processor::convertBlockType(const std::string& blockId,
+                                         const juce::String& targetTypeStr) {
+  const ChainBlockType targetType =
+      targetTypeStr == "cab" ? ChainBlockType::CAB : ChainBlockType::IR;
+
+  std::vector<uint8_t> modelData;
+  juce::String modelName;
+
+  {
+    juce::ScopedLock lock(chainMutex);
+
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr || !block->loaded) {
+      DBG("convertBlockType: block not found or not loaded: " << blockId);
+      return false;
+    }
+
+    // Only a genuine IR<->CAB round trip; NAM/insert blocks (and a block
+    // already at the target type) aren't eligible.
+    const bool validDirection =
+        (targetType == ChainBlockType::CAB && block->type == ChainBlockType::IR) ||
+        (targetType == ChainBlockType::IR && block->type == ChainBlockType::CAB);
+    if (!validDirection) {
+      DBG("convertBlockType: not a valid IR<->CAB conversion for block: " << blockId);
+      return false;
+    }
+
+    const int modelId = block->activeModelId;
+    const auto cacheIt = block->modelCache.find(modelId);
+    if (cacheIt == block->modelCache.end()) {
+      // Shouldn't happen for a loaded block (see queueActiveModelLoad /
+      // switchModelInBackground: every successful apply caches its bytes
+      // first), but a currently-loading block could still be mid-download
+      // with the previous model's cache entry not yet superseded.
+      DBG("convertBlockType: no cached model bytes for block: " << blockId);
+      return false;
+    }
+    modelData = cacheIt->second;
+
+    if (const auto* modelsArr = block->toneVar["models"].getArray())
+      for (const auto& modelVar : *modelsArr)
+        if (static_cast<int>(modelVar["id"]) == modelId) {
+          modelName = modelVar["name"].toString();
+          break;
+        }
+    if (modelName.isEmpty())
+      modelName = block->toneSummary["title"].toString();
+
+    pushChainHistory();
+
+    // The previous engine keeps processing (loaded stays true) while the
+    // conversion prepares off-thread; it's spliced in with the same swap
+    // fade a model switch uses.
+    block->modelLoading = true;
+    bumpChainRevision();
+  }
+
+  DBG("Queueing block type conversion: " << blockId << " -> " << targetTypeStr);
+
+  struct ConvertBlockTypeJob : public juce::ThreadPoolJob {
+    TONE3000Processor& processor;
+    std::string blockId;
+    ChainBlockType targetType;
+    std::vector<uint8_t> modelData;
+    juce::String filename;
+
+    ConvertBlockTypeJob(TONE3000Processor& p, const std::string& bid, ChainBlockType type,
+                        std::vector<uint8_t> data, const juce::String& name)
+        : ThreadPoolJob("Convert Block Type"), processor(p), blockId(bid), targetType(type),
+          modelData(std::move(data)), filename(name) {}
+
+    JobStatus runJob() override {
+      processor.convertBlockTypeInBackground(blockId, targetType, modelData, filename);
+      return jobHasFinished;
+    }
+  };
+
+  loadingThreadPool.addJob(
+      new ConvertBlockTypeJob(*this, blockId, targetType, std::move(modelData),
+                              modelName + ".wav"),
+      true);
+
+  return true;
+}
+
+void TONE3000Processor::convertBlockTypeInBackground(const std::string& blockId,
+                                                      ChainBlockType targetType,
+                                                      const std::vector<uint8_t>& modelData,
+                                                      const juce::String& filename) {
+  DBG("[Background] Converting block type: " << blockId << " -> "
+                                              << chainBlockTypeToString(targetType));
+
+  // Forced, not guessed: an explicit user conversion always lands on exactly
+  // the type it asked for, regardless of what the source file's real content
+  // looks like (see prepareBlockModelOffThread's isCabKnown - CAB is
+  // unconditional from `type` alone; IrPlayer here is just as explicit, so
+  // the round trip back never re-runs the duration guess IrCategory carries
+  // for an ordinary first-time load).
+  const std::optional<IrCategory> knownCategory =
+      targetType == ChainBlockType::CAB ? std::optional<IrCategory>(IrCategory::Cab)
+                                        : std::optional<IrCategory>(IrCategory::IrPlayer);
+
+  PreparedBlockModel prepared =
+      prepareBlockModelOffThread(targetType, modelData, filename, 0.0, knownCategory);
+
+  // The previous engine keeps processing until this moment; fade it out on
+  // the audio thread so the outcome can't click - same handshake as a model
+  // switch (mute-in-place on success, drop to bypass on a failed prepare).
+  requestSwapFadeAndWait(blockId, prepared.success);
+
+  {
+    juce::ScopedLock lock(chainMutex);
+
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr) {
+      DBG("[Background] Block was removed during conversion");
+      return;
+    }
+
+    applyPreparedModelToChainBlock(*block, targetType, prepared);
+
+    // Converting back to IR Player always lands in that category explicitly
+    // (applyPreparedModelToChainBlock only seeds irCategory from the
+    // detected-duration guess when irCategoryNeedsDurationGuess is armed,
+    // which it isn't here) - the button is labeled "IR Player", so that's
+    // what the block becomes, never a re-guessed "Cab" off short content.
+    if (prepared.success && targetType == ChainBlockType::IR) {
+      block->irCategory = IrCategory::IrPlayer;
+      block->irCategoryNeedsDurationGuess = false;
+    }
+  }
+  // `prepared` now holds the block's *previous* engines (if any); they are
+  // destroyed here, after the lock; teardown is too heavy to hold it.
+
+  if (prepared.success) {
+    DBG("[Background] Successfully converted block type: " << blockId);
+  }
+}
+
 // Promote a settled continuous gesture (knob/EQ drag) into a real revision
 // bump. Mid-gesture edits only record a timestamp (deferredRevisionBump);
 // once the gesture has been quiet for kGestureSettleMs the next revision
@@ -1041,7 +1180,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     float initLevel = 1.0f;
     float attackLength = 0.0f, attackCurve = 0.5f;
     float decayLength = 1.0f, decayLevel = 1.0f, decayCurve = 0.5f;
-    float cabPan = 0.5f;
     juce::var eq;
     bool rtFailed = false;
   };
@@ -1121,7 +1259,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.decayLength = block->decayLengthNormalized;
         row.decayLevel = block->decayLevelNormalized;
         row.decayCurve = block->decayCurveNormalized;
-        row.cabPan = block->cabPanNormalized;
         row.eq = block->eq.toVar();
         out.push_back(std::move(row));
       }
@@ -1209,7 +1346,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("inputGain", row.inputGain);
       params->setProperty("outputGain", row.outputGain);
       params->setProperty("mix", row.mix);
-      params->setProperty("cabPan", row.cabPan);
       params->setProperty("predelay", row.predelay);
       params->setProperty("initLevel", row.initLevel);
       params->setProperty("attackLength", row.attackLength);
@@ -1566,7 +1702,7 @@ bool TONE3000Processor::setBlockParam(const std::string& blockId, const juce::St
 
   // Validate before recording history, so failed calls never leave an entry.
   const bool isContinuous = param == "inputGain" || param == "outputGain" || param == "mix" ||
-                            param == "predelay" || param == "cabPan";
+                            param == "predelay";
   const bool isKnown = isContinuous || param == "enabled" || param == "normalize";
   if (!isKnown) {
     DBG("setBlockParam: unknown param: " << param);
@@ -1591,10 +1727,6 @@ bool TONE3000Processor::setBlockParam(const std::string& blockId, const juce::St
     block->predelayNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(value));
     block->predelay.setDelayMs(block->predelayNormalized * BlockPredelay::kMaxDelayMs);
     refreshIrTailLength();
-  } else if (param == "cabPan") {
-    // CAB blocks only (ChainBlockType::CAB); genuinely inert in v1's
-    // single-slot processing - see ChainBlock::cabPanNormalized.
-    block->cabPanNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(value));
   }
 
   // Continuous drags settle into one bump after the gesture ends; discrete

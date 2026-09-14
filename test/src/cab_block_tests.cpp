@@ -76,6 +76,53 @@ void assertAllFinite(const juce::AudioBuffer<float>& buffer) {
       ASSERT_TRUE(std::isfinite(buffer.getSample(ch, i))) << "ch " << ch << " sample " << i;
 }
 
+// Peak at each of `checkpointSeconds`, from a SINGLE continuous impulse
+// response (one impulse injected once; each checkpoint is a further point
+// along that same decay) - not a fresh impulse per checkpoint, which would
+// measure disjoint responses instead of one continuous one. Shared by the
+// truncation-cliff test below and the round-trip conversion test.
+std::vector<float> peaksAtCheckpoints(ChainTestProcessor& proc, int blockSize,
+                                      const std::vector<double>& checkpointSeconds) {
+  juce::AudioBuffer<float> buffer(2, blockSize);
+  juce::MidiBuffer midi;
+  buffer.clear();
+  buffer.setSample(0, 0, 1.0f);
+  buffer.setSample(1, 0, 1.0f);
+  std::vector<float> peaks;
+  int done = 0;
+  for (double checkpointSec : checkpointSeconds) {
+    const int targetBlock = static_cast<int>(checkpointSec * 48000.0 / blockSize);
+    float peak = 0.0f;
+    while (done <= targetBlock) {
+      proc.processBlock(buffer, midi);
+      peak = 0.0f;
+      for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        for (int s = 0; s < buffer.getNumSamples(); ++s)
+          peak = std::max(peak, std::abs(buffer.getSample(ch, s)));
+      buffer.clear();
+      ++done;
+    }
+    peaks.push_back(peak);
+  }
+  return peaks;
+}
+
+// Polls until the block's engine rebuild (model switch / conversion) has
+// landed: modelLoading clears (the block stays `loaded` throughout a
+// conversion - the previous engine keeps processing until the new one
+// splices in, see convertBlockTypeInBackground), same condition swap_fade_
+// tests.cpp's waitForActiveModel uses for a model switch.
+bool waitForModelLoadingDone(TONE3000Processor& proc, int timeoutMs = 20000) {
+  const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+  while (juce::Time::getMillisecondCounter() < deadline) {
+    const juce::var block = firstToneBlock(proc);
+    if (!block.isVoid() && !static_cast<bool>(block["modelLoading"]))
+      return true;
+    juce::Thread::sleep(10);
+  }
+  return false;
+}
+
 }  // namespace
 
 // Step 1 routing: gear == "cab" produces a real CAB block, not IR.
@@ -179,36 +226,6 @@ TEST(CabBlockTest, LoadWhileAudioIsRunningDoesNotCrash) {
 TEST(CabBlockTest, FiveHundredMsTruncationEmpiricallyMeasuredVsUntruncatedIrPlayer) {
   constexpr int kBlockSize = 64;  // fine time resolution for the measurement
 
-  // Peak at each of `checkpointSeconds`, from a SINGLE continuous impulse
-  // response (one impulse injected once; each checkpoint is a further point
-  // along that same decay) - not a fresh impulse per checkpoint, which would
-  // measure disjoint responses instead of one continuous one.
-  auto peaksAtCheckpoints = [](ChainTestProcessor& proc,
-                               const std::vector<double>& checkpointSeconds) {
-    juce::AudioBuffer<float> buffer(2, kBlockSize);
-    juce::MidiBuffer midi;
-    buffer.clear();
-    buffer.setSample(0, 0, 1.0f);
-    buffer.setSample(1, 0, 1.0f);
-    std::vector<float> peaks;
-    int done = 0;
-    for (double checkpointSec : checkpointSeconds) {
-      const int targetBlock = static_cast<int>(checkpointSec * 48000.0 / kBlockSize);
-      float peak = 0.0f;
-      while (done <= targetBlock) {
-        proc.processBlock(buffer, midi);
-        peak = 0.0f;
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-          for (int s = 0; s < buffer.getNumSamples(); ++s)
-            peak = std::max(peak, std::abs(buffer.getSample(ch, s)));
-        buffer.clear();
-        ++done;
-      }
-      peaks.push_back(peak);
-    }
-    return peaks;
-  };
-
   auto loadCab = [] {
     auto proc = std::make_unique<ChainTestProcessor>();
     proc->setPlayConfigDetails(2, 2, 48000.0, kBlockSize);
@@ -240,13 +257,13 @@ TEST(CabBlockTest, FiveHundredMsTruncationEmpiricallyMeasuredVsUntruncatedIrPlay
   auto procCab = loadCab();
   ASSERT_TRUE(waitForChainLoaded(*procCab));
   ASSERT_EQ(firstToneBlock(*procCab)["blockType"].toString(), juce::String("cab"));
-  const std::vector<float> cabPeaks = peaksAtCheckpoints(*procCab, {0.45, 0.50});
+  const std::vector<float> cabPeaks = peaksAtCheckpoints(*procCab, kBlockSize, {0.45, 0.50});
   const float cabAt450 = cabPeaks[0];
   const float cabAt500 = cabPeaks[1];
 
   auto procIrPlayer = loadIrPlayer();
   ASSERT_TRUE(waitForChainLoaded(*procIrPlayer));
-  const std::vector<float> irPeaks = peaksAtCheckpoints(*procIrPlayer, {0.45, 0.50});
+  const std::vector<float> irPeaks = peaksAtCheckpoints(*procIrPlayer, kBlockSize, {0.45, 0.50});
   const float irAt450 = irPeaks[0];
   const float irAt500 = irPeaks[1];
 
@@ -268,4 +285,70 @@ TEST(CabBlockTest, FiveHundredMsTruncationEmpiricallyMeasuredVsUntruncatedIrPlay
   EXPECT_GT(irDropRatio, 0.5) << "IrPlayer's kernel must still have real content past 450ms";
   EXPECT_GT(irDropRatio, cabDropRatio * 10)
       << "the cliff must be dramatically sharper for the truncated CAB load";
+}
+
+// convertBlockType round trip: an IR Player block carries its sample into a
+// real CAB block (picking up the same 500ms truncation cliff the direct-load
+// test above measures), then back into an IR Player block, restoring the
+// full original sample (no memory of the truncation - see convertBlockType's
+// doc comment and issue #117's round-trip discussion).
+TEST(CabBlockTest, ConvertBlockTypeRoundTripAppliesAndRestoresTruncation) {
+  constexpr int kBlockSize = 64;  // fine time resolution for the 500ms measurement
+
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, 48000.0, kBlockSize);
+  proc.prepareToPlay(48000.0, kBlockSize);
+
+  juce::ValueTree state("ChainSnapshot");
+  state.setProperty("stereoEnabled", false, nullptr);
+  juce::ValueTree lane("ChainBlocks");
+  lane.appendChild(makeIrBlockTree("blk", 1, 100, "reverb-ir-mono-test.wav", "irPlayer"), nullptr);
+  state.appendChild(lane, nullptr);
+  state.appendChild(juce::ValueTree("RightChainBlocks"), nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  ASSERT_EQ(firstToneBlock(proc)["blockType"].toString(), juce::String("ir"));
+
+  // IR Player -> CAB: same 500ms cliff signature as a direct site-loaded
+  // CAB, measured against this processor's own untruncated baseline above
+  // (irDropRatio) so the assertion doesn't depend on re-deriving thresholds.
+  ASSERT_TRUE(proc.convertBlockType("blk", "cab"));
+  ASSERT_TRUE(waitForModelLoadingDone(proc));
+  ASSERT_EQ(firstToneBlock(proc)["blockType"].toString(), juce::String("cab"));
+
+  const std::vector<float> cabPeaks = peaksAtCheckpoints(proc, kBlockSize, {0.45, 0.50});
+  const double cabDropRatio = cabPeaks[1] / cabPeaks[0];
+  std::cerr << "[ROUND TRIP] after IR->CAB: peak@450ms=" << cabPeaks[0]
+            << " peak@500ms=" << cabPeaks[1] << " ratio=" << cabDropRatio << "\n";
+  EXPECT_LT(cabDropRatio, 0.05) << "converted CAB must show the same real cliff a direct CAB "
+                                   "load shows at the 500ms cap";
+
+  // Let the chain's DC blocker (a persistent IIR filter, not swapped by the
+  // conversion) settle before injecting a second impulse, so the CAB
+  // measurement's own decay can't bleed into the next peak reading.
+  {
+    juce::AudioBuffer<float> silence(2, kBlockSize);
+    juce::MidiBuffer midi;
+    silence.clear();
+    for (int i = 0; i < 48000 / kBlockSize; ++i)
+      proc.processBlock(silence, midi);
+  }
+
+  // CAB -> IR Player: back to the full original sample (no cliff), and
+  // explicitly the "IR Player" category the button is labeled with, not a
+  // re-guessed classification.
+  ASSERT_TRUE(proc.convertBlockType("blk", "ir"));
+  ASSERT_TRUE(waitForModelLoadingDone(proc));
+  const juce::var restored = firstToneBlock(proc);
+  ASSERT_EQ(restored["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(restored["irCategory"].toString(), juce::String("irPlayer"));
+
+  const std::vector<float> restoredPeaks = peaksAtCheckpoints(proc, kBlockSize, {0.45, 0.50});
+  const double restoredDropRatio = restoredPeaks[1] / restoredPeaks[0];
+  std::cerr << "[ROUND TRIP] after CAB->IR: peak@450ms=" << restoredPeaks[0]
+            << " peak@500ms=" << restoredPeaks[1] << " ratio=" << restoredDropRatio << "\n";
+  EXPECT_GT(restoredDropRatio, 0.5) << "converting back must restore the full original sample - "
+                                       "no cliff at 500ms, matching an ordinary IrPlayer load";
+  EXPECT_GT(restoredDropRatio, cabDropRatio * 10)
+      << "the round trip must remove the truncation cliff, not carry it forward";
 }

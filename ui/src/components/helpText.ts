@@ -283,7 +283,6 @@ const HELP_DESKTOP = {
   blockOutIr: knobHelp('Out', 'block output gain, ±24 dB (IR pre-trimmed -18 dB).'),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
-  blockCabPan: knobHelp('Pan', 'stereo placement. No effect yet with a single cabinet slot.'),
   // IR shaping row: a 2-segment Attack/Decay envelope (Space Designer-style)
   // over the truncated content. Decay Length sets the TOTAL trimmed length
   // (the real "End" position); Attack Length is a position *within* that
@@ -341,7 +340,7 @@ const HELP_DESKTOP = {
   blockSizeChip:
     'NAM Size: this block\u2019s size differs from your default. To choose per block, enable it in Settings.',
   blockIrCategory:
-    'Category: Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 50% mix by default. Switching resets Mix to that default.',
+    'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 50% mix by default.',
   blockCalibrated: 'Calibration: active \u2014 levels set from this model\u2019s calibration data.',
   blockUncalibrated: 'Calibration: inactive \u2014 this model has no calibration data.',
   eqToggle: 'EQ: 6-band EQ editor. Outline: EQ shaping the sound.',

@@ -209,6 +209,12 @@ public:
                             ChainBlockType type);
   void switchModelInBackground(const std::string& blockId, int modelId,
                                const juce::String& modelUrl, const juce::String& modelName);
+  // Rebuilds the block's engine at the forced target type from already-
+  // cached bytes (see convertBlockType). No URL/fetch involved: the bytes
+  // are the caller's copy of the block's own modelCache entry.
+  void convertBlockTypeInBackground(const std::string& blockId, ChainBlockType targetType,
+                                    const std::vector<uint8_t>& modelData,
+                                    const juce::String& filename);
   // Rebuilds an already-loaded IR block's convolver(s) to reflect its
   // current envelope knob values (see setBlockIrDecay). `targetGeneration`
   // is the ChainBlock::irShapingGeneration this job was queued for; it reads
@@ -252,6 +258,27 @@ public:
   // load-time measured, fully decoupled from category). IR blocks only;
   // false for a NAM/insert block or an unknown id.
   bool setBlockIrCategory(const std::string& blockId, const juce::String& category);
+
+  // Convert an existing loaded IR Player block into a real ChainBlockType::
+  // CAB block, or a CAB block back into an IR Player block - the "CAB / IR
+  // Player" header control's actual conversion action (IrCategoryControl
+  // only flips IrCategory on an already-IR block; this changes the block's
+  // real native type, exactly like a genuine gear=="cab" catalog load would
+  // - see ProcessorChain.cpp's toneEngineType). Rebuilds the engine off-
+  // thread from the active model's already-cached bytes (no network) through
+  // the normal prepareBlockModelOffThread -> applyPreparedModelToChainBlock
+  // pipeline, so IR -> CAB picks up the #89 fix's unconditional 500ms
+  // truncation/-18dB pad exactly like a site-loaded Cab tone. CAB -> IR
+  // re-reads those same untouched source bytes with IrPlayer's generous cap:
+  // the round trip restores the full original sample, it does not remember
+  // the truncation. Lands as IrCategory::IrPlayer explicitly (never the
+  // load-time guess) on the way back, so the button's "IR Player" label
+  // always matches what the block becomes. `targetType` is "cab" or "ir"
+  // (chainBlockTypeToString's spelling). Undoable, like every other chain
+  // mutator. False for an unloaded block, a block with no cached model
+  // bytes, or any direction other than a genuine IR<->CAB swap (NAM/insert
+  // blocks, or a block already the target type, are not eligible).
+  bool convertBlockType(const std::string& blockId, const juce::String& targetType);
 
   // Per-block IR envelope: a 2-segment Attack/Decay shape (Space
   // Designer-style) over the block's frozen, load-time detected content

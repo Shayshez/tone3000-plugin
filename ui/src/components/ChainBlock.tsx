@@ -28,7 +28,6 @@ import {
   attackLengthMsScale,
   curveScale,
   percentScale,
-  cabPanScale,
 } from './knobScale';
 import type { KnobScale } from './knobScale';
 import { BusyOverlay, LoadingDots } from './LoadingDots';
@@ -338,9 +337,13 @@ const BlockSizeControl: React.FC<{
   );
 };
 
-/** IR-only: explicit content category (see ToneBlock.irCategory). Switching
-    resets Mix (and the native -18 dB cab pad) to the new category's fixed
-    default - see setBlockIrCategory. */
+/** "Cab" / "IR Player" pill, shown on both a plain IR block and a real CAB
+    block. Purely presentational - see ChainBlock's handleCabCategoryClick
+    for what a click actually does: a real ChainBlockType conversion
+    (convertBlockType) off a CAB block or onto a plain IR block that isn't
+    already flagged IrCategory::Cab, otherwise the lighter existing
+    reclassification (setBlockIrCategory), which just resets Mix (and the
+    native -18 dB cab pad) to the new category's fixed default. */
 const IrCategoryControl: React.FC<{
   category: 'cab' | 'irPlayer';
   onChange: (category: 'cab' | 'irPlayer') => void;
@@ -410,6 +413,16 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const { blockId, tone, params } = block;
   const actions = useChainActions();
 
+  const isNam = tone.format?.toLowerCase() === 'nam';
+  // Real ChainBlockType::CAB block (site tones tagged gear === "cab", or any
+  // block converted via convertBlockType; see ToneBlock.blockType) -
+  // structurally minimal natively (no predelay/envelope fields, single
+  // convolver), so the sections built for those fields never render for one:
+  // nothing back there to show. NOT the same as IrCategory === 'cab' (a
+  // still-live classification on plain IR blocks); that one keeps the full
+  // IR Player feature set, just with the -18dB pad and 100% mix default.
+  const isCab = block.blockType === 'cab';
+
   // Optional (=) normalization toggle, revealed by Per-Block Normalization
   // in Plugin Settings.
   const showNormalizeControl = useBlockNormalizeControlEnabled();
@@ -426,7 +439,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const [outputGain, setOutputGain] = useState(params.outputGain ?? 0.5);
   const [mix, setMix] = useState(params.mix ?? 1.0);
   const [predelay, setPredelay] = useState(params.predelay ?? 0);
-  const [cabPan, setCabPan] = useState(params.cabPan ?? 0.5);
   const [initLevel, setInitLevel] = useState(params.initLevel ?? 1.0);
   const [attackLength, setAttackLength] = useState(params.attackLength ?? 0.0);
   const [attackCurve, setAttackCurve] = useState(params.attackCurve ?? 0.5);
@@ -481,9 +493,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => {
     if (!knobDragRef.current) setPredelay(params.predelay ?? 0);
   }, [params.predelay]);
-  useEffect(() => {
-    if (!knobDragRef.current) setCabPan(params.cabPan ?? 0.5);
-  }, [params.cabPan]);
   useEffect(() => {
     if (!knobDragRef.current) setInitLevel(params.initLevel ?? 1.0);
   }, [params.initLevel]);
@@ -631,6 +640,30 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       actions.setBlockIrCategory(blockId, category);
     },
     [actions, blockId]
+  );
+
+  // The header's "Cab / IR Player" control does double duty. Off a real CAB
+  // block (isCab), or onto one, it's a genuine block-type conversion (see
+  // convertBlockType): the loaded sample carries over, IR -> CAB applying
+  // the same 500ms truncation/-18dB pad a site-loaded Cab tone gets, CAB ->
+  // IR restoring the full original sample. No local optimistic state to set
+  // here - blockType flips only once native's chain-state resync lands (the
+  // block stays `loaded` throughout, so it keeps playing under the existing
+  // loading-dots affordance meanwhile), and the card re-renders as
+  // isCab/!isCab in place - nothing to navigate to, it's the same block.
+  // Off a plain IR block that's merely flagged IrCategory::Cab (legacy
+  // state, or a local drop guessed as cab-length - never a real CAB block),
+  // clicking "IR Player" is the lighter existing reclassification instead:
+  // there is no real type to leave.
+  const handleCabCategoryClick = useCallback(
+    (option: 'cab' | 'irPlayer') => {
+      const activeOption = isCab ? 'cab' : irCategory;
+      if (option === activeOption) return;
+      if (isCab || option === 'cab')
+        actions.convertBlockType(blockId, option === 'cab' ? 'cab' : 'ir');
+      else handleSetIrCategory('irPlayer');
+    },
+    [actions, blockId, isCab, irCategory, handleSetIrCategory]
   );
 
   const handleToggleEqEnabled = useCallback(() => {
@@ -837,15 +870,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // loading affordances key off `modelLoading`, not `loaded`.
   const modelBusy = block.modelLoading || (!block.loaded && !block.loadFailed);
 
-  const isNam = tone.format?.toLowerCase() === 'nam';
-  // Real ChainBlockType::CAB block (site tones tagged gear === "cab"; see
-  // ToneBlock.blockType) - structurally minimal natively (no predelay/
-  // envelope fields, single convolver), so the sections built for those
-  // fields never render for one: nothing back there to show. NOT the same
-  // as IrCategory === 'cab' (a still-live classification on plain IR
-  // blocks); that one keeps the full IR Player feature set, just with the
-  // -18dB pad and 100% mix default.
-  const isCab = block.blockType === 'cab';
   // POC: static waveform display replaces the artwork image for IR blocks
   // only (see WaveformDisplay.tsx). `!isNam` in the gate skips the native
   // fetch entirely for NAM blocks; falls back to the image while unfetched
@@ -1091,10 +1115,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 />
               )}
 
-              {/* Not for CAB: that's a real, separate block type now (see
-                ToneBlock.blockType) - IrCategory is meaningless on it. */}
-              {!isNam && !isCab && (
-                <IrCategoryControl category={irCategory} onChange={handleSetIrCategory} />
+              {/* Also renders on a real CAB block now (isCab): the "IR
+                Player" side is the reverse conversion back to a plain IR
+                block (see handleCabCategoryClick), so the control has to
+                stay visible there for the button to exist at all. */}
+              {!isNam && (
+                <IrCategoryControl
+                  category={isCab ? 'cab' : irCategory}
+                  onChange={handleCabCategoryClick}
+                />
               )}
 
               {/* Calibration indicator (not a button): white = the loaded model
@@ -1375,27 +1404,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           help={HELP.blockPredelay}
                         />
                       )}
-                      {/* CAB blocks only: stereo placement. Inert in v1's
-                        single-cabinet-slot processing (see
-                        ChainBlock::cabPanNormalized) - becomes live once a
-                        second slot exists to pan against. */}
-                      {isCab && (
-                        <KnobControl
-                          label="Pan"
-                          value={cabPan}
-                          onChange={(val) => {
-                            setCabPan(val);
-                            setParam('cabPan', val);
-                          }}
-                          onDragStateChange={handleKnobDragState}
-                          size={KNOB_SIZE_SECONDARY}
-                          labelBottom={false}
-                          thumb="secondary"
-                          scale={cabPanScale}
-                          defaultValue={0.5}
-                          help={HELP.blockCabPan}
-                        />
-                      )}
                     </div>
                   </div>
                 )}
@@ -1424,7 +1432,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     IrEnvelopeGraph) is the full IR Player feature set, which
                     a CAB block's data model has nothing to back (no
                     predelay/envelope/waveform fields at all; see
-                    ToneBlock.blockType and ChainBlock::cabPanNormalized). */}
+                    ToneBlock.blockType). */}
                   {showInfo || isNam || isCab ? (
                     <div
                       style={{

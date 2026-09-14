@@ -364,6 +364,18 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 args[0].toString().toStdString(), args[1].toString()));
           }))
       .withNativeFunction(
+          // (blockId, "cab" | "ir"): convert a loaded IR Player block into a
+          // real ChainBlockType::CAB block (applying the 500ms cab
+          // truncation to the carried-over sample), or a CAB block back into
+          // an IR Player block (full original sample, no truncation).
+          // Rebuilds the engine off-thread from the block's own cached model
+          // bytes; false for an unloaded block or a direction other than a
+          // genuine IR<->CAB swap.
+          "convertBlockType", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.convertBlockType(
+                args[0].toString().toStdString(), args[1].toString()));
+          }))
+      .withNativeFunction(
           // (blockId, initLevelNormalized, attackLengthNormalized,
           // attackCurveNormalized, decayLengthNormalized,
           // decayLevelNormalized, decayCurveNormalized): the IR's 2-segment

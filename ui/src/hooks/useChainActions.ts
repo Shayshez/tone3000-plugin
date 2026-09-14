@@ -100,6 +100,15 @@ export interface ChainActions {
   /** Explicit IR content category (see ToneBlock.irCategory); resets Mix (and
       the -18 dB cab pad) to the new category's fixed default. IR blocks only. */
   setBlockIrCategory: (blockId: string, category: 'cab' | 'irPlayer') => void;
+  /** Convert a loaded IR block into a real ChainBlockType::CAB block, or a
+      CAB block back into an IR block (see ToneBlock.blockType) - the header
+      "Cab / IR Player" control's actual conversion action. The loaded sample
+      carries over: "cab" applies the same 500ms truncation/-18dB pad a
+      site-loaded Cab tone gets, "ir" restores the full original sample (the
+      round trip doesn't remember the truncation) and lands explicitly in
+      the IrCategory::IrPlayer category. No-op for an unloaded block or a
+      block already at the target type. */
+  convertBlockType: (blockId: string, targetType: 'cab' | 'ir') => void;
   /** IR envelope: a 2-segment Attack/Decay shape (see BlockParams.initLevel/
       attackLength/attackCurve/decayLength/decayLevel/decayCurve). Not
       fire-and-forget-safe at knob-drag rates - rebuilds the convolver

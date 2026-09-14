@@ -139,7 +139,6 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
   blockState.setProperty("decayLevel", block.decayLevelNormalized, nullptr);
   blockState.setProperty("decayCurve", block.decayCurveNormalized, nullptr);
   blockState.setProperty("irCategory", irCategoryToString(block.irCategory), nullptr);
-  blockState.setProperty("cabPan", block.cabPanNormalized, nullptr);
 
   if (block.type != ChainBlockType::INSERT) {
     blockState.setProperty("toneId", block.toneId, nullptr);
@@ -157,8 +156,6 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
   block.inputGainNormalized = static_cast<float>(blockState.getProperty("inputGain", 0.5f));
   block.outputGainNormalized = static_cast<float>(blockState.getProperty("outputGain", 0.5f));
   block.mixNormalized = static_cast<float>(blockState.getProperty("mix", 1.0f));
-  block.cabPanNormalized =
-      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("cabPan", 0.5f)));
   block.predelayNormalized =
       juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("predelay", 0.0f)));
   block.initLevelNormalized =

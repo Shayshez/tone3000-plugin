@@ -75,6 +75,7 @@ export function useChainState() {
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setBlockIrDecay: backend.getPluginFunction('setBlockIrDecay'),
       setBlockIrCategory: backend.getPluginFunction('setBlockIrCategory'),
+      convertBlockType: backend.getPluginFunction('convertBlockType'),
       setNamSlimSizeDefault: backend.getPluginFunction('setNamSlimSizeDefault'),
       setMultiCore: backend.getPluginFunction('setMultiCore'),
       setActiveEditChain: backend.getPluginFunction('setActiveEditChain'),
@@ -209,6 +210,10 @@ export function useChainState() {
           (and the -18 dB cab pad) to the new category's fixed default. */
       setBlockIrCategory: (blockId: string, category: 'cab' | 'irPlayer') =>
         run<boolean>('setBlockIrCategory', () => native.setBlockIrCategory(blockId, category)),
+      /** Convert a loaded IR block into a real CAB block, or back - see
+          ChainActions.convertBlockType. */
+      convertBlockType: (blockId: string, targetType: 'cab' | 'ir') =>
+        run<boolean>('convertBlockType', () => native.convertBlockType(blockId, targetType)),
       /** IR envelope: a 2-segment Attack/Decay shape (see BlockParams.
           initLevel/attackLength/attackCurve/decayLength/decayLevel/
           decayCurve). Rebuilds the convolver off-thread under a wet-mute

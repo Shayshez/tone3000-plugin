@@ -351,14 +351,6 @@ struct ChainBlock {
   float mixNormalized{1.0f};  // 0 = dry, 1 = wet
   juce::LinearSmoothedValue<float> mixSmoother;
 
-  // CAB blocks only (ChainBlockType::CAB): stereo placement, 0 = hard left,
-  // 1 = hard right, 0.5 = center. Persisted and settable now, but genuinely
-  // inert in v1's single-cabinet-slot processing (Processor.cpp never reads
-  // it yet) - it becomes live once a second slot exists to pan against (see
-  // TONE3000 issue #121 item 3). Not a `LinearSmoothedValue` for the same
-  // reason: nothing consumes it on the audio thread yet.
-  float cabPanNormalized{0.5f};
-
   // Per-block meter levels (dB, -60 floor). Written by the audio thread every
   // block, read by the UI via getMeterLevels(). Input is measured post
   // input-gain (what the model actually receives), output post mix + Out

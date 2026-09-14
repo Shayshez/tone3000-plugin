@@ -368,6 +368,7 @@ export const Plugin: React.FC = () => {
       setBlockSlimSize: actions.setBlockSlimSize,
       setBlockIrDecay: actions.setBlockIrDecay,
       setBlockIrCategory: actions.setBlockIrCategory,
+      convertBlockType: actions.convertBlockType,
       setBlockEqBand: actions.setBlockEqBand,
       setBlockEqEnabled: actions.setBlockEqEnabled,
       setBlockEqPre: actions.setBlockEqPre,

@@ -1256,10 +1256,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // call, and CAB has no predelay field at all (never prepared for this
       // type - see prepareChain) - reusing it here would process a stale,
       // zero-capacity ring buffer, the same class of bug that crashed the
-      // very first version of this block (see cabPanNormalized's comment in
-      // ChainBlock.h for the pan side of "not built yet"). cabPanNormalized
-      // is likewise not applied yet: with one slot there is nothing to pan
-      // against.
+      // very first version of this block.
       try {
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
