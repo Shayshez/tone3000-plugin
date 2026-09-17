@@ -183,6 +183,16 @@ export const ChainView: React.FC<ChainViewProps> = ({
   useEffect(() => {
     if (returnToGallery) setDetailBlockId(null);
   }, [returnToGallery]);
+  // Set alongside detailBlockId only by the gallery tile's own EQ shortcut
+  // (GalleryBlock's onOpenEq) - ChainBlock reads it once, as its showEq's
+  // *initial* state, the moment it mounts fresh for that block (it's
+  // conditionally rendered, so opening from the gallery is always a fresh
+  // mount - see the render guard below). A plain onOpen always sets this
+  // false first, so a stale true from a previous EQ-shortcut open can never
+  // leak into an unrelated later open. Not persisted like detailBlockId
+  // above - surviving an OAuth-swap round trip with EQ still showing isn't
+  // worth the complexity for what's a one-shot navigation hint.
+  const [openBlockEq, setOpenBlockEq] = useState(false);
   /** The item under drag; drives the DragOverlay ghost. */
   const [activeDrag, setActiveDrag] = useState<ChainItem | null>(null);
 
@@ -552,6 +562,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
           namDownstream={namDownstream}
           sampleRate={sampleRate}
           namSlimSizeDefault={namSlimSizeDefault}
+          initialShowEq={openBlockEq}
           onBack={() => {
             pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
             setDetailBlockId(null);
@@ -581,7 +592,14 @@ export const ChainView: React.FC<ChainViewProps> = ({
         items={lanes[side]}
         tileSize={tileSize}
         stereo={stereo}
-        onOpen={setDetailBlockId}
+        onOpen={(blockId) => {
+          setOpenBlockEq(false);
+          setDetailBlockId(blockId);
+        }}
+        onOpenEq={(blockId) => {
+          setOpenBlockEq(true);
+          setDetailBlockId(blockId);
+        }}
         onAdd={(insertBlockId) => actions.addModel(side, insertBlockId)}
         onPasteBlock={canPaste ? (index) => actions.pasteBlock(side, index) : null}
         side={side}

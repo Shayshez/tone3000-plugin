@@ -261,6 +261,7 @@ const HELP_DESKTOP = {
     'Load Folder: pick a folder of .nam or .wav files; loads as one multi-model block.',
   blockPower: 'Power: bypass this block.',
   retryLoad: 'Retry: re-download this model.',
+  galleryEqShortcut: 'EQ: jump straight to this block’s EQ view. Yellow: EQ shaping the sound.',
   swapTone: 'Swap: replace this tone, keeping its slot.',
   removeBlock: 'Remove: delete this block.',
   panLeft: knobHelp('Pan L', 'Left chain, hard left ↔ center.'),

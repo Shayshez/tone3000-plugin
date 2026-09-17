@@ -18,6 +18,7 @@ import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
 import type { ChainSide, ToneBlock } from '../types/chain';
+import { isEqFlat } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
 import type { TileMenuAnchor, TileMenuItem } from './TileMenu';
@@ -232,6 +233,11 @@ const localLoadMenuItems = (
 interface TileActions {
   onOpen: (e: React.MouseEvent) => void;
   onTogglePower: (e: React.MouseEvent) => void;
+  /** Jump straight to this block's detail view with its EQ panel already
+      open - same destination as ChainMapStrip's own EQ shortcut mark, just
+      reachable from the gallery instead of from inside an already-open
+      block. */
+  onOpenEq: (e: React.MouseEvent) => void;
   onSwap: (e: React.MouseEvent) => void;
   onRemove: (e: React.MouseEvent) => void;
   /** Retry a failed model download (shown when block.loadFailed). */
@@ -318,6 +324,10 @@ const TileSurface: React.FC<{
   actions,
 }) => {
   const { blockId, tone } = block;
+  // Same derivation as ChainBlock.tsx's own eqActive / ChainMapStrip's
+  // eqModified: EQ powered on and not flat (a flat or bypassed EQ is
+  // skipped natively, so neither counts as "shaping the sound").
+  const eqActive = block.params.eq.enabled && !isEqFlat(block.params.eq);
 
   // A model download/prepare is in flight: `modelLoading` covers switches
   // (where the previous model keeps playing, so `loaded` stays true) and
@@ -429,7 +439,7 @@ const TileSurface: React.FC<{
           />
         )}
 
-        {/* Top quick-action bar (hover-revealed): power on the left, swap and
+        {/* Top quick-action bar (hover-revealed): power on the left, EQ/swap/
             trash clustered on the right. */}
         {!dropArmed && (
           <div
@@ -456,6 +466,23 @@ const TileSurface: React.FC<{
               <Power size={ICON_SIZE} />
             </ChromeIconButton>
             <div style={{ display: 'flex', gap: '16rem' }}>
+              {/* Same yellow-armed/muted-idle chrome as the block detail
+                  view's own EQ button (ChainBlock.tsx's eqActive), and the
+                  exact same "EQ" text treatment (textBoxStyle's 12rem/400
+                  mono, not this box's own icon sizing) rather than an icon
+                  glyph - a glance at the gallery already shows which blocks
+                  have EQ shaping the sound, not just which ones are
+                  bypassed. */}
+              <ChromeIconButton
+                tone="armed"
+                on={eqActive}
+                help={HELP.galleryEqShortcut}
+                onClick={actions.onOpenEq}
+                onMouseDown={preventFocus}
+                style={{ fontFamily: FONT_MONO, fontSize: '12rem', fontWeight: 400 }}
+              >
+                EQ
+              </ChromeIconButton>
               <ChromeIconButton
                 help={HELP.swapTone}
                 onClick={actions.onSwap}
@@ -498,6 +525,9 @@ interface GalleryBlockProps {
   size: number;
   /** Open the detail takeover for this block. */
   onOpen: (blockId: string) => void;
+  /** Open the detail takeover for this block with its EQ panel already
+      showing - the gallery's quick-access EQ button. */
+  onOpenEq: (blockId: string) => void;
 }
 
 /** Memoized so a lane re-render (e.g. another tile's optimistic state) only
@@ -505,7 +535,7 @@ interface GalleryBlockProps {
     the ChainActions context, so there are no per-render callback props to
     defeat the memo. */
 export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
-  ({ block, index, group, size, onOpen }) => {
+  ({ block, index, group, size, onOpen, onOpenEq }) => {
     const { blockId, params } = block;
     const actions = useChainActions();
     const toast = useToast();
@@ -590,6 +620,10 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
               onOpen(blockId);
             },
             onTogglePower: handleTogglePower,
+            onOpenEq: (e) => {
+              e.stopPropagation();
+              onOpenEq(blockId);
+            },
             onSwap: (e) => {
               e.stopPropagation();
               // No navigateToDetail: this tile is on the gallery, not a

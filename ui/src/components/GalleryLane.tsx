@@ -223,6 +223,9 @@ export const GalleryLane: React.FC<{
   /** Stereo mode: enables the branch affordances on the connector gaps. */
   stereo?: boolean;
   onOpen: (blockId: string) => void;
+  /** Open the detail takeover with its EQ panel already showing - the
+      gallery tile's own EQ quick-access button. */
+  onOpenEq: (blockId: string) => void;
   /** Open the tone browser targeting the clicked insert slot. */
   onAdd: (insertBlockId: string) => void;
   /** Paste the copied block into the insert slot at this lane index; null
@@ -243,6 +246,7 @@ export const GalleryLane: React.FC<{
   tileSize,
   stereo = false,
   onOpen,
+  onOpenEq,
   onAdd,
   onPasteBlock = null,
   side = 'left',
@@ -294,6 +298,7 @@ export const GalleryLane: React.FC<{
             group={side}
             size={tileSize}
             onOpen={onOpen}
+            onOpenEq={onOpenEq}
           />
         )
       )}

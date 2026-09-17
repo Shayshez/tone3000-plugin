@@ -415,6 +415,16 @@ interface ChainBlockProps {
   onAddBlockAt: (insertBlockId: string) => void;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
+  /** Show the EQ panel from the moment this card mounts - the gallery
+      tile's own EQ shortcut button (GalleryBlock's onOpenEq) opens straight
+      into it, the same destination ChainMapStrip's own EQ mark jumps to
+      from inside an already-open block. Read only as showEq's *initial*
+      state below: this component isn't remounted while jumping between
+      blocks via ChainMapStrip (see that component's onSelectEq, which sets
+      showEq directly instead), so this prop only ever matters for a fresh
+      mount - i.e. opening from the gallery, where the card was unmounted a
+      moment ago. */
+  initialShowEq?: boolean;
 }
 
 /** The detail card (full block view). All mutations come from the
@@ -430,6 +440,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   onJumpToBlock,
   onAddBlockAt,
   onFillToFaceplate,
+  initialShowEq = false,
 }) => {
   const { blockId, tone, params } = block;
   const actions = useChainActions();
@@ -474,7 +485,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
   const [reverse, setReverse] = useState(params.reverse ?? false);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
-  const [showEq, setShowEq] = useState(false);
+  const [showEq, setShowEq] = useState(initialShowEq);
   const [showInfo, setShowInfo] = useState(false);
   const [infoTone, setInfoTone] = useState<Tone | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
