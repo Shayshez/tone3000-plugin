@@ -789,9 +789,13 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
   // long enough to risk the real-time budget under ordinary concurrent UI
   // activity (see that constant's own comment for the measurement this is
   // based on).
-  const double effectiveRawSampleRate =
-      rawSampleRate /
+  const float clampedDurationRatio =
       irSizeClampedDurationRatio(sizeNormalized, usableContentLengthSamples / rawSampleRate);
+  const double effectiveRawSampleRate = rawSampleRate / clampedDurationRatio;
+  // Matches the *actually applied* ratio (post-clamp), not the knob's raw
+  // request, so the compensation and the real declared-rate mismatch can
+  // never disagree - see ChainBlock.h's irSizeGainCompensation.
+  out.irSizeGainCompensation = irSizeGainCompensation(clampedDurationRatio);
 
   // fixNumChannels (juce_Convolution.cpp) reduces to 1/2 channels internally
   // per the Stereo flag, so the same 2-channel trimmed buffer works for both
@@ -1902,8 +1906,14 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     }
 
     block.irNormalizationGainLinear = prepared.irNormalizationGainLinear;
+    // Size compensation isn't known yet here - a fresh load always starts
+    // Size at 100% (no-op compensation); a swap/restore with a non-default
+    // Size gets corrected moments later by the reapply-shape rebuild queued
+    // above (see ChainBlock::irEffectiveNormalizationGainLinear).
+    block.irEffectiveNormalizationGainLinear = block.irNormalizationGainLinear;
     block.irNormalizationSmoother.reset(chainSampleRate(), 0.05f);
-    block.irNormalizationSmoother.setCurrentAndTargetValue(block.irNormalizationGainLinear);
+    block.irNormalizationSmoother.setCurrentAndTargetValue(
+        block.irEffectiveNormalizationGainLinear);
 
     block.loaded = true;
     block.loadFailed = false;
@@ -1936,8 +1946,13 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
       block.mixNormalized = 1.0f;
 
     block.irNormalizationGainLinear = prepared.irNormalizationGainLinear;
+    // CAB has no Size knob (no compensation ever applies), but the audio
+    // thread always reads irEffectiveNormalizationGainLinear regardless of
+    // block type - keep it in lockstep with the base gain here.
+    block.irEffectiveNormalizationGainLinear = block.irNormalizationGainLinear;
     block.irNormalizationSmoother.reset(chainSampleRate(), 0.05f);
-    block.irNormalizationSmoother.setCurrentAndTargetValue(block.irNormalizationGainLinear);
+    block.irNormalizationSmoother.setCurrentAndTargetValue(
+        block.irEffectiveNormalizationGainLinear);
 
     block.loaded = true;
     block.loadFailed = false;

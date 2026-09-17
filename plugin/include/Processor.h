@@ -711,6 +711,12 @@ private:
     std::unique_ptr<juce::dsp::Convolution> convolverMono;
     std::unique_ptr<juce::dsp::Convolution> convolverStereo;
     int irLengthBaseSamples = 0;  // base-rate kernel length (tail reporting)
+    // See ChainBlock.h's irSizeGainCompensation - restores loudness parity
+    // with Size=100% (1.0f there). The caller multiplies this onto the
+    // block's existing (content-only) irNormalizationGainLinear and stores
+    // the result in irEffectiveNormalizationGainLinear, which is what the
+    // audio thread actually reads; never baked into the kernel itself.
+    float irSizeGainCompensation = 1.0f;
   };
 
   /** CPU heavy (builds fresh convolver engine(s)); call without holding

@@ -214,6 +214,107 @@ TEST(IrSizeTest, DurationScalesWithVariSpeedRatio) {
       << "Size=1000% doesn't appear to be lengthening the convolved tail";
 }
 
+// The loudness half of Size (see ChainBlock.h's irSizeGainCompensation):
+// with Normalise::no, JUCE's Convolution applies its own declared-rate
+// magnitude-preserving gain on top of the resample Size's vari-speed trick
+// causes, which nets out to the convolved output scaling by
+// 1/sqrt(durationRatio) - stretching (Size>100%) gets quieter, compressing
+// (Size<100%) gets louder, neither intentional. irSizeGainCompensation
+// multiplies the exact inverse back in. Measured via a short RMS window
+// right after the impulse (well inside even the shortest of these three
+// tails) rather than DurationScalesWithVariSpeedRatio's floor-crossing tail
+// length, since loudness - not duration - is what's under test here.
+TEST(IrSizeTest, LoudnessCompensationKeepsOutputLevelRoughlyConstant) {
+  constexpr int kTotalBlocks = 700;
+  const auto impulse = makeDelayedImpulse(kTotalBlocks);
+  constexpr size_t kWindowSamples = static_cast<size_t>(kFs * 0.08);  // 80ms
+
+  auto rmsOfWindow = [](const std::vector<float>& v, size_t start, size_t length) {
+    const size_t end = std::min(v.size(), start + length);
+    double sumSq = 0.0;
+    for (size_t i = start; i < end; ++i) sumSq += static_cast<double>(v[i]) * v[i];
+    return end > start ? std::sqrt(sumSq / static_cast<double>(end - start)) : 0.0;
+  };
+
+  auto rmsAtSize = [&](double sizeNorm) {
+    ChainTestProcessor proc;
+    proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+    proc.prepareToPlay(kFs, kBlock);
+    // reverb-ir-6s-test.wav specifically, not the default mono fixture: its
+    // much larger total energy (6s of dense content) drives
+    // computeIrNormalizationGain's content-only gain well below the 1.0
+    // ceiling, leaving enough headroom for this test to demonstrate the
+    // compensation cleanly - a fixture whose base gain already sits near
+    // 1.0 has too little room left for the ceiling to let a meaningful
+    // compensation through, by design (see
+    // LoudnessCompensationNeverExceedsUnityOutput below, which deliberately
+    // uses that hotter fixture to pin the ceiling itself, not full parity).
+    seedMonoIrChain(proc, "blk-a", "reverb-ir-6s-test.wav");
+    EXPECT_TRUE(waitForChainLoaded(proc)) << "IR block never finished loading from cache";
+    EXPECT_TRUE(proc.setBlockParam("blk-a", "mix", 1.0));
+    setSizeAndWaitForRebuild(proc, "blk-a", sizeNorm);
+    letAudioGoIdle();
+    const auto [outL, outR] = processStereo(proc, impulse);
+    juce::ignoreUnused(outR);
+    return rmsOfWindow(outL, kImpulseOnset, kWindowSamples);
+  };
+
+  // durationRatio=2/0.5, not the 4/0.25 used elsewhere in this file - the 6s
+  // fixture's own effective-duration cap (kIrSizeMaxEffectiveSeconds=20s)
+  // would otherwise clamp a 4x stretch (24s) to something short of the
+  // requested ratio and throw off the predicted compensation.
+  const double rmsBaseline = rmsAtSize(0.5);      // 100% (durationRatio=1)
+  const double rmsStretched = rmsAtSize(0.6505);  // ~200% (durationRatio=2)
+  const double rmsCompressed = rmsAtSize(0.3495);  // ~50% (durationRatio=0.5)
+
+  ASSERT_GT(rmsBaseline, 0.0) << "fixture produced no measurable output at all";
+  std::printf("[IrSizeTest] windowed RMS: 100%%=%.6f ~200%%=%.6f ~50%%=%.6f\n", rmsBaseline,
+             rmsStretched, rmsCompressed);
+
+  // Uncompensated, these would differ from baseline by a factor of
+  // 1/sqrt(2)=0.707 and 1/sqrt(0.5)=1.414 respectively. Compensated, both
+  // should land close to parity with baseline; ±35% is generous enough to
+  // absorb the resampler's own run-to-run jitter (see
+  // IrSizeWidthTest.BothReapplyAfterStateRestore's note on non-bit-exact
+  // reproducibility) while still clearly failing if the compensation
+  // regresses to a no-op or the wrong direction.
+  EXPECT_NEAR(rmsStretched, rmsBaseline, rmsBaseline * 0.35)
+      << "Size stretched (durationRatio=2) isn't compensated back to ~baseline loudness";
+  EXPECT_NEAR(rmsCompressed, rmsBaseline, rmsBaseline * 0.35)
+      << "Size compressed (durationRatio=0.5) isn't compensated back to ~baseline loudness";
+}
+
+// The explicit ask this feature was built for: compensating Size's loudness
+// drop must never risk clipping. It can't, by construction - the
+// compensated value still rides the same 1.0 ceiling
+// computeIrNormalizationGain's content-only gain already obeyed (see
+// Processor.cpp's jlimit(0.0f, 1.0f, ...) around irNormalizationSmoother) -
+// but this pins that guarantee at the actual sample level, at the most
+// extreme Size setting (1000%, the largest compensation factor available),
+// rather than trusting the derivation alone.
+TEST(IrSizeTest, LoudnessCompensationNeverExceedsUnityOutput) {
+  constexpr int kTotalBlocks = 700;
+  const auto impulse = makeDelayedImpulse(kTotalBlocks);
+
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+  seedMonoIrChain(proc, "blk-a");
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  ASSERT_TRUE(proc.setBlockParam("blk-a", "mix", 1.0));
+  setSizeAndWaitForRebuild(proc, "blk-a", 1.0);  // 1000%: durationRatio=10, compensation=sqrt(10)
+  letAudioGoIdle();
+
+  const auto [outL, outR] = processStereo(proc, impulse);
+  float peak = 0.0f;
+  for (float s : outL) peak = std::max(peak, std::abs(s));
+  for (float s : outR) peak = std::max(peak, std::abs(s));
+
+  std::printf("[IrSizeTest] peak output at Size=1000%% (max compensation): %.4f\n",
+             static_cast<double>(peak));
+  EXPECT_LE(peak, 1.0f) << "Size's loudness compensation produced a sample above unity";
+}
+
 // Always resamples fresh from the frozen ChainBlock::irRawSamples, never
 // from a previously-shaped buffer - so several round trips through extreme,
 // unrelated Size values, ending back at 100%, must land on the *same*

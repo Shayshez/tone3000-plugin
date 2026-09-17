@@ -445,10 +445,14 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       if (block->convolverStereo != nullptr)
         block->convolverStereo->prepare(spec);
 
-      // Reset normalization smoother to current gain to prevent jumps on re-prepare
+      // Reset normalization smoother to current gain to prevent jumps on
+      // re-prepare - irEffectiveNormalizationGainLinear, so a re-prepare
+      // mid-Size-edit doesn't momentarily snap back to the uncompensated
+      // base gain.
       if (block->loaded) {
         block->irNormalizationSmoother.reset(chainRate, 0.05f);
-        block->irNormalizationSmoother.setCurrentAndTargetValue(block->irNormalizationGainLinear);
+        block->irNormalizationSmoother.setCurrentAndTargetValue(
+            block->irEffectiveNormalizationGainLinear);
       }
 
       DBG("IR/CAB convolvers re-prepared for block: " << block->id);
@@ -1235,9 +1239,14 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // is an accident of capture/export (unlike a NAM capture's, which is
         // real information, hence NAM's normalize toggle). Attenuation-only;
         // smoother is prepared in prepareChain / model apply, only the
-        // target moves on the RT path.
+        // target moves on the RT path. irEffectiveNormalizationGainLinear
+        // (not the base irNormalizationGainLinear) so Size's loudness
+        // compensation (see ChainBlock.h's irSizeGainCompensation) rides
+        // along here too - and the same 1.0 ceiling still applies to it,
+        // so Size compensation can restore parity with Size=100%'s loudness
+        // but never boost past this stage's own already-accepted maximum.
         block->irNormalizationSmoother.setTargetValue(
-            juce::jlimit(0.0f, 1.0f, block->irNormalizationGainLinear));
+            juce::jlimit(0.0f, 1.0f, block->irEffectiveNormalizationGainLinear));
         for (int i = 0; i < numSamples; ++i) {
           const float g = block->irNormalizationSmoother.getNextValue();
           for (int ch = 0; ch < numChannels; ++ch) {
@@ -1267,9 +1276,12 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
               convolver.process(juce::dsp::ProcessContextReplacing<float>(irBlock));
             });
 
-        // Unit-energy normalization, same rule as a plain IR block's.
+        // Unit-energy normalization, same rule as a plain IR block's. CAB
+        // has no Size knob, so irEffectiveNormalizationGainLinear always
+        // equals the base gain here - read it anyway for the same reason
+        // the IR branch above does (one field the audio thread trusts).
         block->irNormalizationSmoother.setTargetValue(
-            juce::jlimit(0.0f, 1.0f, block->irNormalizationGainLinear));
+            juce::jlimit(0.0f, 1.0f, block->irEffectiveNormalizationGainLinear));
         for (int i = 0; i < numSamples; ++i) {
           const float g = block->irNormalizationSmoother.getNextValue();
           for (int ch = 0; ch < numChannels; ++ch) {

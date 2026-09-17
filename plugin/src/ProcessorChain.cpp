@@ -2262,6 +2262,21 @@ void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
     // display's fixed window and the block's output-pad/default-mix
     // classification never move because of a Length or Decay edit.
 
+    // Size's loudness compensation (see ChainBlock.h's
+    // irSizeGainCompensation) rides on top of the block's content-only
+    // irNormalizationGainLinear, landing in irEffectiveNormalizationGainLinear
+    // - the audio thread's per-block Processor.cpp reads (and re-targets
+    // the smoother from) that field, not the base one, so this is the only
+    // place that value actually changes. Recomputed from the stable base
+    // every time rather than compounded in place, so repeated Size edits
+    // can't drift. setTargetValue, not setCurrentAndTargetValue: this can
+    // fire mid-playback (a live Size drag), and a smoothed ramp into the
+    // new level avoids a click the way every other IR shaping edit already
+    // does.
+    block->irEffectiveNormalizationGainLinear =
+        block->irNormalizationGainLinear * prepared.irSizeGainCompensation;
+    block->irNormalizationSmoother.setTargetValue(block->irEffectiveNormalizationGainLinear);
+
     refreshIrTailLength();  // irLengthBaseSamples changed; same call predelay makes
     bumpChainRevision();
     juce::Logger::writeToLog("[Background] IR shape rebuild applied for " +

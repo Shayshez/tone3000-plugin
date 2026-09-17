@@ -57,6 +57,29 @@ inline float irSizeClampedDurationRatio(float sizeNormalized, double contentDura
   return static_cast<float>(juce::jmin(static_cast<double>(rawRatio), maxRatio));
 }
 
+// Compensates the volume drop Size introduces when stretching a kernel out
+// (durationRatio > 1, lower pitch) - and the corresponding volume gain when
+// compressing it (durationRatio < 1, higher pitch). Root cause: with
+// Convolution::Normalise::no, prepareIrShapeRebuild's declared-sample-rate
+// trick (irSizeDurationRatio above) makes JUCE apply its own
+// magnitude-preserving gain of declaredRate/baseRate on the resampled
+// kernel (see juce_Convolution.cpp's ConvolutionEngineFactory::makeEngine),
+// while the interpolation-resampling step ahead of it changes the kernel's
+// *energy* by the inverse factor - net effect, kernel energy scales by
+// exactly one factor of declaredRate/baseRate = 1/durationRatio (matching
+// computeIrNormalizationGain's own L2-energy loudness model, which this
+// extends rather than replaces). Output level for a broadband input tracks
+// the kernel's L2 norm (sqrt of energy) under that same model, so the
+// resulting loudness *shift* from durationRatio alone is 1/sqrt(durationRatio)
+// - this returns its exact inverse. Multiplying it onto the block's existing
+// (content-only, Size-independent) irNormalizationGainLinear restores parity
+// with Size=100%'s already-vetted loudness for any Size setting; it can
+// never exceed that already-accepted baseline level, so it introduces no new
+// clipping risk beyond what Size=100% already carries.
+inline float irSizeGainCompensation(float durationRatio) {
+  return durationRatio > 0.0f ? std::sqrt(durationRatio) : 1.0f;
+}
+
 // Chain block types. CAB is a real cabinet IR block (site tones tagged
 // gear == "cab"; see parseToneForLoading/toneEngineType in ProcessorChain.cpp):
 // structurally minimal by design - no predelay/envelope/waveform fields, a
@@ -271,7 +294,23 @@ struct ChainBlock {
   // their real content). Shipped to the UI as `irLong`.
   bool irIsLong{false};
   juce::LinearSmoothedValue<float> irNormalizationSmoother;
+  // Content-only unit-energy gain (computeIrNormalizationGain), fixed at
+  // load time - deliberately Size-independent, never touched by a shaping
+  // rebuild. irEffectiveNormalizationGainLinear below is what actually
+  // drives irNormalizationSmoother/playback.
   float irNormalizationGainLinear{1.0f};
+  // What irNormalizationSmoother's target is actually set to on the audio
+  // thread (Processor.cpp's IR/CAB branches): irNormalizationGainLinear
+  // times Size's loudness compensation (irSizeGainCompensation above),
+  // recomputed by rebuildIrShapeInBackground on every IR shape rebuild.
+  // A *separate* field from irNormalizationGainLinear, not that field
+  // mutated in place, so the base content gain stays the stable, always-
+  // recomputable-from-scratch reference a repeated Size edit multiplies
+  // against - mutating it in place would compound on every rebuild.
+  // Starts equal to irNormalizationGainLinear (Size defaults to 100%, so
+  // compensation is a no-op) until the first shape rebuild sets it for
+  // real.
+  float irEffectiveNormalizationGainLinear{1.0f};
 
   // Explicit IR content category (see IrCategory above): the sole source of
   // the -18 dB cab pad and this block's default mix (Processor.cpp /
