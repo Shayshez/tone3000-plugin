@@ -54,6 +54,7 @@ export function useChainState() {
     () => ({
       getChainState: backend.getPluginFunction('getChainState'),
       loadTone: backend.getPluginFunction('loadTone'),
+      addEqBlock: backend.getPluginFunction('addEqBlock'),
       loadLocalTone: backend.getPluginFunction('loadLocalTone'),
       swapTone: backend.getPluginFunction('swapTone'),
       refreshToneMetadata: backend.getPluginFunction('refreshToneMetadata'),
@@ -186,6 +187,11 @@ export function useChainState() {
       /** Retry a failed model download (block.loadFailed). */
       retryModelLoad: (blockId: string) =>
         run<boolean>('retryModelLoad', () => native.retryModelLoad(blockId)),
+      /** The tile menu's standalone "EQ" row (GalleryBlock's
+          blockTypeMenuItems) - adds a ChainBlockType::EQ block, no submenu,
+          nothing to pick or load. */
+      addEqBlock: (targetInsertId: string) =>
+        run<string>('addEqBlock', () => native.addEqBlock(targetInsertId)),
       removeBlock: (blockId: string) =>
         run('removeChainBlock', () => native.removeChainBlock(blockId)),
       reorderBlocks: (orderedIds: string[]) =>

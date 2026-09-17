@@ -88,13 +88,29 @@ inline float irSizeGainCompensation(float durationRatio) {
 // -18dB pad in Processor.cpp). IR keeps carrying IrCategory::Cab for content
 // that was loaded before this split existed / local file drops guessed as
 // cab-length; that's a separate, still-live classification, not this type.
-enum class ChainBlockType { NAM, IR, INSERT, CAB };
+//
+// EQ is the plainest block of all: no model, no IR, no tone content to
+// download or switch - just this block's own `eq` member (every block
+// already carries one, for the PRE/POST EQ around its model) shaping
+// whatever passes through, at a fixed mixNormalized=1.0 (its class default,
+// never touched - there's no dry content to blend against, so no Mix
+// control exists in the UI). Added via addEqBlock (ProcessorChain.cpp),
+// never through the tone-loading pipeline every other type goes through:
+// it's synthesized with `loaded = true` from the moment it's created, and
+// queueActiveModelLoad (ProcessorHistory.cpp) short-circuits to the same
+// for the paths that reconstruct it (duplicate/paste/restore/undo). Because
+// it matches none of the NAM/IR/CAB branches in Processor.cpp's per-block
+// dispatch, the *existing*, type-agnostic PRE/POST eq.isPre()/isActive()
+// checks that already run for every block are the entire DSP story here -
+// no new processing branch needed.
+enum class ChainBlockType { NAM, IR, INSERT, CAB, EQ };
 
 inline juce::String chainBlockTypeToString(ChainBlockType type) {
   switch (type) {
     case ChainBlockType::NAM: return "nam";
     case ChainBlockType::INSERT: return "insert";
     case ChainBlockType::CAB: return "cab";
+    case ChainBlockType::EQ: return "eq";
     case ChainBlockType::IR: break;
   }
   return "ir";
@@ -104,6 +120,7 @@ inline ChainBlockType chainBlockTypeFromString(const juce::String& s) {
   if (s == "nam") return ChainBlockType::NAM;
   if (s == "insert") return ChainBlockType::INSERT;
   if (s == "cab") return ChainBlockType::CAB;
+  if (s == "eq") return ChainBlockType::EQ;
   return ChainBlockType::IR;
 }
 

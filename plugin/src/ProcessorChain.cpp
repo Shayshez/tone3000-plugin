@@ -395,6 +395,69 @@ std::string TONE3000Processor::loadTone(const juce::String& toneJsonString,
   return blockId;
 }
 
+std::string TONE3000Processor::addEqBlock(const std::string& targetInsertId) {
+  // Structural like duplicate/paste (a whole new block splices into the
+  // running chain), so mute-splice instead of relying on one block's own
+  // wet fade.
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  pushChainHistory();
+
+  const std::string blockId = juce::Uuid().toString().toStdString();
+  auto block = std::make_unique<ChainBlock>(blockId, ChainBlockType::EQ);
+
+  // Synthetic tone: just enough for makeToneSummary/the UI's title and
+  // GearIcon fallback to have something to show. No catalog entry, no
+  // model, nothing to download - see ChainBlockType::EQ's own comment for
+  // why this skips the entire tone-loading pipeline every other type goes
+  // through.
+  juce::DynamicObject::Ptr tone = new juce::DynamicObject();
+  tone->setProperty("id", 0);
+  tone->setProperty("local", true);
+  tone->setProperty("title", "EQ");
+  tone->setProperty("format", "eq");
+  const juce::var toneVar(tone.get());
+  setToneOnBlock(*block, 0, juce::JSON::toString(toneVar, true), toneVar);
+  // Nothing to load: the block IS its own content from the moment it
+  // exists. mixNormalized/inputGainNormalized/outputGainNormalized all
+  // keep their class defaults (1.0/0.5/0.5 - full wet, unity, unity); there
+  // is no Mix or In Gain control in the UI for this type, so nothing ever
+  // moves them off those defaults.
+  block->loaded = true;
+
+  // Same slot-resolution as loadTone: the insert the user right-clicked
+  // (looked up across both lanes; ids are globally unique), or the active
+  // lane's first insert when the id is stale/absent.
+  Lane* targetLane = nullptr;
+  Lane::iterator slot;
+  if (!targetInsertId.empty()) {
+    for (auto& l : lanes) {
+      auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+        return isInsertBlock(b) && b->id == targetInsertId;
+      });
+      if (it != l.end()) {
+        targetLane = &l;
+        slot = it;
+        break;
+      }
+    }
+  }
+  if (targetLane == nullptr) {
+    targetLane = &activeChain();
+    slot = std::find_if(targetLane->begin(), targetLane->end(), isInsertBlock);
+  }
+
+  if (slot != targetLane->end())
+    *slot = std::move(block);
+  else
+    targetLane->push_back(std::move(block));
+  alignBranchLaneLengths();
+
+  bumpChainRevision();
+  return blockId;
+}
+
 std::string TONE3000Processor::landToneBlock(std::unique_ptr<ChainBlock> block,
                                              const juce::String& side, int index) {
   const std::string newId = block->id;

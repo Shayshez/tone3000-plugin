@@ -11,7 +11,7 @@ import {
   Trash2,
 } from './icons';
 import { BlockEnergyBorder, BlockLed } from './BlockLed';
-import { ToneImage } from './GearIcon';
+import { GearIcon, ToneImage } from './GearIcon';
 import { LoadingDots } from './LoadingDots';
 import { RetryLoadBadge } from './RetryLoadBadge';
 import { meterId } from '../hooks/useMeters';
@@ -98,7 +98,10 @@ const LONG_PRESS_MENU_DROP_PX = 24;
     window in helpText.ts. */
 const SUPPRESS_CLICK_MS = 700;
 
-const useTileMenu = () => {
+/** Exported so ChainMapStrip's own "+" chip (a block's chain-map strip, not
+    the gallery) can carry the identical right-click menu/long-press
+    behavior instead of duplicating this iOS-long-press machinery. */
+export const useTileMenu = () => {
   const [menuAnchor, setMenuAnchor] = useState<TileMenuAnchor | null>(null);
   // Deadline (performance.now ms) under which the next click is swallowed.
   const suppressClickUntilRef = useRef(0);
@@ -199,18 +202,22 @@ const useTileMenu = () => {
   return { menuAnchor, openMenu, closeMenu, shouldIgnoreClick, longPressProps };
 };
 
-/** The tile menus' native-picker rows (Load File / Load Folder). Local
-    loading must not depend on drag-and-drop alone: Linux never delivers OS
-    file drags to the embedded webview, so there these rows are the only way
-    local files get in. An insert slot adds; a tone tile swaps in place
-    (same targeting as a drop). */
+/** The Load File / Load Folder rows inside a block-type row's flyout (see
+    blockTypeMenuItems below). Local loading must not depend on drag-and-drop
+    alone: Linux never delivers OS file drags to the embedded webview, so
+    these rows are the only way local files get in there. An insert slot
+    adds; a tone tile swaps in place (same targeting as a drop). `category`
+    forces the picked file's IR/Cab reading the same way the split drop
+    zone's own IR/Cab halves do (see SplitFileDropZone) - inert if the pick
+    turns out to be a .nam file. */
 const localLoadMenuItems = (
+  category: 'ir' | 'cab',
   targetBlockId: string,
   actions: ChainActions,
   toast: ReturnType<typeof useToast>
 ): TileMenuItem[] => {
   const pick = async (kind: 'file' | 'folder') => {
-    const error = await actions.pickLocalFile(targetBlockId, kind);
+    const error = await actions.pickLocalFile(targetBlockId, kind, category);
     if (error) toast.show(error);
   };
   return [
@@ -228,6 +235,42 @@ const localLoadMenuItems = (
     },
   ];
 };
+
+/** Top-level block-type rows for the tile menus' local-load section: one per
+    loadable ChainBlockType today (Cab, IR), each flying out its own Load
+    File / Load Folder choice on hover (see TileMenu's submenu support) -
+    the more block types this menu grows (EQ, Utility, ...), the more rows
+    join this same list, each with whatever sub-choices it needs. Mirrors
+    the split drop zone's IR/Cab halves (SplitFileDropZone) as the tile
+    menus' own equivalent of that split. Exported for ChainMapStrip's own
+    "+" chip - same rows, same targeting, just a different chip shell. */
+export const blockTypeMenuItems = (
+  targetBlockId: string,
+  actions: ChainActions,
+  toast: ReturnType<typeof useToast>
+): TileMenuItem[] => [
+  {
+    label: 'Cab',
+    icon: <GearIcon gear="cab" size={16} color="currentColor" />,
+    help: HELP.addCabTile,
+    submenu: localLoadMenuItems('cab', targetBlockId, actions, toast),
+  },
+  {
+    label: 'IR',
+    icon: <GearIcon gear="ir" size={16} color="currentColor" />,
+    help: HELP.addIrTile,
+    submenu: localLoadMenuItems('ir', targetBlockId, actions, toast),
+  },
+  {
+    label: 'EQ',
+    icon: <GearIcon gear="eq" size={16} color="currentColor" />,
+    help: HELP.addEqTile,
+    // No submenu: unlike Cab/IR there is no file to pick, so this commits
+    // immediately - the only leaf row directly on the root menu rather than
+    // behind a flyout.
+    onSelect: () => actions.addEqBlock(targetBlockId),
+  },
+];
 
 /** Interactive wiring for a tile's chrome. */
 interface TileActions {
@@ -483,13 +526,17 @@ const TileSurface: React.FC<{
               >
                 EQ
               </ChromeIconButton>
-              <ChromeIconButton
-                help={HELP.swapTone}
-                onClick={actions.onSwap}
-                onMouseDown={preventFocus}
-              >
-                <ArrowLeftRight size={ICON_SIZE} />
-              </ChromeIconButton>
+              {/* A standalone EQ block has no tone/model to replace - see
+                  ChainBlockType::EQ. */}
+              {block.blockType !== 'eq' && (
+                <ChromeIconButton
+                  help={HELP.swapTone}
+                  onClick={actions.onSwap}
+                  onMouseDown={preventFocus}
+                >
+                  <ArrowLeftRight size={ICON_SIZE} />
+                </ChromeIconButton>
+              )}
               <ChromeIconButton
                 help={HELP.removeBlock}
                 onClick={actions.onRemove}
@@ -650,7 +697,7 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
                 help: HELP.copyBlock,
                 onSelect: () => actions.copyBlock(blockId),
               },
-              ...localLoadMenuItems(blockId, actions, toast),
+              ...blockTypeMenuItems(blockId, actions, toast),
             ]}
           />
         )}
@@ -836,7 +883,7 @@ export const AddTile: React.FC<AddTileProps> = ({
               disabled: onPaste == null,
               onSelect: () => onPaste?.(),
             },
-            ...localLoadMenuItems(id, actions, toast),
+            ...blockTypeMenuItems(id, actions, toast),
           ]}
         />
       )}

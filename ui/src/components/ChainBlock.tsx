@@ -413,6 +413,11 @@ interface ChainBlockProps {
       (same targeting GalleryLane's own "+" tiles use). See
       ChainMapStrip.onAdd. */
   onAddBlockAt: (insertBlockId: string) => void;
+  /** Paste the copied block into a specific insert slot in this block's own
+      lane (same canPaste/actions.pasteBlock(side, index) gating GalleryLane's
+      own "+" tiles use, side already bound by ChainView). Null while
+      there's nothing valid to paste. See ChainMapStrip.onPasteBlockAt. */
+  onPasteBlockAt: ((index: number) => void) | null;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
   /** Show the EQ panel from the moment this card mounts - the gallery
@@ -439,6 +444,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   chainStripItems,
   onJumpToBlock,
   onAddBlockAt,
+  onPasteBlockAt,
   onFillToFaceplate,
   initialShowEq = false,
 }) => {
@@ -454,6 +460,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // still-live classification on plain IR blocks); that one keeps the full
   // IR Player feature set, just with the -18dB pad and 100% mix default.
   const isCab = block.blockType === 'cab';
+  // A standalone EQ block (ChainBlockType::EQ, see addEqBlock) - no model,
+  // no tone content, nothing to swap or download; this block's own eq
+  // *is* its entire content, processing everything that passes through at
+  // a permanent 100% mix (there is no Mix control for it at all). Renders
+  // its own dedicated, much simpler card below (see the early return right
+  // before this component's main JSX) rather than threading a check
+  // through every NAM/IR/CAB-specific section of that one.
+  const isEq = block.blockType === 'eq';
 
   // Optional (=) normalization toggle, revealed by Per-Block Normalization
   // in Plugin Settings.
@@ -1085,6 +1099,272 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
   const tonePageUrl = infoTone?.url || tone.url || `${T3K_API}/tones/${tone.id}`;
 
+  // A standalone EQ block (isEq) renders a completely separate, much
+  // simpler card - no model/tone chrome to thread `isEq` checks through
+  // across the rest of this component's giant NAM/IR/CAB-oriented return
+  // below. Reached only after every hook above has already run (this
+  // component isn't remounted while navigating between blocks via
+  // ChainMapStrip - see initialShowEq's own comment - so `isEq` can change
+  // between renders of the *same* instance, and conditionally skipping
+  // hooks based on it would violate the rules of hooks). Duplicates the
+  // small ← BLOCK/ChainMapStrip header every card shares; everything below
+  // that is unique to this block type: Power, FLAT reset, the graph/sliders
+  // view switcher (the exact same BlockEqView every other block's EQ panel
+  // uses, just always shown instead of behind a toggle - there is nothing
+  // else in this block to toggle back to), and a single Output knob (no
+  // In, no Mix - see ChainBlockType::EQ's own comment for why neither
+  // exists here).
+  if (isEq) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: `${CARD_WIDTH}rem`,
+          height: '100%',
+          boxSizing: 'border-box',
+          overflowY: 'hidden',
+          overflowX: 'hidden',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: '16rem',
+              marginBottom: '16rem',
+              flexShrink: 0,
+            }}
+          >
+            <button
+              type="button"
+              onClick={onBack}
+              {...helpProps(HELP.backToChain)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16rem',
+                flexShrink: 0,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: WHITE,
+              }}
+            >
+              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: '16rem',
+                  fontWeight: 400,
+                  textTransform: 'uppercase',
+                  lineHeight: 1.4,
+                }}
+              >
+                Block
+              </span>
+            </button>
+
+            <ChainMapStrip
+              items={chainStripItems}
+              currentBlockId={blockId}
+              onSelect={(id) => {
+                onJumpToBlock(id);
+                setShowEq(false);
+              }}
+              onSelectEq={(id) => {
+                onJumpToBlock(id);
+                setShowEq(true);
+                setShowInfo(false);
+              }}
+              onAdd={onAddBlockAt}
+              onPasteBlockAt={onPasteBlockAt}
+            />
+
+            <div
+              aria-hidden
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16rem',
+                flexShrink: 0,
+                visibility: 'hidden',
+                pointerEvents: 'none',
+              }}
+            >
+              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: '16rem',
+                  fontWeight: 400,
+                  textTransform: 'uppercase',
+                  lineHeight: 1.4,
+                }}
+              >
+                Block
+              </span>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              width: '100%',
+              height: `${CARD_HEIGHT}rem`,
+              minHeight: `${CARD_HEIGHT}rem`,
+              boxSizing: 'border-box',
+              border: BORDER,
+              borderRadius: `${CARD_RADIUS}rem`,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: `${HEADER_HEIGHT}rem`,
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: `0 ${BODY_PADDING}rem`,
+                boxSizing: 'border-box',
+                borderBottom: BORDER,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16rem', flexShrink: 0 }}>
+                <ChromeIconButton
+                  tone="power"
+                  on={enabled}
+                  help={HELP.blockPower}
+                  onClick={handleToggleEnabled}
+                >
+                  <Power />
+                </ChromeIconButton>
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: '16rem',
+                    fontWeight: 400,
+                    color: WHITE,
+                  }}
+                >
+                  EQ
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16rem', flexShrink: 0 }}>
+                <ChromeTextButton
+                  armed={false}
+                  help="Reset all EQ bands to default (flat)"
+                  onClick={handleResetEq}
+                >
+                  FLAT
+                </ChromeTextButton>
+                <div
+                  style={{
+                    ...segmentedGroupStyle(),
+                    backgroundColor: 'rgba(118, 118, 128, 0.24)',
+                  }}
+                >
+                  <button
+                    onClick={() => setEqView('sliders')}
+                    {...helpProps(HELP.eqSlidersView)}
+                    style={{
+                      ...segmentedCellStyle(true),
+                      color: eqView === 'sliders' ? WHITE : GRAY,
+                    }}
+                  >
+                    <EqSlidersIcon />
+                  </button>
+                  <button
+                    onClick={() => setEqView('graph')}
+                    {...helpProps(HELP.eqCurveView)}
+                    style={{
+                      ...segmentedCellStyle(true),
+                      color: eqView === 'graph' ? WHITE : GRAY,
+                    }}
+                  >
+                    <EqCurveIcon />
+                  </button>
+                </div>
+                <ChromeIconButton
+                  help={HELP.removeBlock}
+                  onClick={() => actions.removeBlock(blockId)}
+                >
+                  <Trash2 />
+                </ChromeIconButton>
+              </div>
+            </div>
+
+            <div
+              className={uiOffClass(!enabled)}
+              style={{
+                height: `${BODY_HEIGHT}rem`,
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'row',
+                alignItems: 'stretch',
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              <BlockEqView
+                blockId={blockId}
+                bands={params.eq?.bands ?? []}
+                eqEnabled
+                sampleRate={sampleRate}
+                view={eqView}
+                onSetBand={actions.setBlockEqBand}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  flexShrink: 0,
+                  gap: '12rem',
+                  padding: `${BODY_PADDING}rem`,
+                }}
+              >
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: 0,
+                    width: `${KNOB_SIZE_SECONDARY}rem`,
+                  }}
+                >
+                  <BlockMeter meterId={meterId.blockOut(blockId)} length={RAIL_METER_HEIGHT} />
+                </div>
+                <KnobControl
+                  label="Out"
+                  value={outputGain}
+                  onChange={(val) => {
+                    setOutputGain(val);
+                    setParam('outputGain', val);
+                  }}
+                  onDragStateChange={handleKnobDragState}
+                  size={KNOB_SIZE_SECONDARY}
+                  labelBottom={false}
+                  thumb="secondary"
+                  scale={gainDbScale}
+                  defaultValue={0.5}
+                  help={HELP.blockOut}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={showInfo ? 'hide-scrollbar' : undefined}
@@ -1180,6 +1460,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               setShowInfo(false);
             }}
             onAdd={onAddBlockAt}
+            onPasteBlockAt={onPasteBlockAt}
           />
 
           {/* Invisible mirror of the ← BLOCK button: ChainMapStrip centers

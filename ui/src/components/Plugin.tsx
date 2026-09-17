@@ -321,8 +321,8 @@ export const Plugin: React.FC = () => {
   // never reach the embedded webview and handleDropFile can't fire. Resync
   // after: the load lands outside useChainState's mutation wrapper.
   const handlePickLocalFile = useCallback(
-    async (targetBlockId: string, kind: 'file' | 'folder') => {
-      const res = await pickLocalToneFile(kind === 'folder', targetBlockId);
+    async (targetBlockId: string, kind: 'file' | 'folder', category?: 'ir' | 'cab') => {
+      const res = await pickLocalToneFile(kind === 'folder', targetBlockId, category ?? '');
       await refresh();
       if (res?.blockId || res?.cancelled) return null;
       return res?.error ?? "Couldn't load the file";
@@ -347,6 +347,7 @@ export const Plugin: React.FC = () => {
       addModel: loadFlow.handleAddModel,
       loadLocalFile: loadFlow.handleDropFile,
       pickLocalFile: handlePickLocalFile,
+      addEqBlock: actions.addEqBlock,
       removeBlock: actions.removeBlock,
       swapBlock: loadFlow.handleSwapBlock,
       shareBlock: handleShareBlock,

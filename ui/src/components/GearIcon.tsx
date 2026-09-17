@@ -281,6 +281,22 @@ const Ir = ({ size = 40, color = GRAY }: Props) => (
   </svg>
 );
 
+// Not a real TONE3000 gear category (unlike every other key below, which
+// mirrors the web's own ICON_MAP) - only ever reached through blockType's
+// own 'eq' branch in ToneImage, for the standalone EQ block's fallback
+// glyph (see ChainBlockType::EQ). Three fader tracks, same graphic-EQ
+// language as ChainBlock.tsx's own EqSlidersIcon (the view-mode switcher).
+const Eq = ({ size = 40, color = GRAY }: Props) => (
+  <svg viewBox="0 0 40 40" fill="none" aria-label="Equalizer" style={svgStyle(size)}>
+    <path d="M10 8V32" stroke={color} strokeWidth="3" strokeLinecap="round" />
+    <path d="M20 8V32" stroke={color} strokeWidth="3" strokeLinecap="round" />
+    <path d="M30 8V32" stroke={color} strokeWidth="3" strokeLinecap="round" />
+    <circle cx="10" cy="14" r="3.5" fill={color} />
+    <circle cx="20" cy="24" r="3.5" fill={color} />
+    <circle cx="30" cy="18" r="3.5" fill={color} />
+  </svg>
+);
+
 /** Mirrors the web's ICON_MAP (deprecated `full-rig` shares the Amp+Cab glyph). */
 const ICONS: Record<string, React.FC<Props>> = {
   'amp-cab': FullRig,
@@ -292,6 +308,7 @@ const ICONS: Record<string, React.FC<Props>> = {
   space: Space,
   experimental: Experimental,
   ir: Ir,
+  eq: Eq,
 };
 
 /** Gear-type icon by TONE3000 gear id; unknown/missing gear falls back to the
@@ -389,7 +406,7 @@ export const ToneImage: React.FC<{
       `gear`), so a local block's own `gear` value goes stale the moment
       it's converted. `blockType` is read fresh off getChainState every
       poll, so it can't go stale the same way. */
-  blockType?: 'nam' | 'ir' | 'cab';
+  blockType?: 'nam' | 'ir' | 'cab' | 'eq';
   boxSize: number;
   /** Override the fallback glyph size (defaults to ~40% of `boxSize`). */
   iconSize?: number;
@@ -411,6 +428,8 @@ export const ToneImage: React.FC<{
       return <LocalTypeGlyph gear="cab" label="Cab" glyphSize={glyphSize} boxSize={boxSize} />;
     if (blockType === 'ir')
       return <LocalTypeGlyph gear="ir" label="IR" glyphSize={glyphSize} boxSize={boxSize} />;
+    if (blockType === 'eq')
+      return <LocalTypeGlyph gear="eq" label="EQ" glyphSize={glyphSize} boxSize={boxSize} />;
     return (
       <div
         style={{

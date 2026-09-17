@@ -572,6 +572,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
           onAddBlockAt={(insertBlockId) =>
             actions.addModel(detailSide, insertBlockId, { navigateToDetail: true })
           }
+          onPasteBlockAt={canPaste ? (index) => actions.pasteBlock(detailSide, index) : null}
           onFillToFaceplate={onFillToFaceplate}
         />
       </div>

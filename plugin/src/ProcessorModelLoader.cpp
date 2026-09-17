@@ -896,7 +896,8 @@ juce::var TONE3000Processor::loadLocalTone(const juce::String& title, const juce
 }
 
 juce::var TONE3000Processor::loadLocalTonePath(const juce::File& source,
-                                               const std::string& targetInsertId) {
+                                               const std::string& targetInsertId,
+                                               const juce::String& forceGear) {
   if (source.isDirectory()) {
     // Folder rules mirror the UI's folder drop (useToneLoadFlow.ts): every
     // .nam/.wav under the folder (subfolders included), the majority
@@ -943,7 +944,8 @@ juce::var TONE3000Processor::loadLocalTonePath(const juce::File& source,
       models.add(model);
     }
 
-    return finishLocalToneLoad(title, models, firstError, picked.size(), targetInsertId);
+    return finishLocalToneLoad(title, models, firstError, picked.size(), targetInsertId,
+                               forceGear);
   }
 
   const juce::String title = source.getFileNameWithoutExtension();
@@ -958,11 +960,12 @@ juce::var TONE3000Processor::loadLocalTonePath(const juce::File& source,
   if (!model.isObject())
     return localToneError(title, error);
 
-  return finishLocalToneLoad(title, {model}, {}, 1, targetInsertId);
+  return finishLocalToneLoad(title, {model}, {}, 1, targetInsertId, forceGear);
 }
 
 juce::var TONE3000Processor::loadLocalToneUrls(const juce::Array<juce::URL>& sources,
-                                               const std::string& targetInsertId) {
+                                               const std::string& targetInsertId,
+                                               const juce::String& forceGear) {
   // Multi-select stands in for the folder route on iOS: the document picker
   // can hand back a folder URL, but a security-scoped directory cannot be
   // enumerated through juce::URL (there is no listing API behind the
@@ -1006,7 +1009,7 @@ juce::var TONE3000Processor::loadLocalToneUrls(const juce::Array<juce::URL>& sou
   if (models.isEmpty())
     return localToneError(title, firstError.isEmpty() ? "Couldn't read the file" : firstError);
 
-  return finishLocalToneLoad(title, models, firstError, picked.size(), targetInsertId);
+  return finishLocalToneLoad(title, models, firstError, picked.size(), targetInsertId, forceGear);
 }
 
 juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,

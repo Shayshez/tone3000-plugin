@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { helpProps } from './helpText';
 import { useDismissable } from '../hooks/useDismissable';
@@ -13,6 +13,11 @@ import { BORDER, DISABLED_OPACITY, HIGHLIGHT, MUTED, WHITE } from './theme';
  * coords (numeric left/top = real px; the rem-denominated sizes scale with
  * the UI like everything else). Dismissed on outside press, Escape, or
  * picking a row.
+ *
+ * Rows can carry a `submenu` (see addTileMenuItems in GalleryBlock.tsx: a
+ * block-type row like Cab/IR opens its own Load File/Load Folder choice) -
+ * hovering such a row flies out a nested panel to its right, one level deep.
+ * A row with a submenu has no `onSelect` of its own; only leaf rows commit.
  */
 
 export interface TileMenuItem {
@@ -21,7 +26,13 @@ export interface TileMenuItem {
   /** One-line hint for the faceplate help readout. */
   help: string;
   disabled?: boolean;
-  onSelect: () => void;
+  /** Leaf row: fires on click, then closes the whole sheet. Omit when
+      `submenu` is set - a parent row only opens its flyout, it never
+      commits anything itself. */
+  onSelect?: () => void;
+  /** Nested rows shown in a flyout to this row's right while it's
+      hovered. */
+  submenu?: TileMenuItem[];
 }
 
 /** Click point in viewport (client) coordinates. */
@@ -34,6 +45,116 @@ const MENU_WIDTH = 148;
 const PANEL_PADDING = 6;
 /** Visual-px nudge so the panel's top-left sits clearly past the cursor tip. */
 const CURSOR_OFFSET = 6;
+/** Flyout submenu's own nudge past its parent row's right edge, and up past
+    the panel's own top padding so a flyout opened from the first row lines
+    up with it rather than sitting a few px low. */
+const SUBMENU_OFFSET_X = 4;
+
+const rowStyle = (disabled?: boolean): React.CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12rem',
+  width: '100%',
+  padding: '9rem 12rem',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: '8rem',
+  color: disabled ? MUTED : WHITE,
+  opacity: disabled ? DISABLED_OPACITY : 1,
+  fontSize: '13rem',
+  fontWeight: 400,
+  textAlign: 'left',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  whiteSpace: 'nowrap',
+  boxSizing: 'border-box',
+});
+
+/** A submenu flyout off its parent row: opens to the right by default, but
+    flips to the left when that would run the panel past the viewport edge
+    (the tile menu can open anywhere along the chain, including near the
+    right edge of the plugin window). Measured after mount
+    (useLayoutEffect, before paint) against the flyout's own rendered rect
+    rather than computed from rem/px conversions, so it's correct
+    regardless of UI scale. */
+const SubmenuFlyout: React.FC<{ items: TileMenuItem[]; onCommit: () => void }> = ({
+  items,
+  onCommit,
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [openLeft, setOpenLeft] = useState(false);
+
+  useLayoutEffect(() => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (rect && rect.right > window.innerWidth) setOpenLeft(true);
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'absolute',
+        top: `-${PANEL_PADDING}rem`,
+        ...(openLeft
+          ? { right: `calc(100% + ${SUBMENU_OFFSET_X}rem)` }
+          : { left: `calc(100% + ${SUBMENU_OFFSET_X}rem)` }),
+      }}
+    >
+      <MenuPanel items={items} onCommit={onCommit} style={{}} />
+    </div>
+  );
+};
+
+/** The panel's own visual chrome, shared by the root sheet and every
+    flyout submenu - only the positioning (fixed at the cursor vs. absolute
+    off a parent row) differs between them. */
+const MenuPanel: React.FC<{
+  items: TileMenuItem[];
+  onCommit: () => void;
+  style: React.CSSProperties;
+}> = ({ items, onCommit, style }) => {
+  const [openSubmenu, setOpenSubmenu] = useState<number | null>(null);
+
+  return (
+    <div
+      style={{
+        width: `${MENU_WIDTH}rem`,
+        backgroundColor: '#141416',
+        border: BORDER,
+        borderRadius: '14rem',
+        padding: `${PANEL_PADDING}rem`,
+        boxSizing: 'border-box',
+        ...style,
+      }}
+    >
+      {items.map((item, index) => (
+        <div
+          key={item.label}
+          style={{ position: 'relative' }}
+          onMouseEnter={() => setOpenSubmenu(item.submenu ? index : null)}
+        >
+          <button
+            type="button"
+            className="tile-menu-item"
+            disabled={item.disabled}
+            {...helpProps(item.help)}
+            onClick={() => {
+              if (item.submenu) return;
+              onCommit();
+              item.onSelect?.();
+            }}
+            style={rowStyle(item.disabled)}
+          >
+            {item.icon}
+            {item.label}
+          </button>
+          {item.submenu && openSubmenu === index && (
+            <SubmenuFlyout items={item.submenu} onCommit={onCommit} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
 
 export const TileMenu: React.FC<{
   anchor: TileMenuAnchor;
@@ -68,50 +189,11 @@ export const TileMenu: React.FC<{
         position: 'fixed',
         left: anchor.clientX + CURSOR_OFFSET,
         top: anchor.clientY + CURSOR_OFFSET,
-        width: `${MENU_WIDTH}rem`,
-        backgroundColor: '#141416',
-        border: BORDER,
-        borderRadius: '14rem',
-        padding: `${PANEL_PADDING}rem`,
         zIndex: 1000,
-        boxSizing: 'border-box',
       }}
     >
       <style>{`.tile-menu-item:hover:not(:disabled) { background-color: ${HIGHLIGHT}; }`}</style>
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          className="tile-menu-item"
-          disabled={item.disabled}
-          {...helpProps(item.help)}
-          onClick={() => {
-            onClose();
-            item.onSelect();
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12rem',
-            width: '100%',
-            padding: '9rem 12rem',
-            background: 'transparent',
-            border: 'none',
-            borderRadius: '8rem',
-            color: item.disabled ? MUTED : WHITE,
-            opacity: item.disabled ? DISABLED_OPACITY : 1,
-            fontSize: '13rem',
-            fontWeight: 400,
-            textAlign: 'left',
-            cursor: item.disabled ? 'not-allowed' : 'pointer',
-            whiteSpace: 'nowrap',
-            boxSizing: 'border-box',
-          }}
-        >
-          {item.icon}
-          {item.label}
-        </button>
-      ))}
+      <MenuPanel items={items} onCommit={onClose} style={{}} />
     </div>,
     document.body
   );

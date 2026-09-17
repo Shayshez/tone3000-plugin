@@ -180,6 +180,16 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.loadTone(args[0].toString(), targetInsertId));
           }))
       .withNativeFunction(
+          // (targetInsertId?): the right-click menu's "EQ" row - adds a
+          // standalone EQ block (ChainBlockType::EQ) at that insert slot.
+          // Synchronous (no model to fetch), unlike loadTone/loadLocalTone
+          // above; resolves straight to the new blockId.
+          "addEqBlock", guarded(0, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            const std::string targetInsertId =
+                args.size() >= 1 ? args[0].toString().toStdString() : std::string();
+            return juce::var(editor->processor.addEqBlock(targetInsertId));
+          }))
+      .withNativeFunction(
           // (title, files, targetInsertId?, forceGear?): local .nam/.wav
           // file(s) dropped on an insert slot (one for a file, many for a
           // folder). The webview can't hand over file paths, so the bytes
@@ -197,21 +207,26 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                                                    forceGear);
           }))
       .withNativeFunction(
-          // (pickFolder, targetBlockId?): the tile menus' Load File / Load
-          // Folder actions. Opens the native OS picker, then loads the pick
-          // through the same pipeline as a drop, from its path (no base64
-          // round-trip). Not `guarded`: the completion resolves later, from
-          // the chooser callback. Resolves with { blockId } / { error } like
-          // loadLocalTone, or { cancelled: true } when dismissed. Exists
-          // because drops can't be the only way in: Linux never delivers OS
-          // file drags to the webview (see pickLocalToneFile in Editor.h).
+          // (pickFolder, targetBlockId?, forceGear?): the tile menus'
+          // Cab/IR > Load File / Load Folder rows. Opens the native OS
+          // picker, then loads the pick through the same pipeline as a
+          // drop, from its path (no base64 round-trip). `forceGear` is the
+          // row's own Cab/IR choice, same meaning as loadLocalTone's own
+          // (inert for a .nam pick). Not `guarded`: the completion resolves
+          // later, from the chooser callback. Resolves with { blockId } /
+          // { error } like loadLocalTone, or { cancelled: true } when
+          // dismissed. Exists because drops can't be the only way in:
+          // Linux never delivers OS file drags to the webview (see
+          // pickLocalToneFile in Editor.h).
           "pickLocalToneFile",
           [editor](const juce::Array<juce::var>& args,
                    juce::WebBrowserComponent::NativeFunctionCompletion completion) {
             const bool pickFolder = args.size() >= 1 && coerceBool(args[0]);
             const juce::String targetBlockId =
                 args.size() >= 2 ? args[1].toString() : juce::String();
-            editor->pickLocalToneFile(pickFolder, targetBlockId, std::move(completion));
+            const juce::String forceGear = args.size() >= 3 ? args[2].toString() : juce::String();
+            editor->pickLocalToneFile(pickFolder, targetBlockId, forceGear,
+                                      std::move(completion));
           })
       .withNativeFunction(
           // Replace the tone of an existing block (Swap action). Keeps the

@@ -247,12 +247,15 @@ export interface ToneBlock {
   kind: 'tone';
   /** Real native block type. 'cab' is a genuine ChainBlockType::CAB block
       (site tones tagged gear === "cab"): structurally minimal, no predelay/
-      envelope/waveform - see CabBlockCard, rendered instead of the full
-      ChainBlock detail card. 'ir'/'nam' render the existing full card;
-      tone.format still reports "ir" for a cab block (that's the catalog's
-      format, not the native split), so this field - not tone.format - is
-      the thing to branch on. */
-  blockType: 'nam' | 'ir' | 'cab';
+      envelope/waveform fields (see ChainBlock.tsx's own isCab branches).
+      'ir'/'nam' render the existing full card; tone.format still reports
+      "ir" for a cab block (that's the catalog's format, not the native
+      split), so this field - not tone.format - is the thing to branch on.
+      'eq' is a standalone ChainBlockType::EQ block (see addEqBlock): no
+      model/tone at all, just this block's own eq processing everything
+      that passes through - ChainBlock.tsx renders it as a completely
+      separate, much simpler card (see its own isEq early return). */
+  blockType: 'nam' | 'ir' | 'cab' | 'eq';
   /** Tone metadata for rendering (slim projection of the API tone). */
   tone: ToneSummary;
   activeModelId: number;

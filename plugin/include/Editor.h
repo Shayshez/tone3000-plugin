@@ -102,7 +102,10 @@ private:
   // with loadLocalTonePath's { blockId } / { error } result, or
   // { cancelled: true } when the dialog is dismissed. The chooser lives on
   // the editor so destroying the editor tears the dialog down with it.
+  // `forceGear` is the tile menu's own Cab/IR row choice (see
+  // loadLocalTonePath) - forwarded to it/loadLocalToneUrls verbatim.
   void pickLocalToneFile(bool pickFolder, const juce::String& targetBlockId,
+                         const juce::String& forceGear,
                          juce::WebBrowserComponent::NativeFunctionCompletion completion);
   std::unique_ptr<juce::FileChooser> localFileChooser;
 

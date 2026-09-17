@@ -270,7 +270,7 @@ void TONE3000Editor::loadMainUrlIfNeeded() {
 }
 
 void TONE3000Editor::pickLocalToneFile(
-    bool pickFolder, const juce::String& targetBlockId,
+    bool pickFolder, const juce::String& targetBlockId, const juce::String& forceGear,
     juce::WebBrowserComponent::NativeFunctionCompletion completion) {
   auto cancelled = [] {
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
@@ -314,7 +314,7 @@ void TONE3000Editor::pickLocalToneFile(
   // platform that still delivers the callback mid-teardown.
   juce::Component::SafePointer<TONE3000Editor> self(this);
   localFileChooser->launchAsync(
-      flags, [self, cancelled, target = targetBlockId.toStdString(),
+      flags, [self, cancelled, target = targetBlockId.toStdString(), gear = forceGear,
               completion = std::move(completion)](const juce::FileChooser& chooser) {
         if (self == nullptr)
           return;
@@ -337,14 +337,14 @@ void TONE3000Editor::pickLocalToneFile(
           completion(cancelled());
           return;
         }
-        completion(self->processor.loadLocalToneUrls(results, target));
+        completion(self->processor.loadLocalToneUrls(results, target, gear));
 #else
         const auto results = chooser.getResults();
         if (results.isEmpty()) {
           completion(cancelled());
           return;
         }
-        completion(self->processor.loadLocalTonePath(results.getReference(0), target));
+        completion(self->processor.loadLocalTonePath(results.getReference(0), target, gear));
 #endif
       });
 }

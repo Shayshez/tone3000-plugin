@@ -82,6 +82,12 @@ public:
   // stale (undone away mid-flow), the active lane's first insert is used.
   std::string loadTone(const juce::String& toneJsonString,
                        const std::string& targetInsertId = {});
+  // Add a standalone EQ block (ChainBlockType::EQ - see its own comment) at
+  // an insert slot: same targeting as loadTone (the insert the user
+  // right-clicked, or the active lane's first insert when the id is
+  // stale/absent), but synchronous - there is no model to fetch, so the
+  // block is loaded the instant it exists. Returns the new block's id.
+  std::string addEqBlock(const std::string& targetInsertId = {});
   // Load dropped local files (`files` = [{ name, data }], base64 bytes; one
   // entry for a single file, many for a folder) as one tone block, one model
   // per file. `targetInsertId` is either an insert slot (adds, consuming
@@ -111,8 +117,11 @@ public:
   // drop in the UI: majority extension picks NAM vs IR, capped at 300
   // files / 50 MB each, models in natural name order, title from the
   // folder name. A single file must be .nam or .wav; title is the file
-  // name. Same return contract as loadLocalTone.
-  juce::var loadLocalTonePath(const juce::File& source, const std::string& targetInsertId = {});
+  // name. `forceGear` is the tile menu's own Cab/IR row choice (see
+  // pickLocalToneFile) - same meaning and same NAM-inert behavior as
+  // loadLocalTone's own. Otherwise same return contract as loadLocalTone.
+  juce::var loadLocalTonePath(const juce::File& source, const std::string& targetInsertId = {},
+                              const juce::String& forceGear = {});
 
   /** URL sibling of loadLocalTonePath, for the iOS document picker.
       Files chosen from the Files app live outside the app sandbox and are
@@ -120,11 +129,13 @@ public:
       so the bytes have to come through juce::URL rather than the raw path.
       Takes 1..N URLs because multi-select stands in for the folder route on
       iOS (a security-scoped directory cannot be enumerated through
-      juce::URL); see pickLocalToneFile. Same return contract as
+      juce::URL); see pickLocalToneFile. `forceGear` - same meaning as
+      loadLocalTonePath's own. Otherwise same return contract as
       loadLocalTone. Compiled on every platform so the DSP suite can test it;
       only the iOS editor calls it. */
   juce::var loadLocalToneUrls(const juce::Array<juce::URL>& sources,
-                              const std::string& targetInsertId = {});
+                              const std::string& targetInsertId = {},
+                              const juce::String& forceGear = {});
   // Age out local-model stash files unused for a week (runs once per
   // process, off-thread). Called from the constructor.
   static void cleanLocalModelStash();

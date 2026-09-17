@@ -4,12 +4,15 @@ import { useSortable, isSortable } from '@dnd-kit/react/sortable';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import type { DragEndEvent, Sensors } from '@dnd-kit/dom';
 import { arrayMove } from '@dnd-kit/helpers';
-import { Plus } from './icons';
+import { ClipboardPaste, Plus } from './icons';
 import { ChromeIconButton, ChromeTextButton } from './ChromeIconButton';
 import { HELP, helpProps } from './helpText';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
 import { getUiScale } from '../hooks/useUiScale';
 import { useChainActions } from '../hooks/useChainActions';
+import { blockTypeMenuItems, useTileMenu } from './GalleryBlock';
+import { TileMenu } from './TileMenu';
+import { useToast } from './Toast';
 import {
   BORDER,
   BRAND_ORANGE,
@@ -23,11 +26,12 @@ import type { ChainItem, ToneBlock } from '../types/chain';
 import { isEqFlat, isInsertSlot } from '../types/chain';
 
 /** Abbreviated strip label per native block type (ToneBlock.blockType):
-    mirrors the header's own NAM/IR split, plus the newer CAB type. */
+    mirrors the header's own NAM/IR split, plus the newer CAB and EQ types. */
 const BLOCK_TYPE_LABEL: Record<ToneBlock['blockType'], string> = {
   nam: 'NAM',
   ir: 'IR',
   cab: 'CAB',
+  eq: 'EQ',
 };
 
 /** Every chip (tone label or "+") is this exact box, regardless of label
@@ -115,36 +119,75 @@ interface ChainMapStripProps {
       actions.addModel(side, insertBlockId) targeting GalleryLane's own "+"
       tiles use. */
   onAdd: (insertBlockId: string) => void;
+  /** Paste the copied block into this slot; null while there's nothing
+      valid to paste (the menu shows Paste disabled) - same
+      canPaste/actions.pasteBlock(side, index) gating GalleryLane's own "+"
+      tiles use, threaded down from ChainView via ChainBlock. */
+  onPasteBlockAt: ((index: number) => void) | null;
 }
 
 /** The "+" insert-slot chip: sortable like every other chip (dragging a tone
     chip past it reorders it like any other array member - it doesn't get
-    "filled" or consumed, matching GalleryLane's own AddTile). */
-const ChainMapAddChip: React.FC<{ id: string; index: number; onAdd: (id: string) => void }> = ({
-  id,
-  index,
-  onAdd,
-}) => {
+    "filled" or consumed, matching GalleryLane's own AddTile), and carries
+    the identical right-click menu GalleryLane's own AddTile does (Paste /
+    block-type rows, each flying out Load File / Load Folder - see
+    blockTypeMenuItems) via the same shared useTileMenu hook, so the two
+    "+" entry points behave identically rather than one lagging the other. */
+const ChainMapAddChip: React.FC<{
+  id: string;
+  index: number;
+  onAdd: (id: string) => void;
+  onPasteBlockAt: ((index: number) => void) | null;
+}> = ({ id, index, onAdd, onPasteBlockAt }) => {
   const { ref, isDragging } = useSortable({ id, index, group: SORT_GROUP });
+  const actions = useChainActions();
+  const toast = useToast();
+  const { menuAnchor, openMenu, closeMenu, shouldIgnoreClick, longPressProps } = useTileMenu();
+
   return (
-    <ChromeIconButton
+    <div
       ref={ref}
-      help={HELP.addTile}
-      onClick={() => onAdd(id)}
-      // Plain ChromeIconButton chrome has a transparent border (fine
-      // floating beside a knob, but it read as a bare icon here, next to
-      // chips that all carry a real idle border) - match the tone chips'
-      // own idle frame so the "+" reads as one more uniform member of the
-      // row, not a stray icon.
-      style={{
-        width: `${CHIP_WIDTH}rem`,
-        height: `${CHIP_HEIGHT}rem`,
-        border: BORDER,
-        opacity: isDragging ? DRAG_GHOST_OPACITY : 1,
-      }}
+      style={{ position: 'relative', width: `${CHIP_WIDTH}rem`, height: `${CHIP_HEIGHT}rem` }}
+      onContextMenu={openMenu}
+      {...longPressProps}
     >
-      <Plus />
-    </ChromeIconButton>
+      <ChromeIconButton
+        help={HELP.addTile}
+        onClick={(e) => {
+          if (shouldIgnoreClick(e)) return;
+          onAdd(id);
+        }}
+        // Plain ChromeIconButton chrome has a transparent border (fine
+        // floating beside a knob, but it read as a bare icon here, next to
+        // chips that all carry a real idle border) - match the tone chips'
+        // own idle frame so the "+" reads as one more uniform member of the
+        // row, not a stray icon.
+        style={{
+          width: '100%',
+          height: '100%',
+          border: BORDER,
+          opacity: isDragging ? DRAG_GHOST_OPACITY : 1,
+        }}
+      >
+        <Plus />
+      </ChromeIconButton>
+      {menuAnchor && (
+        <TileMenu
+          anchor={menuAnchor}
+          onClose={closeMenu}
+          items={[
+            {
+              label: 'Paste',
+              icon: <ClipboardPaste size={16} />,
+              help: HELP.pasteBlock,
+              disabled: onPasteBlockAt == null,
+              onSelect: () => onPasteBlockAt?.(index),
+            },
+            ...blockTypeMenuItems(id, actions, toast),
+          ]}
+        />
+      )}
+    </div>
   );
 };
 
@@ -349,6 +392,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
   onSelect,
   onSelectEq,
   onAdd,
+  onPasteBlockAt,
 }) => {
   const wheelScrollRef = useHorizontalWheelScroll<HTMLDivElement>();
   const actions = useChainActions();
@@ -417,7 +461,13 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
         <DragDropProvider sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           {localItems.map((item, index) =>
             isInsertSlot(item) ? (
-              <ChainMapAddChip key={item.blockId} id={item.blockId} index={index} onAdd={onAdd} />
+              <ChainMapAddChip
+                key={item.blockId}
+                id={item.blockId}
+                index={index}
+                onAdd={onAdd}
+                onPasteBlockAt={onPasteBlockAt}
+              />
             ) : (
               <ChainMapTile
                 key={item.blockId}

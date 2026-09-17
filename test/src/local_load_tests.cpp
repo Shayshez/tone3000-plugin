@@ -352,6 +352,38 @@ TEST(LocalLoadTest, PathLoadsSingleFileAndSwapsInPlace) {
   EXPECT_EQ(block["tone"]["title"].toString(), juce::String("cab-ir-test"));
 }
 
+// The tile menu's Cab/IR rows (blockTypeMenuItems, GalleryBlock.tsx) reach
+// local files through this path-based entry point, not loadLocalTone's
+// base64 one - same forceGear override as ForceGearIrOverridesDurationGuess
+// above, just via the route the menu's "Load File"/"Load Folder" rows
+// actually call. cab-ir-test.wav is short enough that an unlabeled load
+// guesses Cab on its own (see IrMixDefaultsFollowKernelLength); forcing
+// "ir" here must still win.
+TEST(LocalLoadTest, PathForceGearOverridesDurationGuess) {
+  TONE3000Processor proc;
+  const juce::var res = proc.loadLocalTonePath(testFile("cab-ir-test.wav"), {}, "ir");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(block["irCategory"].toString(), juce::String("irPlayer"))
+      << "explicit IR choice from the tile menu was overridden by the content-duration guess";
+}
+
+// Same override, but via the .nam-inert rule (ForceGearCabIsInertForNamFiles
+// above) - forcing "cab" on a .nam pick from the menu must still land a
+// plain NAM block, not get rerouted.
+TEST(LocalLoadTest, PathForceGearIsInertForNamFiles) {
+  TONE3000Processor proc;
+  const juce::var res = proc.loadLocalTonePath(testFile("a2-amp-test.nam"), {}, "cab");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("nam"));
+}
+
 TEST(LocalLoadTest, PathLoadsFolderMajorityExtensionInNaturalOrder) {
   // Scratch folder: three distinct .nam files whose natural order differs
   // from lexicographic ("amp 10" sorts before "amp 2" there), one of them in
@@ -503,6 +535,21 @@ TEST(LocalLoadTest, UrlsLoadMultiSelectInNaturalOrderSkippingBadFiles) {
   EXPECT_EQ(block["tone"]["models"][2]["name"].toString(), juce::String("amp 10"));
 
   dir.deleteRecursively();
+}
+
+// Same forceGear override as PathForceGearOverridesDurationGuess above, via
+// the iOS picker's own entry point.
+TEST(LocalLoadTest, UrlsForceGearOverridesDurationGuess) {
+  TONE3000Processor proc;
+  const juce::var res =
+      proc.loadLocalToneUrls({juce::URL(testFile("cab-ir-test.wav"))}, {}, "ir");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(block["irCategory"].toString(), juce::String("irPlayer"))
+      << "explicit IR choice from the tile menu was overridden by the content-duration guess";
 }
 
 TEST(LocalLoadTest, UrlsSingleFileTitlesFromNameAndRejectBadInputs) {

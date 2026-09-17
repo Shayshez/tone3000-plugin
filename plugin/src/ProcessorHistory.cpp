@@ -43,6 +43,17 @@ void TONE3000Processor::pushChainHistory(const juce::String& coalesceKey) {
 }
 
 void TONE3000Processor::queueActiveModelLoad(ChainBlock& block) {
+  // EQ blocks have no model/tone to fetch at all - see ChainBlockType::EQ's
+  // own comment. Every generic path that reconstructs a block this way
+  // (duplicate, paste, restore, undo/redo reconciliation) funnels through
+  // here, so this one early-out is the whole story for all of them.
+  if (block.type == ChainBlockType::EQ) {
+    block.loaded = true;
+    block.loadFailed = false;
+    block.modelLoading = false;
+    return;
+  }
+
   // Every bail below leaves the block unloadable, so flag it so the UI shows
   // the retry affordance instead of a loader that can never resolve, and log
   // at release level (these paths are the needle for "stuck loading after

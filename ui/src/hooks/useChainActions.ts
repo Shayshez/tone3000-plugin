@@ -37,9 +37,22 @@ export interface ChainActions {
   /** Menu-driven sibling of loadLocalFile: native opens its OS file picker
       and loads the pick (a .nam/.wav file, or a folder of them) from its
       path. Same targeting rules; the reliable route on Linux, where OS file
-      drags never reach the embedded webview. Resolves to a user-facing
-      error message, or null on success or when the dialog is cancelled. */
-  pickLocalFile: (targetBlockId: string, kind: 'file' | 'folder') => Promise<string | null>;
+      drags never reach the embedded webview. `category` is the tile menu's
+      own Cab/IR row choice (see GalleryBlock's blockTypeMenuItems) - same
+      meaning as loadLocalFile's own, inert when the pick turns out to be
+      .nam. Resolves to a user-facing error message, or null on success or
+      when the dialog is cancelled. */
+  pickLocalFile: (
+    targetBlockId: string,
+    kind: 'file' | 'folder',
+    category?: 'ir' | 'cab'
+  ) => Promise<string | null>;
+  /** The tile menu's standalone "EQ" row (see GalleryBlock's
+      blockTypeMenuItems): adds a ChainBlockType::EQ block at the given
+      insert slot - no submenu, no file to pick, nothing to load. Unlike
+      Cab/IR's rows this doesn't navigate to the new block's detail view
+      either, matching those rows' own behavior (add and stay put). */
+  addEqBlock: (targetInsertId: string) => void;
   removeBlock: (blockId: string) => void;
   /** Launch the Select flow to replace this block's tone in place.
       `navigateToDetail` (default false, the gallery tile's own swap action):

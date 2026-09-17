@@ -22,6 +22,7 @@ target_sources(DspTests PRIVATE
     src/clipboard_tests.cpp
     src/dsp_tests.cpp
     src/duplicate_tests.cpp
+    src/eq_block_tests.cpp
     src/eq_post_routing_tests.cpp
     src/factory_preset_tests.cpp
     src/ir_category_tests.cpp
