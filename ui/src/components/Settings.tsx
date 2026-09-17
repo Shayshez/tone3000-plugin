@@ -92,6 +92,9 @@ interface SettingsProps {
   initialTab?: SettingsTab;
   /** Running build version ("" outside the plugin). */
   version: string;
+  /** sandbox/experiments checkpoint counter ("" once merged - see
+      SANDBOX_LOG.md at repo root). Shown faintly under the version line. */
+  sandboxBuild: string;
   /** Newer published build, if the startup check found one (even if the
       startup modal was dismissed); shows an update button in the footer. */
   update: UpdateNoticeData | null;
@@ -180,6 +183,7 @@ export const Settings: React.FC<SettingsProps> = ({
   device,
   initialTab = 'system',
   version,
+  sandboxBuild,
   update,
   namSlimSizeDefault,
   onNamSlimSizeDefaultChange,
@@ -616,6 +620,21 @@ export const Settings: React.FC<SettingsProps> = ({
           {version && (
             <p style={{ ...descriptionStyle, fontSize: '12rem', color: SUBTLE, margin: 0 }}>
               TONE3000 v{version}
+            </p>
+          )}
+          {/* sandbox/experiments-only checkpoint marker - see SANDBOX_LOG.md.
+              Deliberately fainter than the version line above; gone entirely
+              once this branch merges and SANDBOX_BUILD stops existing. */}
+          {sandboxBuild && (
+            <p
+              style={{
+                ...descriptionStyle,
+                fontSize: '10rem',
+                color: 'rgba(235, 235, 245, 0.22)',
+                margin: 0,
+              }}
+            >
+              sandbox build {sandboxBuild}
             </p>
           )}
         </div>

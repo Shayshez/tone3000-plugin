@@ -83,15 +83,32 @@ export function useUpdateNotice(client: T3KClient): {
   update: UpdateNoticeData | null;
   /** The running build's version ("" until resolved / outside the plugin). */
   localVersion: string;
+  /** sandbox/experiments checkpoint counter ("" once merged/unresolved). */
+  sandboxBuild: string;
   remindLater: (days: number) => void;
 } {
   const backend = useAudioBackend();
   const [notice, setNotice] = useState<UpdateNoticeData | null>(null);
   const [update, setUpdate] = useState<UpdateNoticeData | null>(null);
   const [localVersion, setLocalVersion] = useState('');
+  const [sandboxBuild, setSandboxBuild] = useState('');
   // Re-check when the session appears or disappears so a just-signed-in
   // beta tester gets their payload, and logout drops a beta-only notice.
   const authenticated = client.isAuthenticated();
+
+  // Independent of the update-check flow below (no auth/UPDATE_NOTICE_ENABLED
+  // gating) - this is just a dev-facing marker, see SANDBOX_LOG.md.
+  useEffect(() => {
+    if (!isNativeFunctionRegistered('getSandboxBuild')) return;
+    let cancelled = false;
+    (async () => {
+      const build = await backend.getPluginFunction('getSandboxBuild')();
+      if (!cancelled && typeof build === 'string' && build.length > 0) setSandboxBuild(build);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
 
   useEffect(() => {
     if (!isNativeFunctionRegistered('getPluginVersion')) return;
@@ -169,5 +186,5 @@ export function useUpdateNotice(client: T3KClient): {
     setNotice(null);
   }, []);
 
-  return { notice, update, localVersion, remindLater };
+  return { notice, update, localVersion, sandboxBuild, remindLater };
 }

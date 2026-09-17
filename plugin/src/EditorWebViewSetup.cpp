@@ -785,6 +785,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(JucePlugin_VersionString);
           }))
       .withNativeFunction(
+          // sandbox/experiments-only checkpoint counter (SANDBOX_BUILD /
+          // SANDBOX_LOG.md at repo root) - "" once this branch merges and the
+          // file is gone, which the UI treats as "don't show it".
+          "getSandboxBuild", guarded(0, juce::var(""), [](const juce::Array<juce::var>&) {
+            return juce::var(T3K_SANDBOX_BUILD);
+          }))
+      .withNativeFunction(
           // Stable machine hash (survives storage/peripheral changes; a CPU
           // or motherboard swap invalidates it). The UI sends it on every
           // version check so the API can target betas per install. Empty

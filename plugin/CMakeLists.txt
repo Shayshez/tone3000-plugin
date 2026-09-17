@@ -34,6 +34,23 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
 endif()
 
+# sandbox/experiments-only build counter (repo-root SANDBOX_BUILD file, same
+# single-source-of-truth pattern as VERSION above; bump with
+# script/bump-sandbox-build.sh). Not a real release version - just a
+# stable-checkpoint marker shown faintly next to it in Settings so a build
+# can be pointed to a SANDBOX_LOG.md entry. Harmless/unused once this branch
+# merges back and the file goes away with it.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../SANDBOX_BUILD")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../SANDBOX_BUILD" T3K_SANDBOX_BUILD)
+    string(STRIP "${T3K_SANDBOX_BUILD}" T3K_SANDBOX_BUILD)
+    if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/../SANDBOX_BUILD")
+    endif()
+else()
+    set(T3K_SANDBOX_BUILD "")
+endif()
+
 project(TONE3000 VERSION ${T3K_VERSION})   # Set version of the plugin
 
 option(HEADLESS "Disable GUI (headless/embedded build)" OFF)
@@ -480,6 +497,13 @@ target_compile_definitions(${PROJECT_NAME}
     PUBLIC
         JUCE_WEB_BROWSER=${JUCE_WEB_BROWSER_VALUE}
         JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+# See the SANDBOX_BUILD read above - empty string when the file doesn't exist
+# (e.g. after this branch merges to main and the file is gone).
+target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        T3K_SANDBOX_BUILD="${T3K_SANDBOX_BUILD}"
 )
 
 # Native networking (juce::URL / WebInputStream), used for model downloads

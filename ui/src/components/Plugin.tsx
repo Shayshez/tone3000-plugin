@@ -332,7 +332,13 @@ export const Plugin: React.FC = () => {
 
   // Non-blocking update check (enabled via VITE_T3K_UPDATE_NOTICE); also
   // resolves the running build's version for the Settings footer.
-  const { notice: updateNotice, update, localVersion, remindLater } = useUpdateNotice(t3kClient);
+  const {
+    notice: updateNotice,
+    update,
+    localVersion,
+    sandboxBuild,
+    remindLater,
+  } = useUpdateNotice(t3kClient);
 
   // Auth-dependent block actions (model switching) key off this. Reading
   // localStorage per render is fine: every login/logout transition already
@@ -595,6 +601,7 @@ export const Plugin: React.FC = () => {
             device={audioDevice}
             initialTab={settingsTabRef.current}
             version={localVersion}
+            sandboxBuild={sandboxBuild}
             update={update}
             namSlimSizeDefault={namSlimSizeDefault}
             onNamSlimSizeDefaultChange={actions.setNamSlimSizeDefault}
