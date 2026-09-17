@@ -283,6 +283,19 @@ const HELP_DESKTOP = {
   blockOutIr: knobHelp('Out', 'block output gain, ±24 dB (IR pre-trimmed -18 dB).'),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
+  // Not `blockSize`/`blockWidth` - those names are taken by the NAM A2
+  // Lite/Full size chip above and would silently collide (TS won't allow a
+  // duplicate key, but nothing stops the reverse ordering from doing so
+  // quietly elsewhere - `Ir` disambiguates on purpose).
+  blockIrSize: knobHelp(
+    'Size',
+    'vari-speed length/pitch, 10%-1000%. Center: original. Faster = higher pitch, slower = lower.'
+  ),
+  blockIrWidth: knobHelp(
+    'Width',
+    'stereo image, -200% to +200%. 0-100%: mono to full recorded stereo. Beyond: artificial widening.'
+  ),
+  blockIrWidthMono: knobHelp('Width', 'unavailable, the loaded IR has no stereo image.'),
   // IR shaping row: a 2-segment Attack/Decay envelope (Space Designer-style)
   // over the truncated content. Decay Length sets the TOTAL trimmed length
   // (the real "End" position); Attack Length is a position *within* that
@@ -307,6 +320,12 @@ const HELP_DESKTOP = {
     'Decay Curve',
     'Decay segment’s envelope shape, front-loaded to back-loaded. Center: linear.'
   ),
+  // Plain toggle, not a knob/chip-with-a-value - no knobHelp (its gesture
+  // legend describes dragging/typing a number, neither of which applies
+  // here; click is the only affordance).
+  blockTrimInit:
+    'Trim Init: removes detected leading silence from the source so it can’t be mistaken for Delay. Off by default. Click to cycle Off → Std → Lax; Lax uses a less sensitive threshold for sources whose Std cut lands too early.',
+  blockReverse: 'Reverse: plays the shaped IR backward. Off by default. Click to toggle.',
   // Envelope graph (IrEnvelopeGraph.tsx): the same six values as the chips
   // above, shaped directly on the waveform instead of typed in. Touch has no
   // Shift/Option modifiers, so those variants drop the fine-drag and
@@ -340,10 +359,12 @@ const HELP_DESKTOP = {
   blockSizeChip:
     'NAM Size: this block\u2019s size differs from your default. To choose per block, enable it in Settings.',
   blockIrCategory:
-    'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 50% mix by default.',
+    'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 25% mix by default.',
   blockCalibrated: 'Calibration: active \u2014 levels set from this model\u2019s calibration data.',
   blockUncalibrated: 'Calibration: inactive \u2014 this model has no calibration data.',
   eqToggle: 'EQ: 6-band EQ editor. Outline: EQ shaping the sound.',
+  blockResetShape:
+    'Reset: restores Init/Attack/Decay, Size, Width, Trim Init and Reverse to default. Not EQ.',
   toneInfo: 'Info: tone description, makes, and tags from TONE3000.',
   toneInfoLogin: 'Log In: sign in to TONE3000 to see tone details.',
   viewOnT3k: 'View on TONE3000: open this tone in your browser.',

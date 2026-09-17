@@ -144,6 +144,48 @@ export interface BlockParams {
   decayLength: number;
   decayLevel: number;
   decayCurve: number;
+  /** IR Size: vari-speed duration/pitch over the block's frozen source,
+      normalized 0..1, 0.5 = 100%/unchanged (see sizePercentScale in
+      knobScale.ts for the exact 10%-1000% taper). IR blocks only. Set via
+      `setBlockIrSize`, not `setBlockParam`: same off-thread rebuild shape as
+      the envelope params above, committed once per drag gesture (on
+      release) rather than continuously. Applied upstream of the envelope
+      natively (a declared-sample-rate scale, not a change to the trimmed
+      buffer's sample count), so every envelope fraction above keeps landing
+      at the same relative position with no special-casing needed here. */
+  size: number;
+  /** IR Width: stereo-image control, normalized 0..1, 0.5 = 0%/mono (see
+      widthPercentScale in knobScale.ts for the -200%..+200% mapping). IR
+      blocks only. Default/reset is 0.75 (100%/full original stereo), NOT
+      the bipolar center - 0.5 is genuinely mono, and every stereo IR
+      played its true recorded image before this control existed, so the
+      no-op starting point has to be 100%, not the knob's visual center.
+      Locked at that default in the UI whenever the loaded IR is mono (see
+      ToneBlock.irNumChannels). Set via `setBlockIrWidth`, same off-thread/
+      commit-on-release shape as `size`. */
+  width: number;
+  /** Trim Init: manually-toggled leading-silence removal, off by default -
+      never applied automatically (an RMS-threshold heuristic could clip an
+      intentionally quiet start). When on, native shifts where the trimmed/
+      enveloped kernel starts to the block's detected onset (past any
+      leading silence in the source file), so it stops masquerading as
+      unwanted Predelay. IR blocks only. Set via `setBlockIrTrimInit`, same
+      off-thread rebuild shape as `size`/`width` but a plain toggle, not a
+      drag gesture. */
+  trimInit: boolean;
+  /** Which onset detection Trim Init uses when `trimInit` is on: the
+      standard threshold (false) or the relaxed, less-sensitive one (true,
+      see native's ChainBlock::irOnsetSamplesRelaxed) for sources whose
+      audible transient builds up slowly enough that the standard threshold
+      finds "onset" too early. Meaningless while `trimInit` is false; set
+      together with it via `setBlockIrTrimInit`'s third argument so a click
+      through Off/Std/Lax is always exactly one undo step. */
+  trimRelaxed: boolean;
+  /** Reverse: manually-toggled backward playback of the fully-shaped kernel
+      (applied last, after Trim Init and the envelope), off by default. IR
+      blocks only. Set via `setBlockIrReverse`, same off-thread rebuild
+      shape as `trimInit` - a plain toggle, not a drag gesture. */
+  reverse: boolean;
   /** Per-block 6-band EQ. Flat = skipped entirely on the audio thread. */
   eq: BlockEqParams;
 }
@@ -232,15 +274,36 @@ export interface ToneBlock {
       audible meaning - see irCategory below. */
   irLong: boolean;
   /** Detected IR content length in ms (native, RMS-threshold based): where
-      the waveform display's auto-fit trims to. 0 for NAM blocks and IR
-      blocks not yet loaded. */
+      the waveform display's auto-fit trims to. Already scaled by Size's
+      clamped ratio (see irRawContentLengthMs below), so it moves with the
+      Size knob. 0 for NAM blocks and IR blocks not yet loaded. */
   irContentLengthMs: number;
+  /** Load-time IR content length in ms, *not* scaled by Size - fixed for
+      the life of the loaded file. This is what the Size knob's own display
+      clamps against (see sizePercentScale in knobScale.ts); using
+      irContentLengthMs there instead would be circular, since that value
+      already reflects the current clamped Size ratio. 0 for NAM blocks and
+      IR blocks not yet loaded. */
+  irRawContentLengthMs: number;
+  /** Detected onset (see computeIrOnsetSamples), as a fraction 0..1 of the
+      exact span the waveform backdrop (getIrWaveform's mins/maxs) was
+      downsampled over - deliberately NOT relative to irRawContentLengthMs
+      above, which is already trim-adjusted once Trim Init is on and would
+      make this circular. Always shipped regardless of BlockParams.trimInit;
+      the waveform display crops with it only when that's on. 0 for NAM
+      blocks and IR blocks not yet loaded. */
+  irOnsetFraction: number;
   /** Explicit IR content category (IR blocks only; meaningless for NAM).
       'cab' = real cabinet content: -18 dB output pad, 100% default mix.
       'irPlayer' = anything else (space/reverb/outboard/experimental/generic
       IR): no pad, 50% default mix. Drives the Mix knob's default/Alt-click
       reset and the Out knob help. Editable via setBlockIrCategory. */
   irCategory: 'cab' | 'irPlayer';
+  /** Channels in the loaded IR file (1 or 2, native ChainBlock::
+      irNumChannels). The sole source of truth for whether Width has a real
+      stereo image to work with; the Width knob locks to mono/disabled
+      whenever this is 1. 1 for NAM blocks and IR blocks not yet loaded. */
+  irNumChannels: number;
   /** NAM calibration metadata (dBu) off the loaded model; absent when the
       model carries none (or nothing is loaded yet). `inputLevelDbu` feeds
       input calibration; `outputLevelDbu` feeds the mid-chain calibrated

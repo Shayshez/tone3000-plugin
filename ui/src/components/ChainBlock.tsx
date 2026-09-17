@@ -20,7 +20,7 @@ import type { EnvelopePatch } from './IrEnvelopeGraph';
 import { useIrWaveform } from '../hooks/useIrWaveform';
 import { rem } from '../hooks/useUiScale';
 import { KnobControl } from './KnobControl';
-import { EditableChip } from './EditableChip';
+import { EditableChip, ToggleChip } from './EditableChip';
 import {
   gainDbScale,
   predelayMsScale,
@@ -28,6 +28,8 @@ import {
   attackLengthMsScale,
   curveScale,
   percentScale,
+  sizePercentScale,
+  widthPercentScale,
 } from './knobScale';
 import type { KnobScale } from './knobScale';
 import { BusyOverlay, LoadingDots } from './LoadingDots';
@@ -112,22 +114,41 @@ const IR_WAVEFORM_WIDTH_UNITS = 600;
 
 /** Envelope shaping row's chip style - same track language as BlockEqView's
     own Freq/Gain/Q chips (SEGMENTED_TRACK pill, TEXT_BOX_HEIGHT tall), just
-    tighter (smaller font, less padding): six chips with longer labels
-    (A Len/A Crv/D Len/D Lvl/D Crv) don't fit the card width at EQ's own
-    3-chip sizing. */
+    tighter (smaller font, less padding): the six numeric chips (Init/A Len/
+    A Crv/D Len/D Lvl/D Crv) don't fit the card width at EQ's own 3-chip
+    sizing. The value area width is untouched by any later tightening pass,
+    since that's sized for the widest real reading (Decay Length up to
+    "20.00s" post-Size) and shrinking it risks visual overlap with the next
+    chip, not just a tighter look. */
 const ENVELOPE_CHIP_FONT_SIZE = 10;
 const chipStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: '4rem',
+  justifyContent: 'center',
+  gap: '3rem',
+  // Fixed outer width, not just EditableChip's own fixed value-area width:
+  // the six chips' labels aren't all the same length (Init is 4 chars, the
+  // rest 5), so relying on intrinsic sizing alone still left it visibly
+  // narrower than A Len/A Crv/D Len/D Crv. Sized for the widest combination
+  // (a 5-char label + the value area below).
+  width: '78rem',
   height: `${TEXT_BOX_HEIGHT}rem`,
-  padding: '0 3rem',
+  padding: '0 2rem',
   borderRadius: rem(ICON_BOX_RADIUS),
   border: 'none',
   backgroundColor: SEGMENTED_TRACK,
   boxSizing: 'border-box',
   whiteSpace: 'nowrap',
 };
+
+/** Trim/Rev - the row's plain on/off toggles, not chipStyle's numeric
+    readouts: "Trim"/"Rev" plus "On"/"Off" both read shorter than any
+    numeric chip's label+value, so a dedicated, narrower style saves real
+    row width instead of inheriting chipStyle's width sized for "20.00s".
+    Identical to each other on purpose - a matched pair reads as one
+    symmetric unit at the end of the row. */
+const toggleChipStyle: React.CSSProperties = { ...chipStyle, width: '58rem' };
+const TOGGLE_CHIP_VALUE_WIDTH = 24;
 
 /** Downloads / bookmarks / models count with a leading icon (same pattern as ToneBrowser).
     `fontSize` defaults to the full card's size; the IR compact card's meta
@@ -445,6 +466,13 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const [decayLength, setDecayLength] = useState(params.decayLength ?? 1.0);
   const [decayLevel, setDecayLevel] = useState(params.decayLevel ?? 1.0);
   const [decayCurve, setDecayCurve] = useState(params.decayCurve ?? 0.5);
+  const [irSize, setIrSize] = useState(params.size ?? 0.5);
+  // 0.75 (100%/full stereo) fallback, not the knob's 0.5 center - matches
+  // native's ChainBlock::widthNormalized default (see its own comment).
+  const [irWidth, setIrWidth] = useState(params.width ?? 0.75);
+  const [trimInit, setTrimInit] = useState(params.trimInit ?? false);
+  const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
+  const [reverse, setReverse] = useState(params.reverse ?? false);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [showEq, setShowEq] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -511,6 +539,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => {
     if (!knobDragRef.current) setDecayCurve(params.decayCurve ?? 0.5);
   }, [params.decayCurve]);
+  useEffect(() => {
+    if (!knobDragRef.current) setIrSize(params.size ?? 0.5);
+  }, [params.size]);
+  useEffect(() => {
+    if (!knobDragRef.current) setIrWidth(params.width ?? 0.75);
+  }, [params.width]);
+  useEffect(() => setTrimInit(params.trimInit ?? false), [params.trimInit]);
+  useEffect(() => setTrimRelaxed(params.trimRelaxed ?? false), [params.trimRelaxed]);
+  useEffect(() => setReverse(params.reverse ?? false), [params.reverse]);
   useEffect(() => setEqOn(params.eq?.enabled ?? true), [params.eq?.enabled]);
   useEffect(() => setEqPre(params.eq?.pre ?? false), [params.eq?.pre]);
 
@@ -519,6 +556,97 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       actions.setBlockParam(blockId, param, value),
     [actions, blockId]
   );
+
+  // Size/Width rebuild the convolver off-thread (not real-time smoothers),
+  // so - unlike setParam's continuous params - they're committed once per
+  // gesture rather than at drag rate. Unlike the envelope row's idle-
+  // debounce (commitEnvelope above), these commit on the actual drag-end
+  // signal: knobDragRef/handleKnobDragState already exists to pause the
+  // backend->local sync mid-drag, so it doubles as the release gate here.
+  // Refs track the latest optimistic value so the commit on release always
+  // sends what's on screen, not a stale closure. Alt/Option-click and
+  // double-tap reset (KnobControl) call onChange without ever toggling drag
+  // state, so they're covered separately: onChange commits immediately
+  // whenever knobDragRef isn't currently held (a real drag holds it, a
+  // reset/text-edit doesn't).
+  const irSizeRef = useRef(irSize);
+  irSizeRef.current = irSize;
+  const handleIrSizeChange = useCallback(
+    (val: number) => {
+      setIrSize(val);
+      irSizeRef.current = val;
+      if (!knobDragRef.current) actions.setBlockIrSize(blockId, val);
+    },
+    [actions, blockId]
+  );
+  const handleIrSizeDragState = useCallback(
+    (dragging: boolean) => {
+      handleKnobDragState(dragging);
+      if (!dragging) actions.setBlockIrSize(blockId, irSizeRef.current);
+    },
+    [handleKnobDragState, actions, blockId]
+  );
+
+  const irWidthRef = useRef(irWidth);
+  irWidthRef.current = irWidth;
+  const handleIrWidthChange = useCallback(
+    (val: number) => {
+      setIrWidth(val);
+      irWidthRef.current = val;
+      if (!knobDragRef.current) actions.setBlockIrWidth(blockId, val);
+    },
+    [actions, blockId]
+  );
+  const handleIrWidthDragState = useCallback(
+    (dragging: boolean) => {
+      handleKnobDragState(dragging);
+      if (!dragging) actions.setBlockIrWidth(blockId, irWidthRef.current);
+    },
+    [handleKnobDragState, actions, blockId]
+  );
+
+  // Cycles Off -> Std -> Lax -> Off. Both fields commit together in the one
+  // setBlockIrTrimInit call for every step (including Lax -> Off, which
+  // must also clear trimRelaxed so the next Off -> on lands on Std again,
+  // not stale-resumes on Lax) - one native call per click, so a click is
+  // always exactly one undo step, same shape as handleToggleEqEnabled above.
+  const handleCycleTrimMode = useCallback(() => {
+    const nextEnabled = !trimInit || !trimRelaxed;
+    const nextRelaxed = trimInit && !trimRelaxed;
+    setTrimInit(nextEnabled);
+    setTrimRelaxed(nextRelaxed);
+    actions.setBlockIrTrimInit(blockId, nextEnabled, nextRelaxed);
+  }, [actions, blockId, trimInit, trimRelaxed]);
+
+  const handleToggleReverse = useCallback(() => {
+    setReverse((prev) => {
+      actions.setBlockIrReverse(blockId, !prev);
+      return !prev;
+    });
+  }, [actions, blockId]);
+
+  // Resets every IR shaping field to default in one native call (a single
+  // undo step - see resetBlockIrShape's own doc comment), and mirrors that
+  // locally so every knob/chip/toggle this card renders snaps back
+  // immediately rather than waiting on the next chain-state poll.
+  const handleResetIrShape = useCallback(() => {
+    setInitLevel(1.0);
+    setAttackLength(0.0);
+    setAttackCurve(0.5);
+    setDecayLength(1.0);
+    setDecayLevel(1.0);
+    setDecayCurve(0.5);
+    setIrSize(0.5);
+    setIrWidth(0.75);
+    setTrimInit(false);
+    setTrimRelaxed(false);
+    setReverse(false);
+    actions.resetBlockIrShape(blockId);
+  }, [actions, blockId]);
+
+  // Sole source of truth for whether the loaded IR has a real stereo image
+  // (see ToneBlock.irNumChannels) - Width locks to mono/disabled without it.
+  const isMonoIr = (block.irNumChannels ?? 1) <= 1;
 
   // The envelope rebuilds the convolver off-thread (not a real-time
   // smoother like setBlockParam's continuous params), so it isn't safe to
@@ -636,7 +764,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       // Mirrors the native reset (setBlockIrCategory) so Mix doesn't lag a
       // poll behind; the mix param effect above picks up the converged
       // value once native's own resync lands.
-      setMix(category === 'cab' ? 1 : 0.5);
+      setMix(category === 'cab' ? 1 : 0.25);
       actions.setBlockIrCategory(blockId, category);
     },
     [actions, blockId]
@@ -892,6 +1020,17 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     () => lengthMsScale(block.irContentLengthMs),
     [block.irContentLengthMs]
   );
+  // Size's displayed % must reflect the same kIrSizeMaxEffectiveSeconds
+  // clamp the engine actually applies (see sizePercentScale in
+  // knobScale.ts) - otherwise a long source's knob would read "1000%" past
+  // the point where the audible effect is already capped. Deliberately
+  // irRawContentLengthMs, not irContentLengthMs: the latter is already
+  // scaled by Size's own clamped ratio, so using it here would be circular
+  // (the knob would read stuck at 100% forever once it ever clamped once).
+  const irSizeScale = useMemo(
+    () => sizePercentScale(block.irRawContentLengthMs),
+    [block.irRawContentLengthMs]
+  );
   const attackLengthScale = useMemo(
     () => attackLengthMsScale(decayLengthScale.toDisplay(decayLength)),
     [decayLengthScale, decayLength]
@@ -917,10 +1056,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const handOffLevelSane =
     block.outputLevelDbu !== undefined && block.outputLevelDbu >= -60 && block.outputLevelDbu <= 60;
   const normalizeOverridden = isNam && calibrateInput && namDownstream && handOffLevelSane;
-  // Cab loads full wet by default, IrPlayer half wet (native sets the mix on
+  // Cab loads full wet by default, IrPlayer 25% wet (native sets the mix on
   // first load from the block's IR category); Alt-click reset on Mix must
   // agree.
-  const defaultMix = isCab || block.irCategory === 'cab' ? 1 : 0.5;
+  const defaultMix = isCab || block.irCategory === 'cab' ? 1 : 0.25;
   // Every NAM block in the chain is A2 (the browser filters the catalog and
   // local drops are validated), so NAM badges always carry the A2 mark.
   const formatBadge = formatLabel(tone.format);
@@ -1262,6 +1401,18 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 </ChromeTextButton>
               </div>
 
+              {/* Resets every IR shaping field (envelope, Size, Width, Trim
+                Init, Reverse - not EQ, which has its own FLAT reset inside
+                the EQ pill above) to default in one step. Gated exactly
+                like the shaping UI itself (line ~1580 below): neither NAM
+                nor CAB carries these fields - CAB is "structurally minimal
+                by design", per ChainBlock.h. */}
+              {!isNam && !isCab && (
+                <ChromeTextButton help={HELP.blockResetShape} onClick={handleResetIrShape}>
+                  Reset
+                </ChromeTextButton>
+              )}
+
               {!isLocal && (
                 <ChromeIconButton open={showInfo} help={HELP.toneInfo} onClick={handleToggleInfo}>
                   <Info />
@@ -1300,7 +1451,25 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               display: 'flex',
               flexDirection: 'row',
               alignItems: 'stretch',
-              gap: showEq || showInfo ? 0 : '24rem',
+              // IR Player only: 20rem, not the shared 24rem - the control
+              // row's own internal gap (below) is 8rem, but In/Out (this
+              // Body-level gap's own neighbors) are bare 36rem rails with
+              // no inset of their own, while every item across that 8rem
+              // gap - Delay, Width - sits inset 12rem inside its own 60rem
+              // slot (room for "Delay"/"Width" to spill without clipping,
+              // see the slot comment below). So In->Delay and Mix->Out
+              // need this Body-level gap to carry that missing 12rem too
+              // (8 + 12 = 20) to visually match Delay->Size and Width->Mix
+              // (8 + 12 + 12 = 32) - confirmed by cropping a real
+              // screenshot and measuring the actual pixel gaps, not just
+              // eyeballing it: at a plain 8rem this gap measured
+              // ~30% narrower than the others. Widening it only grows the
+              // gap on both sides of the Center column equally (In/Out's
+              // own fixed-width rails don't move, and the flex:1 Center
+              // column - waveform included - just gets proportionally
+              // narrower, still symmetric left/right). NAM/CAB/showInfo
+              // keep the original 24rem - untouched, not part of this fix.
+              gap: showEq || showInfo ? 0 : !isNam && !isCab ? '20rem' : '24rem',
               padding: showEq
                 ? 0
                 : showInfo
@@ -1327,15 +1496,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               />
             ) : (
               <>
-                {/* Input rail: meter above In knob (Figma: gap 12). IR blocks
-                  add a Delay knob alongside In (not below it - see the
-                  nested row) - the meter wrapper is knob-wide and the
-                  column left-aligns, so the meter stays centered over In
-                  specifically regardless of whether Delay widens the row to
-                  its right (same technique as the Output rail's meter
-                  staying pinned to Out despite the normalize button widening
-                  that row to its left, just mirrored to the opposite
-                  edge). */}
+                {/* Input rail: meter above In knob (Figma: gap 12). Single
+                  knob, matching the Output rail and every other block type
+                  exactly - Delay/Size (IR Player only, no meters of their
+                  own) live in the shaping area's own knob row instead (see
+                  below the envelope chips), not here: widening this rail
+                  per extra knob used to squeeze the Center column's flex:1
+                  width, directly costing the waveform strip (see
+                  IR_WAVEFORM_HEIGHT's own history above for why that's
+                  worth avoiding). */}
                 {!showInfo && (
                   <div
                     style={{
@@ -1381,29 +1550,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         defaultValue={0.5}
                         help={HELP.blockIn}
                       />
-                      {/* IR blocks only (not CAB - no predelay field exists
-                        on that type at all): predelay before the wet signal
-                        enters the convolver - a real-time DSP stage
-                        (BlockPredelay), not part of the off-thread envelope
-                        rebuild, so it stays a knob here rather than joining
-                        the shaping row's faders. */}
-                      {!isNam && !isCab && (
-                        <KnobControl
-                          label="Delay"
-                          value={predelay}
-                          onChange={(val) => {
-                            setPredelay(val);
-                            setParam('predelay', val);
-                          }}
-                          onDragStateChange={handleKnobDragState}
-                          size={KNOB_SIZE_SECONDARY}
-                          labelBottom={false}
-                          thumb="secondary"
-                          scale={predelayMsScale}
-                          defaultValue={0}
-                          help={HELP.blockPredelay}
-                        />
-                      )}
                     </div>
                   </div>
                 )}
@@ -1423,7 +1569,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     alignSelf: 'stretch',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: showInfo ? '24rem' : isNam ? '16rem' : '10rem',
+                    // IR Player (else branch below) now stacks five items
+                    // here (identity, waveform, chips, the Delay/Size/Width
+                    // row, model picker) instead of three, so the gap
+                    // tightens from 10 to 8 to keep the header snug against
+                    // the top and everything comfortably inside the fixed
+                    // body height - validated against a standalone layout
+                    // mockup before landing here (see PR description).
+                    gap: showInfo ? '24rem' : isNam ? '16rem' : '6rem',
                     justifyContent: 'flex-start',
                   }}
                 >
@@ -1478,6 +1631,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                               height={IMAGE_SIZE}
                               contentLengthMs={block.irContentLengthMs}
                               cutFraction={cutFraction}
+                              startFraction={trimInit ? block.irOnsetFraction : undefined}
+                              reversed={reverse}
                               decay={{
                                 initLevel,
                                 attackCurve,
@@ -1492,6 +1647,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                               alt={tone.title}
                               gear={tone.gear}
                               local={tone.local}
+                              blockType={block.blockType}
                               boxSize={showInfo ? IMAGE_SIZE_INFO : IMAGE_SIZE}
                             />
                           )}
@@ -1721,7 +1877,12 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
                       {/* Waveform: full Center-column width, short strip -
                         the shape the future drag-to-shape v2 surface wants,
-                        and what frees the vertical room for the rows below. */}
+                        and what frees the vertical room for the rows below.
+                        marginBottom overrides the column's own 6rem gap
+                        down to 3rem for this one pair only (waveform ->
+                        chips specifically asked to sit tighter than the
+                        other gaps) without touching the gap above it
+                        (identity -> waveform stays the full 6rem). */}
                       <div
                         style={{
                           position: 'relative',
@@ -1730,6 +1891,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           borderRadius: '8rem',
                           overflow: 'hidden',
                           flexShrink: 0,
+                          marginBottom: '-3rem',
                         }}
                       >
                         <div
@@ -1756,6 +1918,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                               attackLengthScale={attackLengthScale}
                               decayLengthScale={decayLengthScale}
                               predelay={predelay}
+                              startFraction={trimInit ? block.irOnsetFraction : undefined}
+                              reversed={reverse}
                               onChange={updateEnvelope}
                               onDragStateChange={handleKnobDragState}
                             />
@@ -1798,21 +1962,37 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         (it's a real-time DSP stage, not part of this
                         off-thread envelope rebuild). Idle-debounced (see
                         commitEnvelope) - chip commits and graph drags both
-                        route through updateEnvelope, so they can't race. */}
+                        route through updateEnvelope, so they can't race.
+                        Trim Init and Reverse (last two, plain ToggleChips
+                        not EditableChips - see setBlockIrTrimInit/
+                        setBlockIrReverse; Trim cycles Off/Std/Lax via its
+                        `value` override, Rev stays a plain on/off) ride the
+                        same row since they're
+                        cheap, off-thread-rebuild shaping, same family as the
+                        six numeric ones, just boolean - toggleChipStyle
+                        gives them a narrower, matched width than the
+                        numeric chips (nothing to type, shorter labels/
+                        values) so the pair saves real row width rather than
+                        inheriting the numeric chips' "20.00s"-sized value
+                        area. flex-start + a small fixed gap, not
+                        space-between: with eight chips this still doesn't
+                        fill the card width, and space-between would stretch
+                        the leftover into large gaps instead of a compact
+                        cluster. */}
                       <div
                         style={{
                           display: 'flex',
                           flexDirection: 'row',
                           alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '6rem',
+                          justifyContent: 'flex-start',
+                          gap: '8rem',
                         }}
                       >
                         <EditableChip
                           label="Init"
                           text={percentScale.format(initLevel)}
                           editText={percentScale.editText(initLevel)}
-                          valueWidth={32}
+                          valueWidth={38}
                           fontSize={ENVELOPE_CHIP_FONT_SIZE}
                           onCommit={(raw) => commitEnvelopeField('initLevel', percentScale, raw)}
                           help={HELP.blockInitLevel}
@@ -1834,7 +2014,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           label="A Crv"
                           text={curveScale.format(attackCurve)}
                           editText={curveScale.editText(attackCurve)}
-                          valueWidth={32}
+                          valueWidth={38}
                           fontSize={ENVELOPE_CHIP_FONT_SIZE}
                           onCommit={(raw) => commitEnvelopeField('attackCurve', curveScale, raw)}
                           help={HELP.blockAttackCurve}
@@ -1856,7 +2036,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           label="D Lvl"
                           text={percentScale.format(decayLevel)}
                           editText={percentScale.editText(decayLevel)}
-                          valueWidth={32}
+                          valueWidth={38}
                           fontSize={ENVELOPE_CHIP_FONT_SIZE}
                           onCommit={(raw) => commitEnvelopeField('decayLevel', percentScale, raw)}
                           help={HELP.blockDecayLevel}
@@ -1866,29 +2046,337 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           label="D Crv"
                           text={curveScale.format(decayCurve)}
                           editText={curveScale.editText(decayCurve)}
-                          valueWidth={32}
+                          valueWidth={38}
                           fontSize={ENVELOPE_CHIP_FONT_SIZE}
                           onCommit={(raw) => commitEnvelopeField('decayCurve', curveScale, raw)}
                           help={HELP.blockDecayCurve}
                           style={chipStyle}
                         />
+                        <ToggleChip
+                          label="Trim"
+                          on={trimInit}
+                          value={trimInit ? (trimRelaxed ? 'Lax' : 'Std') : 'Off'}
+                          onToggle={handleCycleTrimMode}
+                          valueWidth={TOGGLE_CHIP_VALUE_WIDTH}
+                          fontSize={ENVELOPE_CHIP_FONT_SIZE}
+                          help={HELP.blockTrimInit}
+                          style={toggleChipStyle}
+                        />
+                        <ToggleChip
+                          label="Rev"
+                          on={reverse}
+                          onToggle={handleToggleReverse}
+                          valueWidth={TOGGLE_CHIP_VALUE_WIDTH}
+                          fontSize={ENVELOPE_CHIP_FONT_SIZE}
+                          help={HELP.blockReverse}
+                          style={toggleChipStyle}
+                        />
+                      </div>
+
+                      {/* Control row: Delay, Size, the model picker, Width,
+                        Mix - the five things between the In and Out rails,
+                        in that exact order (Width sits between the picker
+                        and Mix, not grouped with Delay/Size, so the row
+                        reads as In+Delay+Size mirroring Width+Mix+Out with
+                        the picker as the pivot). Pure justifyContent:
+                        'space-between' with no extra `gap` - the four knobs
+                        and the picker each keep their own intrinsic width,
+                        and the leftover row space becomes four *equal* gaps
+                        between them, regardless of how differently sized
+                        the picker is from a knob. Keeping Mix and the
+                        picker here (not in their own rail/column) is what
+                        lets the Center column - and the waveform/chips
+                        inside it - reach all the way from the Input rail to
+                        the Output rail instead of stopping short at a
+                        separate Mix column (see the Input rail's own
+                        comment for the general coupling, and the removed
+                        standalone Mix column's comment for this specific
+                        case). No meter/companion chrome needed for any of
+                        these five, so they never needed their own rail. */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'row',
+                          alignItems: 'flex-end',
+                          // Was justifyContent: 'space-between' (data-
+                          // dependent leftover-space split) - an explicit
+                          // gap here is the only way to guarantee every
+                          // one of these five gaps is the identical CSS
+                          // value. This row's own 8rem is deliberately
+                          // *not* the same number as the Body row's own
+                          // IR-Player gap (20rem, see the Body div's own
+                          // style) - In/Out are bare rails with no inset
+                          // of their own, while Delay/Size/Width/Mix each
+                          // sit inset 12rem inside their own 60rem slot
+                          // (room for "Delay"/"Width" to spill without
+                          // clipping, see the slot comment below), so the
+                          // Body row's gap has to carry that extra 12rem
+                          // itself for In->Delay/Mix->Out to *look* the
+                          // same width as Delay->Size/Width->Mix - a plain
+                          // matching 8rem at both levels left In->Delay and
+                          // Mix->Out visibly ~30% narrower, confirmed by
+                          // cropping a real screenshot and measuring the
+                          // actual pixel gaps. The picker needed the same
+                          // treatment: it was filling its own slot flush
+                          // while every knob sits inset 12rem within its
+                          // own - see the picker's own box below, which
+                          // now insets 12rem the same way. The picker's
+                          // own width is sized so five items at fixed
+                          // widths plus four 8rem gaps sums to the Center
+                          // column's actual available width, same
+                          // arithmetic as the two 8rem Body-level gaps
+                          // (12rem still read too loose on a real check).
+                          gap: '8rem',
+                          // The Center column is alignSelf: stretch (full
+                          // body height, matching the In/Out rails), but its
+                          // own children use justifyContent: flex-start -
+                          // packed from the top, not stretched - so without
+                          // this, this row just lands wherever
+                          // identity+waveform+chips's own heights happen to
+                          // end, with unused space below it, not at the
+                          // Center column's true bottom. marginTop: auto
+                          // absorbs that leftover space instead, landing
+                          // this row's own bottom - and via alignItems:
+                          // flex-end above, every knob's bottom edge - at
+                          // the Center column's actual bottom edge, the
+                          // same edge the In/Out rails (full-height,
+                          // flex-end internally) anchor their own knobs to.
+                          // The earlier attempts at this (a translateY nudge
+                          // on the picker alone) were compensating for the
+                          // wrong thing: not the picker vs. its row
+                          // neighbors, but the whole row vs. In/Out.
+                          marginTop: 'auto',
+                        }}
+                      >
+                        {/* Each knob sits in a fixed-width (60rem), centered
+                          slot - not left as a bare KnobControl. KnobControl's
+                          own label sits in a fixed 36rem-wide box (matching
+                          the knob) with overflow: visible (KnobControl.tsx),
+                          so a 5-letter label like "Delay"/"Width" can
+                          *visually* spill past its box without widening it -
+                          but the row's own space-between still measures
+                          gaps from each item's true (36rem) box edges, not
+                          the overflowed glyphs, and 60rem gives that spill
+                          room to breathe without visually crowding the
+                          neighboring item. Matching all four to the same
+                          slot width is what actually mattered here: it's
+                          not about any one knob being wrong-sized, it's
+                          about all four needing to be *identically* sized
+                          so space-between's equal-gap math (which operates
+                          on box edges) produces equal-looking gaps between
+                          the circles too. */}
+                        <div
+                          style={{
+                            width: '60rem',
+                            display: 'flex',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {/* Predelay before the wet signal enters the
+                            convolver - a real-time DSP stage (BlockPredelay),
+                            not part of the off-thread envelope rebuild. */}
+                          <KnobControl
+                            label="Delay"
+                            value={predelay}
+                            onChange={(val) => {
+                              setPredelay(val);
+                              setParam('predelay', val);
+                            }}
+                            onDragStateChange={handleKnobDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            labelBottom={false}
+                            thumb="secondary"
+                            scale={predelayMsScale}
+                            defaultValue={0}
+                            help={HELP.blockPredelay}
+                          />
+                        </div>
+                        <div
+                          style={{
+                            width: '60rem',
+                            display: 'flex',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {/* Size: vari-speed duration/pitch over the frozen
+                            source, applied upstream of the envelope natively
+                            (see setBlockIrSize). */}
+                          <KnobControl
+                            label="Size"
+                            value={irSize}
+                            onChange={handleIrSizeChange}
+                            onDragStateChange={handleIrSizeDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            labelBottom={false}
+                            thumb="secondary"
+                            variant="bipolar"
+                            scale={irSizeScale}
+                            defaultValue={0.5}
+                            help={HELP.blockIrSize}
+                          />
+                        </div>
+                        {/* Model picker: inline in the control row rather
+                          than its own row below - the full card height has
+                          no slack left for a whole extra row (confirmed by
+                          screenshotting the real running plugin, not just an
+                          isolated mockup: a separate row here pushed this
+                          picker entirely past the card's visible bottom
+                          edge). ModelSelect's name text already ellipses
+                          (see ModelSelect.tsx) and its prev/next chevrons
+                          have fixed intrinsic width, so a fixed, generous
+                          (not flex:1 - that would swallow the space-between
+                          gaps meant for the knobs either side of it) width
+                          renders cleanly at this size. NAM/CAB use the
+                          separate full-width picker below instead (this row
+                          doesn't exist for them). */}
+                        <div
+                          {...(!isLocal && !actions.authenticated
+                            ? helpProps(HELP.modelSelectSignedOut)
+                            : {})}
+                          style={{
+                            // Arithmetic, not a guess: Center column width
+                            // (CARD_WIDTH 800 - 2*BODY_PADDING 16 - Input
+                            // rail 36 - Output rail 36 - the Body row's own
+                            // 2*20rem IR-Player gaps either side of the
+                            // Center column = 656rem) minus four 60rem knob
+                            // slots (240) and four 8rem gaps (32) leaves
+                            // 384rem for the picker, so the five items plus
+                            // their four gaps exactly fill the same width
+                            // the Input/Center/Output rails already sum to -
+                            // if any of those constants (or either gap
+                            // value) change, this number needs to move
+                            // with them.
+                            width: '384rem',
+                            flexShrink: 0,
+                            // A knob's own visible face is 36rem, but it
+                            // sits centered in a 60rem slot - 12rem of
+                            // breathing room on each side before this row's
+                            // own 8rem `gap` even starts (room the "Delay"/
+                            // "Width" labels spill into, see the slot
+                            // comment above). The picker's own inner pill
+                            // fills its slot edge to edge with zero such
+                            // inset, so with a bare box the *visible* gap
+                            // either side of it was 24rem narrower than
+                            // every knob-to-knob gap - not a height issue at
+                            // all (a real screenshot, cropped/measured pixel
+                            // by pixel, showed the CSS gap value was already
+                            // correct; only the picker's own zero-inset
+                            // pill made it look otherwise). Padding this box
+                            // by the same 12rem each side - and letting
+                            // ModelSelect's own width:100% shrink to fill
+                            // the remainder - gives the picker the identical
+                            // visible inset a knob already has, without
+                            // changing this box's own 384rem footprint (so
+                            // the row-width arithmetic above still holds).
+                            boxSizing: 'border-box',
+                            padding: '0 12rem',
+                            // Matches a knob's own total column height
+                            // (label slot 17rem + KNOB_LABEL_GAP 8rem +
+                            // KNOB_SIZE_SECONDARY 36rem, see KnobControl.tsx)
+                            // - with alignItems: flex-end on both this box
+                            // and the row it sits in, only the *bottom* edge
+                            // this produces is load-bearing (a shorter box
+                            // still lands its content on the same baseline);
+                            // matching the real total height just keeps this
+                            // element's own footprint honest.
+                            height: '61rem',
+                            display: 'flex',
+                            alignItems: 'flex-end',
+                            cursor: isLocal || actions.authenticated ? 'default' : 'not-allowed',
+                          }}
+                        >
+                          <ModelSelect
+                            options={modelOptions.map((m) => ({ id: String(m.id), name: m.name }))}
+                            value={String(block.activeModelId)}
+                            onChange={handleModelSelect}
+                            onOpen={handleModelsOpen}
+                            height={KNOB_SIZE_SECONDARY}
+                            disabled={!isLocal && !actions.authenticated}
+                            loading={modelsLoading}
+                            totalCount={isLocal ? tone.models.length : modelsTotal}
+                          />
+                        </div>
+                        {/* Width: stereo-image crossfade/phase-inversion
+                          (see setBlockIrWidth); locked/dimmed when the
+                          loaded IR has no stereo image to widen. Same fixed
+                          60rem slot as Delay/Size/Mix - see this row's own
+                          comment on why they all need to match. */}
+                        <div
+                          className={uiOffClass(isMonoIr)}
+                          style={{
+                            width: '60rem',
+                            flexShrink: 0,
+                            display: 'flex',
+                            justifyContent: 'center',
+                            transition: 'opacity 0.2s ease',
+                          }}
+                        >
+                          <KnobControl
+                            label="Width"
+                            value={irWidth}
+                            onChange={handleIrWidthChange}
+                            onDragStateChange={handleIrWidthDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            labelBottom={false}
+                            thumb="secondary"
+                            variant="bipolar"
+                            scale={widthPercentScale}
+                            // 100%/full original stereo, not the bipolar
+                            // center (0%/mono) - Alt-click/double-tap should
+                            // reset to "unmodified", matching the block's
+                            // own load-time default (see ChainBlock::
+                            // widthNormalized's comment).
+                            defaultValue={0.75}
+                            help={isMonoIr ? HELP.blockIrWidthMono : HELP.blockIrWidth}
+                          />
+                        </div>
+                        <div
+                          style={{
+                            width: '60rem',
+                            display: 'flex',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {/* Mix: dry/wet blend. Lives here (not a separate
+                            column before the Output rail) so the Center
+                            column reaches all the way to that rail - see
+                            this row's own top comment. */}
+                          <KnobControl
+                            label="Mix"
+                            value={mix}
+                            onChange={(val) => {
+                              setMix(val);
+                              setParam('mix', val);
+                            }}
+                            onDragStateChange={handleKnobDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            labelBottom={false}
+                            thumb="secondary"
+                            defaultValue={defaultMix}
+                            help={HELP.blockMix}
+                          />
+                        </div>
                       </div>
                     </>
                   )}
 
-                  {/* Model picker: full width, below everything - matches the
-                    original layout. marginTop: auto absorbs the Center
-                    column's leftover height (identity/waveform/shaping-row
-                    don't fill the fixed body height on their own) so this
-                    stays bottom-aligned with the In/Delay/Mix/Out rails'
-                    knobs instead of floating above them. Switching catalog
-                    models re-downloads through native with a Bearer token,
-                    so the picker is inert while signed out - the wrapper
-                    carries the cursor + hint, as the select itself is
-                    pointer-events: none when disabled. Local switches read
-                    the stash: no auth, and the picker always shows (the
-                    dropped file names are the block's provenance). */}
-                  {!showInfo && (
+                  {/* Model picker: full width, below everything - NAM/CAB
+                    only (IR Player's own picker lives inline with
+                    Delay/Size/Width above instead - see that row's own
+                    comment). marginTop: auto absorbs the Center column's
+                    leftover height so this stays bottom-aligned with the
+                    In/Mix/Out rails' knobs instead of floating above them.
+                    Switching catalog models re-downloads through native
+                    with a Bearer token, so the picker is inert while signed
+                    out - the wrapper carries the cursor + hint, as the
+                    select itself is pointer-events: none when disabled.
+                    Local switches read the stash: no auth, and the picker
+                    always shows (the dropped file names are the block's
+                    provenance). */}
+                  {!showInfo && (isNam || isCab) && (
                     <div
                       {...(!isLocal && !actions.authenticated
                         ? helpProps(HELP.modelSelectSignedOut)
@@ -1912,8 +2400,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   )}
                 </div>
 
-                {/* Mix knob: bottom aligned, between the model select and the output rail */}
-                {!showInfo && (
+                {/* Mix knob: bottom aligned, between the model select and
+                  the output rail. NAM/CAB only - IR Player's Mix lives
+                  inline in the shaping area's own knob row instead (see
+                  above), not here: keeping it here too would reintroduce a
+                  separate column between the Center column and the Output
+                  rail, which is exactly what stopped the waveform strip
+                  short of reaching Out (see that row's own comment). */}
+                {!showInfo && (isNam || isCab) && (
                   <div
                     style={{
                       display: 'flex',

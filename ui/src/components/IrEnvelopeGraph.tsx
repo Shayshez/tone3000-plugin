@@ -129,6 +129,21 @@ export const IrEnvelopeGraph: React.FC<{
       change it. Not part of the envelope patch/onChange - a separate,
       real-time DSP stage. */
   predelay: number;
+  /** Trim Init's detected onset (ToneBlock.irOnsetFraction), 0..1 - only
+      meaningful (and only ever passed) while BlockParams.trimInit is on.
+      Same treatment as WaveformDisplay's own startFraction: a dimmed region
+      + line before it, the backdrop itself never re-crops. Omitted or <=0
+      hides it. */
+  startFraction?: number;
+  /** True while Reverse is on (BlockParams.reverse). Mirrors the backdrop
+      and every time-order-dependent overlay (grid, cut/start/predelay
+      lines, curve, points) horizontally as one rigid group transform - see
+      this component's own render for why that alone isn't enough and
+      graphPointFromEvent/the readout's position also need a matching
+      mirror to keep dragging feeling natural and reporting the right
+      parameter deltas. The length label stays unmirrored (mirrored text is
+      unreadable). */
+  reversed?: boolean;
   /** Called on every pointermove with just the axis/axes that point moves
       (Init: initLevel only; Peak: attackLength only; End: both decayLength
       and decayLevel together, so a diagonal drag commits as one native
@@ -150,6 +165,8 @@ export const IrEnvelopeGraph: React.FC<{
   attackLengthScale,
   decayLengthScale,
   predelay,
+  startFraction,
+  reversed,
   onChange,
   onDragStateChange,
 }) => {
@@ -189,6 +206,8 @@ export const IrEnvelopeGraph: React.FC<{
   const cutFraction = clamp(decayLength, 0, 1);
   const cutX = width * cutFraction;
   const attackFraction = clamp(attackLength, 0, 1);
+  const hasStart = Number.isFinite(startFraction) && (startFraction as number) > 0;
+  const startX = hasStart ? width * Math.min(1, startFraction as number) : 0;
 
   const hasDecay = initLevel !== 1 || decayLevel !== 1;
   const decayParams = { initLevel, attackCurve, attackFraction, decayLevel, decayCurve };
@@ -247,17 +266,26 @@ export const IrEnvelopeGraph: React.FC<{
   // Rect spans the padded viewBox (preserveAspectRatio="none" stretches it
   // exactly to the element's box), so a fraction across rect maps linearly
   // to [-EDGE_PAD, width+EDGE_PAD] / [-EDGE_PAD, height+EDGE_PAD], not to
-  // [0, width]/[0, height] directly.
+  // [0, width]/[0, height] directly. When reversed, the render group below
+  // is mirrored (scale(-1,1) translate(-width,0)) but this raw clientX->x
+  // math has no idea that happened - it always maps screen-left to a small
+  // x, screen-right to a large one. Mirroring x here too (width - x) is
+  // what makes a drag feel natural against the mirrored picture *and*
+  // report the correct sign to xToAttackFraction/xToDecayLength: both the
+  // rendering and this input are mirrored by the exact same amount, so
+  // "drag right on screen" still means "move the visually-right point
+  // further right" even though that now corresponds to a *smaller* raw x.
   const graphPointFromEvent = useCallback(
     (e: PointerEvent | React.PointerEvent) => {
       const rect = graphRef.current?.getBoundingClientRect();
       if (!rect) return { x: 0, y: 0 };
+      const rawX = ((e.clientX - rect.left) / rect.width) * (width + EDGE_PAD * 2) - EDGE_PAD;
       return {
-        x: ((e.clientX - rect.left) / rect.width) * (width + EDGE_PAD * 2) - EDGE_PAD,
+        x: reversed ? width - rawX : rawX,
         y: ((e.clientY - rect.top) / rect.height) * (height + EDGE_PAD * 2) - EDGE_PAD,
       };
     },
-    [width, height]
+    [width, height, reversed]
   );
 
   // Point reset (Init/Peak/End only, not the curve segments): Alt/Option-
@@ -466,11 +494,19 @@ export const IrEnvelopeGraph: React.FC<{
   // edge-avoidance: flip to sit below instead when there's no room above.
   const readoutAnchorPoint = readoutTarget ? readoutAnchor(readoutTarget) : null;
   const readoutNearTop = readoutAnchorPoint !== null && readoutAnchorPoint.y < height * 0.2;
+  // Anchor x is in the same pre-flip logical space the SVG render group
+  // mirrors away from - a plain HTML overlay outside that group needs its
+  // own mirror. EDGE_PAD is symmetric on both sides, so 100% minus the
+  // unmirrored percentage is exactly the percentage the mirrored anchor
+  // would produce (100 - (x+PAD)/vbw*100 = ((width-x)+PAD)/vbw*100).
+  const readoutLeftPct = readoutAnchorPoint
+    ? ((readoutAnchorPoint.x + EDGE_PAD) / viewBoxWidth) * 100
+    : 0;
   const readout = readoutTarget && readoutAnchorPoint && (
     <div
       style={{
         position: 'absolute',
-        left: `${((readoutAnchorPoint.x + EDGE_PAD) / viewBoxWidth) * 100}%`,
+        left: `${reversed ? 100 - readoutLeftPct : readoutLeftPct}%`,
         top: `${((readoutAnchorPoint.y + EDGE_PAD) / viewBoxHeight) * 100}%`,
         transform: `translate(-50%, ${readoutNearTop ? '40%' : '-140%'})`,
         padding: '3rem 6rem',
@@ -509,29 +545,37 @@ export const IrEnvelopeGraph: React.FC<{
             <stop offset="100%" stopColor={BRAND_RED} />
           </linearGradient>
         </defs>
-        <line
-          x1={0}
-          y1={height / 2}
-          x2={width}
-          y2={height / 2}
-          stroke="rgba(235, 235, 245, 0.18)"
-          strokeWidth={1}
-        />
-        {/* Background time grid: fainter than EQ's own grid (0.05 vs 0.07) -
-            this one has to stay out of the waveform/curve's way, not read as
-            a peer axis. */}
-        {gridLinesX.map((x, i) => (
+        {/* Reverse mirrors every time-order-dependent element as one rigid
+            group (waveform, grid, start/cut/predelay lines, curve, points) -
+            graphPointFromEvent and the readout's left% carry a matching
+            mirror outside this group (see their own comments), so dragging
+            still tracks the cursor and reports the right sign. The length
+            label below stays outside on purpose: mirrored text is
+            unreadable. */}
+        <g transform={reversed ? `scale(-1,1) translate(${-width},0)` : undefined}>
           <line
-            key={i}
-            x1={x}
-            y1={0}
-            x2={x}
-            y2={height}
-            stroke="rgba(235, 235, 245, 0.05)"
+            x1={0}
+            y1={height / 2}
+            x2={width}
+            y2={height / 2}
+            stroke="rgba(235, 235, 245, 0.18)"
             strokeWidth={1}
           />
-        ))}
-        {/* Under-curve fill (Space Designer style): the area between the
+          {/* Background time grid: fainter than EQ's own grid (0.05 vs 0.07) -
+              this one has to stay out of the waveform/curve's way, not read as
+              a peer axis. */}
+          {gridLinesX.map((x, i) => (
+            <line
+              key={i}
+              x1={x}
+              y1={0}
+              x2={x}
+              y2={height}
+              stroke="rgba(235, 235, 245, 0.05)"
+              strokeWidth={1}
+            />
+          ))}
+          {/* Under-curve fill (Space Designer style): the area between the
             envelope curve and the graph floor below it (where the waveform
             lives), not a flat rectangular wash - so it follows the curve's
             actual shape (thin near a deep cut, filling most of the height
@@ -540,57 +584,106 @@ export const IrEnvelopeGraph: React.FC<{
             distinction out of the way of the waveform's own yellow->red
             gradient and the white curve/points drawn on top of it. Rendered
             before the waveform so that stays fully crisp. */}
-        {fillPath && <path d={fillPath} fill="#ffffff" fillOpacity={0.06} />}
-        {waveformPath && (
-          <path
-            d={waveformPath}
-            fill={`url(#${gradientId})`}
-            fillOpacity={0.3}
-            stroke={`url(#${gradientId})`}
-            strokeWidth={1}
-            strokeOpacity={0.9}
-          />
-        )}
-        {cutFraction < 1 && (
-          <g>
-            <rect
-              x={cutX}
-              y={0}
-              width={width - cutX}
-              height={height}
-              fill="rgba(10, 10, 14, 0.55)"
+          {fillPath && <path d={fillPath} fill="#ffffff" fillOpacity={0.06} />}
+          {waveformPath && (
+            <path
+              d={waveformPath}
+              fill={`url(#${gradientId})`}
+              fillOpacity={0.3}
+              stroke={`url(#${gradientId})`}
+              strokeWidth={1}
+              strokeOpacity={0.9}
             />
+          )}
+          {hasStart && (
+            <g>
+              {/* Everything before the onset: this is what Trim Init
+                  removes - mirrors cutFraction's own dim/line, opposite
+                  edge. */}
+              <rect x={0} y={0} width={startX} height={height} fill="rgba(10, 10, 14, 0.55)" />
+              <line
+                x1={startX}
+                y1={0}
+                x2={startX}
+                y2={height}
+                stroke={MUTED}
+                strokeWidth={1.5}
+                strokeDasharray="3 2"
+              />
+            </g>
+          )}
+          {cutFraction < 1 && (
+            <g>
+              <rect
+                x={cutX}
+                y={0}
+                width={width - cutX}
+                height={height}
+                fill="rgba(10, 10, 14, 0.55)"
+              />
+              <line
+                x1={cutX}
+                y1={0}
+                x2={cutX}
+                y2={height}
+                stroke={MUTED}
+                strokeWidth={1.5}
+                strokeDasharray="3 2"
+              />
+            </g>
+          )}
+          {segments && (
+            <>
+              {segmentHitPath('attack', segments.attackPath)}
+              {segmentHitPath('decay', segments.decayPath)}
+              <path
+                d={segments.attackPath}
+                fill="none"
+                stroke={WHITE}
+                strokeWidth={1.5}
+                strokeOpacity={0.85}
+              />
+              <path
+                d={segments.decayPath}
+                fill="none"
+                stroke={WHITE}
+                strokeWidth={1.5}
+                strokeOpacity={0.85}
+              />
+            </>
+          )}
+          {/* Predelay indicator: a left-edge line mirroring the cut line's
+              own treatment (same stroke/dash), shown only when there's
+              actually a predelay to signal - zero visual cost at the
+              default (0) case. Display-only: the Delay knob in the Input
+              rail is still what changes this. Rendered after the fill/
+              waveform/curve so it stays visible on top of them at x=0 (the
+              *logical* x=0 - inside the flip group, so Reverse correctly
+              moves it to whichever edge is now "before sample 0"). */}
+          {predelay > 0 && (
             <line
-              x1={cutX}
+              x1={0}
               y1={0}
-              x2={cutX}
+              x2={0}
               y2={height}
               stroke={MUTED}
               strokeWidth={1.5}
               strokeDasharray="3 2"
             />
-          </g>
-        )}
-        {segments && (
-          <>
-            {segmentHitPath('attack', segments.attackPath)}
-            {segmentHitPath('decay', segments.decayPath)}
-            <path
-              d={segments.attackPath}
-              fill="none"
-              stroke={WHITE}
-              strokeWidth={1.5}
-              strokeOpacity={0.85}
-            />
-            <path
-              d={segments.decayPath}
-              fill="none"
-              stroke={WHITE}
-              strokeWidth={1.5}
-              strokeOpacity={0.85}
-            />
-          </>
-        )}
+          )}
+
+          {/* Points render last (on top) so they win hit-testing within
+              their own radius over anything drawn beneath them. */}
+          {ring('init', 0, initY)}
+          {hitCircle('init', 0, initY)}
+          {dot(0, initY)}
+          {ring('peak', peakX, 0)}
+          {hitCircle('peak', peakX, 0)}
+          {dot(peakX, 0)}
+          {ring('end', cutX, endY)}
+          {hitCircle('end', cutX, endY)}
+          {dot(cutX, endY)}
+        </g>
         {lengthLabel && (
           <g>
             <rect
@@ -613,35 +706,6 @@ export const IrEnvelopeGraph: React.FC<{
             </text>
           </g>
         )}
-        {/* Predelay indicator: a left-edge line mirroring the cut line's own
-            treatment (same stroke/dash), shown only when there's actually a
-            predelay to signal - zero visual cost at the default (0) case.
-            Display-only: the Delay knob in the Input rail is still what
-            changes this. Rendered after the fill/waveform/curve so it stays
-            visible on top of them at x=0. */}
-        {predelay > 0 && (
-          <line
-            x1={0}
-            y1={0}
-            x2={0}
-            y2={height}
-            stroke={MUTED}
-            strokeWidth={1.5}
-            strokeDasharray="3 2"
-          />
-        )}
-
-        {/* Points render last (on top) so they win hit-testing within their
-          own radius over anything drawn beneath them. */}
-        {ring('init', 0, initY)}
-        {hitCircle('init', 0, initY)}
-        {dot(0, initY)}
-        {ring('peak', peakX, 0)}
-        {hitCircle('peak', peakX, 0)}
-        {dot(peakX, 0)}
-        {ring('end', cutX, endY)}
-        {hitCircle('end', cutX, endY)}
-        {dot(cutX, endY)}
       </svg>
       {readout}
     </div>

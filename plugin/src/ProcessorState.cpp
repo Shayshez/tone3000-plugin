@@ -138,6 +138,11 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
   blockState.setProperty("decayLength", block.decayLengthNormalized, nullptr);
   blockState.setProperty("decayLevel", block.decayLevelNormalized, nullptr);
   blockState.setProperty("decayCurve", block.decayCurveNormalized, nullptr);
+  blockState.setProperty("size", block.sizeNormalized, nullptr);
+  blockState.setProperty("width", block.widthNormalized, nullptr);
+  blockState.setProperty("trimInit", block.trimInitEnabled, nullptr);
+  blockState.setProperty("trimRelaxed", block.trimRelaxed, nullptr);
+  blockState.setProperty("reverse", block.reverseEnabled, nullptr);
   blockState.setProperty("irCategory", irCategoryToString(block.irCategory), nullptr);
 
   if (block.type != ChainBlockType::INSERT) {
@@ -170,6 +175,22 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
       0.0f, 1.0f, static_cast<float>(blockState.getProperty("decayLevel", 1.0f)));
   block.decayCurveNormalized = juce::jlimit(
       0.0f, 1.0f, static_cast<float>(blockState.getProperty("decayCurve", 0.5f)));
+  block.sizeNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("size", 0.5f)));
+  // 0.75 (100%/full original stereo) fallback, not the knob's 0.5 center:
+  // a state saved before this field existed must restore to prior
+  // behavior (the IR's true stereo image), not silently fold to mono.
+  block.widthNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("width", 0.75f)));
+  // false fallback: state saved before this field existed (or that never
+  // turned it on) must restore to the untouched-source behavior, never
+  // silently start trimming audio the user never asked to trim.
+  block.trimInitEnabled = static_cast<bool>(blockState.getProperty("trimInit", false));
+  // Same false fallback/reasoning as trimInit above (and meaningless unless
+  // trimInitEnabled is true).
+  block.trimRelaxed = static_cast<bool>(blockState.getProperty("trimRelaxed", false));
+  // Same false fallback/reasoning as trimInit above.
+  block.reverseEnabled = static_cast<bool>(blockState.getProperty("reverse", false));
 
   // Empty ("" sentinel, via getProperty's default) means state saved before
   // this field existed: seed it once the model (re)loads and its real

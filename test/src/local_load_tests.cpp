@@ -43,6 +43,23 @@ juce::var firstToneBlock(TONE3000Processor& proc) {
   return {};
 }
 
+// waitForChainLoaded (chain_test_helpers.h) only checks `loaded`, which a
+// swap onto an *already*-loaded block never clears - it'd return true
+// instantly, before the swap's background category resolution has run.
+// Needed only for a swap's own settling (a fresh add's `loaded` genuinely
+// starts false, so waitForChainLoaded alone is enough there).
+bool waitForSwapSettled(TONE3000Processor& proc, int timeoutMs = 20000) {
+  const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+  while (juce::Time::getMillisecondCounter() < deadline) {
+    const juce::var block = firstToneBlock(proc);
+    if (!block.isVoid() && !static_cast<bool>(block["modelLoading"]) &&
+        static_cast<bool>(block["loaded"]))
+      return true;
+    juce::Thread::sleep(20);
+  }
+  return false;
+}
+
 }  // namespace
 
 TEST(LocalLoadTest, A2NamFileLoadsAsLocalBlock) {
@@ -118,6 +135,145 @@ TEST(LocalLoadTest, DropOnExistingToneBlockSwapsInPlace) {
   EXPECT_EQ(tones, 1);
 }
 
+// Bug fix, 2026-09-17: swapTone never armed/resolved irCategory for the
+// tone being swapped in - it read straight off whatever the block's
+// *previous* content had. Invisible for catalog-to-catalog swaps (every
+// non-cab catalog tone resolves to the same IrPlayer regardless) but real
+// for local drops: a plain unlabeled swap kept reusing the previous
+// content's category instead of re-guessing the new file's own duration.
+// Here the block starts long/IrPlayer (reverb) and swaps to short
+// (cab-ir-test, which IrMixDefaultsFollowKernelLength confirms guesses Cab
+// on a *fresh* load) - the guess must re-run against the new file, not
+// carry the old category over.
+TEST(LocalLoadTest, SwapReguessesCategoryFromNewContentNotStaleValue) {
+  TONE3000Processor proc;
+  const juce::var first =
+      proc.loadLocalTone("reverb-ir-mono-test", filesOf({testFileEntry("reverb-ir-mono-test.wav")}));
+  ASSERT_TRUE(first["blockId"].toString().isNotEmpty());
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  const juce::String blockId = first["blockId"].toString();
+  ASSERT_EQ(firstToneBlock(proc)["irCategory"].toString(), juce::String("irPlayer"));
+
+  const juce::var swapped = proc.loadLocalTone(
+      "cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}), blockId.toStdString());
+  EXPECT_TRUE(swapped["error"].isVoid()) << swapped["error"].toString().toStdString();
+  ASSERT_TRUE(waitForSwapSettled(proc));
+
+  EXPECT_EQ(firstToneBlock(proc)["irCategory"].toString(), juce::String("cab"))
+      << "swap kept the previous content's category instead of re-guessing the new file's own";
+}
+
+// Bug fix, 2026-09-17: dropping a local file onto an occupied tile kept
+// every one of the old content's mix/envelope values, when a dropped file
+// is expected to behave like a fresh add of that type - Mix in particular
+// has a real per-category rule (Cab 100%, IrPlayer 25%,
+// applyPreparedModelToChainBlock) that a stale carried-over value silently
+// violated. Starts long/IrPlayer (mix defaults 25%), hand-set to something
+// else entirely (90%) to prove it's not coincidentally already at the right
+// answer, then swaps to a short file with no forceGear - mix must land on
+// that new content's own Cab default (100%), matching what a completely
+// fresh drop of the same file onto an empty slot would produce (see
+// IrMixDefaultsFollowKernelLength).
+TEST(LocalLoadTest, SwapResetsMixToNewCategoryDefaultNotStaleValue) {
+  TONE3000Processor proc;
+  const juce::var first =
+      proc.loadLocalTone("reverb-ir-mono-test", filesOf({testFileEntry("reverb-ir-mono-test.wav")}));
+  ASSERT_TRUE(first["blockId"].toString().isNotEmpty());
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  const juce::String blockId = first["blockId"].toString();
+  ASSERT_FLOAT_EQ(static_cast<float>(firstToneBlock(proc)["params"]["mix"]), 0.25f);
+
+  ASSERT_TRUE(proc.setBlockParam(blockId.toStdString(), "mix", 0.9));
+  ASSERT_FLOAT_EQ(static_cast<float>(firstToneBlock(proc)["params"]["mix"]), 0.9f);
+
+  const juce::var swapped = proc.loadLocalTone(
+      "cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}), blockId.toStdString());
+  EXPECT_TRUE(swapped["error"].isVoid()) << swapped["error"].toString().toStdString();
+  ASSERT_TRUE(waitForSwapSettled(proc));
+
+  EXPECT_FLOAT_EQ(static_cast<float>(firstToneBlock(proc)["params"]["mix"]), 1.0f)
+      << "swap kept the previous content's mix instead of applying the new category's default";
+}
+
+// Same bug, but for the empty-slot split zone's explicit choice specifically
+// (AddTile.tsx/GalleryBlock.tsx's Cab/IR halves): forceGear must take effect
+// on a swap onto an *already-occupied* tile exactly like it does landing on
+// an empty slot, not get silently ignored because the target block already
+// existed.
+TEST(LocalLoadTest, ForceGearIrTakesEffectOnSwapOntoOccupiedTile) {
+  TONE3000Processor proc;
+  const juce::var first =
+      proc.loadLocalTone("a2-amp-test", filesOf({testFileEntry("a2-amp-test.nam")}));
+  ASSERT_TRUE(first["blockId"].toString().isNotEmpty());
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  const juce::String blockId = first["blockId"].toString();
+
+  const juce::var swapped =
+      proc.loadLocalTone("cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}),
+                         blockId.toStdString(), "ir");
+  EXPECT_TRUE(swapped["error"].isVoid()) << swapped["error"].toString().toStdString();
+  ASSERT_TRUE(waitForSwapSettled(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(block["irCategory"].toString(), juce::String("irPlayer"))
+      << "explicit IR choice was ignored on a swap onto an occupied tile";
+}
+
+// The empty-slot drop zone's explicit IR/Cab choice (AddTile.tsx's split
+// drop target, loadLocalTone's forceGear param): "cab" must override the
+// normal content-duration guess, landing on a real ChainBlockType::CAB
+// block even for a source (a ~2.67s reverb) that would otherwise guess
+// IrPlayer.
+TEST(LocalLoadTest, ForceGearCabOverridesDurationGuess) {
+  TONE3000Processor proc;
+  const juce::var res =
+      proc.loadLocalTone("reverb-ir-mono-test", filesOf({testFileEntry("reverb-ir-mono-test.wav")}),
+                         {}, "cab");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("cab"));
+  EXPECT_EQ(block["tone"]["gear"].toString(), juce::String("cab"));
+}
+
+// Bug fix, 2026-09-17: the "IR" half of the split drop zone must land the
+// block on IrCategory::IrPlayer explicitly, not just ChainBlockType::IR -
+// forceGear="ir" used to get collapsed to "no explicit gear" (useChainState.
+// ts) and/or read as "no explicit gear" by loadTone (ProcessorChain.cpp),
+// both of which fell through to the same content-duration guess a plain
+// unlabeled drop uses. For a short source (cab-ir-test.wav, ~500ms - the
+// exact fixture IrMixDefaultsFollowKernelLength below confirms guesses Cab
+// on its own) that silently overrode the user's explicit "IR" choice right
+// back to Cab, which is exactly the bug report this pins.
+TEST(LocalLoadTest, ForceGearIrOverridesDurationGuess) {
+  TONE3000Processor proc;
+  const juce::var res =
+      proc.loadLocalTone("cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}), {}, "ir");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(block["irCategory"].toString(), juce::String("irPlayer"))
+      << "explicit IR choice was overridden by the content-duration guess";
+}
+
+// forceGear is meaningless for a NAM-format tone (irCategoryFromGear/
+// toneEngineType only ever consult it when format != "nam") - must be a
+// pure no-op there, never accidentally reroute a NAM drop.
+TEST(LocalLoadTest, ForceGearCabIsInertForNamFiles) {
+  TONE3000Processor proc;
+  const juce::var res =
+      proc.loadLocalTone("a2-amp-test", filesOf({testFileEntry("a2-amp-test.nam")}), {}, "cab");
+  EXPECT_TRUE(res["error"].isVoid()) << res["error"].toString().toStdString();
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const juce::var block = firstToneBlock(proc);
+  EXPECT_EQ(block["blockType"].toString(), juce::String("nam"));
+}
+
 TEST(LocalLoadTest, IrMixDefaultsFollowKernelLength) {
   // Short (cab) IR: fully wet by default.
   {
@@ -128,14 +284,14 @@ TEST(LocalLoadTest, IrMixDefaultsFollowKernelLength) {
     EXPECT_FALSE(static_cast<bool>(block["irLong"]));
     EXPECT_FLOAT_EQ(static_cast<float>(block["params"]["mix"]), 1.0f);
   }
-  // Long (reverb) IR: half wet by default, same as a Select-flow load.
+  // Long (reverb) IR: 25% wet by default, same as a Select-flow load.
   {
     TONE3000Processor proc;
     proc.loadLocalTone("reverb-ir-mono-test", filesOf({testFileEntry("reverb-ir-mono-test.wav")}));
     ASSERT_TRUE(waitForChainLoaded(proc));
     const juce::var block = firstToneBlock(proc);
     EXPECT_TRUE(static_cast<bool>(block["irLong"]));
-    EXPECT_FLOAT_EQ(static_cast<float>(block["params"]["mix"]), 0.5f);
+    EXPECT_FLOAT_EQ(static_cast<float>(block["params"]["mix"]), 0.25f);
   }
 }
 

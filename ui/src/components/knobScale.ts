@@ -118,6 +118,60 @@ export const attackLengthMsScale = (totalMs: number): KnobScale => {
 /** Faceplate tone stack knobs: 0..10, 5 = flat. */
 export const toneScale = linearScale(0, 10, '', 1);
 
+/** Upper bound on Size's *effective* (post-stretch) duration in seconds -
+    mirrors kIrSizeMaxEffectiveSeconds in ChainBlock.h exactly. Must stay in
+    sync by hand, no shared code across the C++/TS boundary (same caveat as
+    irSizeDurationRatio below); see that constant's own comment for why this
+    value is what it is. */
+const IR_SIZE_MAX_EFFECTIVE_SECONDS = 20;
+
+/** Normalized 0..1 -> raw (unclamped) duration/pitch ratio: 0.1 at 0, 1 at
+    0.5, 10 at 1. Mirrors native's irSizeDurationRatio in ChainBlock.h
+    exactly - the two must stay in sync by hand, no shared code across the
+    C++/TS boundary. Exponential/log taper so halving/doubling playback
+    speed takes equal knob travel in either direction, the natural shape for
+    a ratio/speed control (same idea as crossoverHzScale's log map below). */
+const irSizeRawRatio = (n: number) => Math.pow(10, 2 * (n - 0.5));
+
+/** IR Size: vari-speed duration/pitch, normalized 0..1, 0.5 = 100% (center,
+    unchanged). Parameterized per block (mirrors lengthMsScale/
+    attackLengthMsScale above) because the display must reflect the same
+    kIrSizeMaxEffectiveSeconds clamp prepareIrShapeRebuild actually applies
+    (ChainBlock.h's irSizeClampedDurationRatio) - without this, a long
+    source's knob could read "1000%" while the audible effect is far less,
+    already clamped by the engine. contentLengthMs must be the block's
+    load-time, NOT-Size-scaled content length (ToneBlock.
+    irRawContentLengthMs) - passing the Size-scaled irContentLengthMs
+    instead (the value lengthMsScale takes) would be circular: it already
+    reflects the current clamped ratio, so re-deriving the clamp from it
+    converges wrong (the knob reads stuck at 100% forever once it ever
+    clamped once). fromDisplay intentionally inverts the *raw*, unclamped
+    ratio: the normalized value it returns is a genuine knob position, and
+    the clamp is
+    something the engine (and this same scale's toDisplay/format) applies
+    downstream of that position, not a re-quantization of the position
+    itself - matches how native never rewrites sizeNormalized either. */
+export const sizePercentScale = (contentLengthMs: number): KnobScale => {
+  const contentSeconds = contentLengthMs / 1000;
+  const effectiveRatio = (n: number) => {
+    const raw = irSizeRawRatio(n);
+    if (contentSeconds <= 0) return raw;
+    return Math.min(raw, IR_SIZE_MAX_EFFECTIVE_SECONDS / contentSeconds);
+  };
+  return {
+    toDisplay: (n) => 100 * effectiveRatio(n),
+    fromDisplay: (d) => 0.5 + Math.log10(Math.max(d, 0.001) / 100) / 2,
+    format: (n) => `${Math.round(100 * effectiveRatio(n))}%`,
+    editText: (n) => Math.round(100 * effectiveRatio(n)).toString(),
+  };
+};
+
+/** IR Width: stereo-image crossfade/phase-inversion, normalized 0..1, 0.5 =
+    0% (mono, center). Straight bipolar map to -200%..+200%: 0-100%
+    magnitude crossfades mono <-> the IR's real stereo image, 100-200%
+    layers on artificial widening (see prepareIrShapeRebuild). */
+export const widthPercentScale: KnobScale = linearScale(-200, 200, '%', 0);
+
 /** Bipolar one-sided delay: center = 0 ms, ends reach ±maxMs. Display shows
     the magnitude plus the delayed side ("15.0 ms R"). */
 const sidedMsScale = (maxMs: number): KnobScale => {

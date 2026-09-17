@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <string>
@@ -12,6 +13,49 @@
 #include "BlockSpectrum.h"
 #include "ChainOversampler.h"
 #include "NamEngine.h"
+
+// IR Size: vari-speed duration/pitch ratio from the normalized 0..1 knob
+// value (see ChainBlock::sizeNormalized). Exponential/log taper, not linear,
+// so halving/doubling playback speed takes equal knob travel in either
+// direction: 10% (10x faster, pitch up) at normalized=0, 100% (unchanged) at
+// 0.5, 1000% (10x slower, pitch down) at 1.0. This is a duration multiplier,
+// not a resample of the buffer itself - see prepareIrShapeRebuild's use of
+// it: the trimmed/enveloped buffer's sample *count* never changes, only the
+// sample rate declared to the convolver's loadImpulseResponse, which is what
+// actually produces the vari-speed effect (same mechanism as playing a file
+// back at the wrong sample rate). Shared by the rebuild (which needs the
+// effective declared rate) and the chain-state serializer (which needs the
+// resulting displayed length/D Len) so the two can never drift apart.
+inline float irSizeDurationRatio(float sizeNormalized) {
+  return std::pow(10.0f, 2.0f * (juce::jlimit(0.0f, 1.0f, sizeNormalized) - 0.5f));
+}
+
+// Upper bound on Size's *effective* (post-stretch) duration, regardless of
+// source length or how far the knob is turned. Measured, not guessed: with
+// a concurrent thread hammering chainMutex the way real UI activity does
+// (getChainState pulls, getIrWaveform panel reads, setBlockParam drags -
+// all things that briefly hold the lock processBlock's ordinary-contention
+// path falls back to blocking on, see Processor.cpp's own comment on that),
+// per-callback worst-case cost at a 512-sample/48kHz callback (10.667ms
+// budget) climbed from ~1.6ms at 6s effective tail to a confirmed
+// over-budget callback (10.88ms) at 60s, repeatably. 30s was tried first on
+// the strength of that callback-timing margin (~4.7ms worst case, well
+// under half the budget) but still produced audible crackles on long
+// source files in real-world use - the callback-timing measurement alone
+// wasn't the full risk picture. Tightened to 20s to leave real margin.
+// Only ever clamps the slow-down direction (a shorter effective duration is
+// never a real-time risk); irSizeClampedDurationRatio below is what
+// prepareIrShapeRebuild and the chain-state serializer actually use, so the
+// applied engine and the displayed length can never disagree.
+constexpr double kIrSizeMaxEffectiveSeconds = 20.0;
+
+inline float irSizeClampedDurationRatio(float sizeNormalized, double contentDurationSeconds) {
+  const float rawRatio = irSizeDurationRatio(sizeNormalized);
+  if (contentDurationSeconds <= 0.0)
+    return rawRatio;
+  const double maxRatio = kIrSizeMaxEffectiveSeconds / contentDurationSeconds;
+  return static_cast<float>(juce::jmin(static_cast<double>(rawRatio), maxRatio));
+}
 
 // Chain block types. CAB is a real cabinet IR block (site tones tagged
 // gear == "cab"; see parseToneForLoading/toneEngineType in ProcessorChain.cpp):
@@ -263,6 +307,44 @@ struct ChainBlock {
   // truth for the waveform display's auto-fit trim and the length label -
   // shipped to the UI as irContentLengthMs (ms, at irRawSampleRate).
   int irContentLengthSamples{0};
+  // Detected START of audible content within irRawSamples (file-rate
+  // samples): mirrors irContentLengthSamples but scans forward from sample
+  // 0 (see computeIrOnsetSamples) - where a leading-silence recording
+  // artifact actually ends. Deliberately untouched by every shaping edit,
+  // same as irContentLengthSamples; only trimInitEnabled decides whether
+  // prepareIrShapeRebuild actually starts its copy here instead of at 0.
+  // Load-time only: never re-measured on a Length/Decay/Size/Width edit.
+  int irOnsetSamples{0};
+  // Same detection, computed once more at load time with a higher (less
+  // sensitive) threshold - see computeIrOnsetSamples's thresholdDb param.
+  // Some IRs (slow-building reverb tails, room tone) clear -60dB well before
+  // their audible transient, so the standard threshold lands the onset too
+  // early; trimRelaxed switches to this instead of re-scanning on toggle.
+  int irOnsetSamplesRelaxed{0};
+  // User toggle for the above: off by default (deliberately NOT automatic -
+  // detecting "silence" by an RMS threshold is a heuristic, and applying it
+  // unconditionally on every load could clip an IR that's quiet-but-
+  // intentional at the very start). Persisted (see ProcessorState.cpp).
+  // Feeds prepareIrShapeRebuild as trimStartSamples (irOnsetSamples/
+  // irOnsetSamplesRelaxed when on, 0 when off) via
+  // setBlockIrTrimInit/rebuildIrShapeInBackground - the same off-thread-
+  // rebuild shape as sizeNormalized/widthNormalized.
+  bool trimInitEnabled{false};
+  // Which onset detection threshold trimInitEnabled uses: standard (false)
+  // or relaxed (true, irOnsetSamplesRelaxed). Meaningless while
+  // trimInitEnabled is false, but kept as its own field (rather than folded
+  // into a tri-state enum) so existing trimInitEnabled call sites/tests
+  // don't need to change - see setBlockIrTrimInit's relaxed param.
+  bool trimRelaxed{false};
+  // Reverse: plays the fully-shaped kernel backward. Off by default,
+  // manual-only (see setBlockIrReverse) - same coalesced off-thread-rebuild
+  // shape as trimInitEnabled, just a plain user preference with nothing to
+  // detect. Applied last in prepareIrShapeRebuild, after Trim Init's copy
+  // offset and the Attack/Decay envelope, so it reverses exactly what's
+  // audible (whatever shape the user already dialed in), not the raw
+  // source - and never disturbs Trim Init's own onset detection, which
+  // always scans irRawSamples in its true, un-reversed orientation.
+  bool reverseEnabled{false};
   std::vector<std::pair<float, float>> irWaveformPeaks;
 
   // Predelay: delays the wet signal before it enters the convolver (see
@@ -318,6 +400,36 @@ struct ChainBlock {
   float decayLengthNormalized{1.0f};
   float decayLevelNormalized{1.0f};
   float decayCurveNormalized{0.5f};
+
+  // IR Size: vari-speed duration/pitch over the frozen source (see
+  // irSizeDurationRatio above and setBlockIrSize). Normalized 0..1, 0.5 =
+  // 100%/unchanged. Applied upstream of the envelope in
+  // prepareIrShapeRebuild (it only changes the declared sample rate handed
+  // to the convolver, never the trimmed buffer's sample count), so every
+  // envelope fraction above keeps landing at the same relative position
+  // automatically - no special-casing needed between the two.
+  float sizeNormalized{0.5f};
+
+  // IR Width: stereo image control, independent of the chain-level Balance/
+  // Pan/Align controls (see setBlockIrWidth). Normalized 0..1, 0.5 = 0%/
+  // mono (the knob's bipolar center). 0..100% (normalized 0.25..0.75)
+  // crossfades mono <-> the IR's own recorded stereo image; sign (which
+  // half of 0..1 it's on) only flips L/R orientation there, not the blend
+  // amount. Beyond 100% (normalized <0.25 or >0.75) adds partial phase
+  // inversion of one channel - which channel is picked by the same sign,
+  // not by magnitude (see prepareIrShapeRebuild). Locked at 0% in the UI
+  // whenever the loaded IR is mono (irNumChannels == 1), since there's no
+  // stereo image to widen; never applied to convolverMono, which always
+  // stays the untouched-image fallback engine.
+  //
+  // Default is 0.75 (100%/full original stereo), deliberately NOT the
+  // knob's own 0.5 center: 0.5 is genuinely mono, and every stereo IR
+  // played its true recorded image unconditionally before this control
+  // existed - defaulting new/existing blocks to 0.5 would silently fold
+  // them to mono on load. 0.75 preserves that exact prior behavior as the
+  // no-op starting point; the knob's visual center is just where 0% lives
+  // on its bipolar track, not where it starts.
+  float widthNormalized{0.75f};
 
   // Bumped by setBlockIrDecay, captured by rebuildIrShapeInBackground's
   // caller as the generation it's targeting: a "latest wins" supersede

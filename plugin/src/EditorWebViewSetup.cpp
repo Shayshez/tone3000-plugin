@@ -180,16 +180,21 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.loadTone(args[0].toString(), targetInsertId));
           }))
       .withNativeFunction(
-          // (title, files, targetInsertId?): local .nam/.wav file(s) dropped
-          // on an insert slot (one for a file, many for a folder). The
-          // webview can't hand over file paths, so the bytes ride the bridge
-          // as [{ name, data }] with base64 data; native validates, stashes
-          // and loads them as one block (see loadLocalTone). Returns
-          // { blockId } or a user-facing { error }.
+          // (title, files, targetInsertId?, forceGear?): local .nam/.wav
+          // file(s) dropped on an insert slot (one for a file, many for a
+          // folder). The webview can't hand over file paths, so the bytes
+          // ride the bridge as [{ name, data }] with base64 data; native
+          // validates, stashes and loads them as one block (see
+          // loadLocalTone). forceGear is the empty-slot drop zone's
+          // explicit IR/Cab choice (AddTile.tsx's split drop target) -
+          // "cab" or empty/omitted. Returns { blockId } or a user-facing
+          // { error }.
           "loadLocalTone", guarded(2, juce::var(), [editor](const juce::Array<juce::var>& args) {
             const std::string targetInsertId =
                 args.size() >= 3 ? args[2].toString().toStdString() : std::string();
-            return editor->processor.loadLocalTone(args[0].toString(), args[1], targetInsertId);
+            const juce::String forceGear = args.size() >= 4 ? args[3].toString() : juce::String();
+            return editor->processor.loadLocalTone(args[0].toString(), args[1], targetInsertId,
+                                                   forceGear);
           }))
       .withNativeFunction(
           // (pickFolder, targetBlockId?): the tile menus' Load File / Load
@@ -397,6 +402,61 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 args[0].toString().toStdString(), coerceDouble(args[1]), coerceDouble(args[2]),
                 coerceDouble(args[3]), coerceDouble(args[4]), coerceDouble(args[5]),
                 coerceDouble(args[6])));
+          }))
+      .withNativeFunction(
+          // (blockId, sizeNormalized): vari-speed duration/pitch over the
+          // block's frozen source, 0..1, 0.5 = 100%/unchanged (see
+          // irSizeDurationRatio in ChainBlock.h). Same off-thread rebuild
+          // shape as setBlockIrDecay; the caller debounces drag-rate calls
+          // to one per gesture (on release), same as that one isn't
+          // fire-and-forget-safe at knob-drag rates. Rides getChainState as
+          // params.size.
+          "setBlockIrSize", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setBlockIrSize(
+                args[0].toString().toStdString(), coerceDouble(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, widthNormalized): stereo-image crossfade/phase-
+          // inversion width, 0..1, 0.5 = 0%/mono (see ChainBlock::
+          // widthNormalized). Same off-thread rebuild shape and drag-rate
+          // caveat as setBlockIrSize; false (no rebuild queued) when the
+          // loaded IR is mono. Rides getChainState as params.width.
+          "setBlockIrWidth", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setBlockIrWidth(
+                args[0].toString().toStdString(), coerceDouble(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, enabled, relaxed?): manual leading-silence trim toggle
+          // (see ChainBlock::trimInitEnabled/irOnsetSamples) - off by
+          // default, never applied automatically. `relaxed` (default false)
+          // picks the less-sensitive onset threshold (ChainBlock::
+          // trimRelaxed/irOnsetSamplesRelaxed) for sources whose standard
+          // detection lands too early. Same off-thread rebuild shape as
+          // setBlockIrSize/setBlockIrWidth. Rides getChainState as
+          // params.trimInit/params.trimRelaxed.
+          "setBlockIrTrimInit", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setBlockIrTrimInit(
+                args[0].toString().toStdString(), coerceBool(args[1]),
+                args.size() > 2 ? coerceBool(args[2]) : false));
+          }))
+      .withNativeFunction(
+          // (blockId, enabled): manual reverse-playback toggle (see
+          // ChainBlock::reverseEnabled) - off by default. Same off-thread
+          // rebuild shape as setBlockIrSize/setBlockIrWidth/setBlockIrTrimInit.
+          // Rides getChainState as params.reverse.
+          "setBlockIrReverse", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setBlockIrReverse(
+                args[0].toString().toStdString(), coerceBool(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId): resets every IR shaping parameter (Init/Attack/Decay,
+          // Size, Width, Trim Init, Reverse) to default in one step - a
+          // single undo entry regardless of how many fields actually
+          // change. Same off-thread rebuild plumbing as the individual
+          // setters.
+          "resetBlockIrShape", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.resetBlockIrShape(args[0].toString().toStdString()));
           }))
       .withNativeFunction(
           // (blockId, bandIndex, { type, freqHz, gainDb, q }). Whole-band

@@ -93,9 +93,17 @@ public:
   // to catalog tones. Unlike catalog tones the full model list stays in the
   // stored tone JSON (there is no API catalog to page the others back in
   // from). Returns { blockId } on success or { error } with a user-facing
-  // message.
+  // message. `forceGear` is the empty-slot drop zone's explicit IR/Cab
+  // choice (see AddTile.tsx's split drop target) - "cab" synthesizes the
+  // local tone JSON's `gear` tag exactly like a catalog cab tone, so it
+  // resolves to a real ChainBlockType::CAB block (see irCategoryFromGear/
+  // parseToneForLoading, ProcessorChain.cpp) instead of the duration-guess
+  // heuristic every local drop used before this existed. Empty (the
+  // default) keeps that exact prior behavior - a plain IR block, category
+  // guessed from content once loaded.
   juce::var loadLocalTone(const juce::String& title, const juce::var& files,
-                          const std::string& targetInsertId = {});
+                          const std::string& targetInsertId = {},
+                          const juce::String& forceGear = {});
   // Path-based sibling of loadLocalTone for files native already has on
   // disk: the tile menus' Load File / Load Folder pickers (the webview
   // drop path can't hand over paths, so it ships base64 instead). A
@@ -316,6 +324,54 @@ public:
                        double attackLengthNormalized, double attackCurveNormalized,
                        double decayLengthNormalized, double decayLevelNormalized,
                        double decayCurveNormalized);
+
+  // IR Size: vari-speed duration/pitch (see irSizeDurationRatio in
+  // ChainBlock.h and ChainBlock::sizeNormalized for the exact taper).
+  // Normalized 0..1, 0.5 = 100%/unchanged, always resampled fresh from the
+  // block's frozen irRawSamples (never from a previously-shaped buffer, so
+  // repeated adjustments can't compound quality loss). Same coalesced-
+  // rebuild plumbing as setBlockIrDecay (bumps irShapingGeneration, queues
+  // rebuildIrShapeInBackground on the loader pool); the UI commits it once
+  // per drag gesture (on release), not continuously. Undoable. False for a
+  // block that isn't a loaded IR.
+  bool setBlockIrSize(const std::string& blockId, double sizeNormalized);
+
+  // IR Width: stereo-image control independent of the chain-level Balance/
+  // Pan/Align controls (see ChainBlock::widthNormalized for the exact
+  // mono<->stereo crossfade / beyond-100% phase-inversion shape). Normalized
+  // 0..1, 0.5 = 0%/mono. No-ops (returns false, no rebuild queued) on a
+  // mono-source IR block (irNumChannels == 1) - there's no stereo image to
+  // widen, matching the UI's disabled knob. Same coalesced off-thread
+  // rebuild plumbing and undo/redo as setBlockIrDecay/setBlockIrSize.
+  bool setBlockIrWidth(const std::string& blockId, double widthNormalized);
+
+  // Trim Init: manually-toggled leading-silence removal (see ChainBlock::
+  // trimInitEnabled/irOnsetSamples for the load-time detection and why it's
+  // opt-in, never automatic). `relaxed` picks the higher, less-sensitive
+  // detection threshold (ChainBlock::irOnsetSamplesRelaxed) for IRs whose
+  // audible transient builds up slowly enough that the standard threshold
+  // finds "onset" too early; defaulted false so existing 2-arg call sites
+  // keep the original behavior unchanged. Same coalesced off-thread rebuild
+  // plumbing and undo/redo as setBlockIrDecay/setBlockIrSize/setBlockIrWidth;
+  // a no-op (returns true, no rebuild queued) when already at the requested
+  // state (both enabled and relaxed).
+  bool setBlockIrTrimInit(const std::string& blockId, bool enabled, bool relaxed = false);
+
+  // Reverse: manually-toggled backward playback of the fully-shaped kernel
+  // (see ChainBlock::reverseEnabled). Same coalesced off-thread rebuild
+  // plumbing and undo/redo as setBlockIrDecay/Size/Width/TrimInit; a no-op
+  // (returns true, no rebuild queued) when already at the requested state.
+  bool setBlockIrReverse(const std::string& blockId, bool enabled);
+
+  // Resets every IR shaping parameter to default in one step: Init/Attack/
+  // Decay (Length/Level/Curve), Size, Width, Trim Init, and Reverse - the
+  // exact set blockHasNonDefaultIrShape checks (ProcessorChain.cpp). A
+  // single pushChainHistory() call regardless of how many fields actually
+  // change, so undo restores every one of them together, not one step per
+  // field. A no-op (returns true, no history entry, no rebuild queued) when
+  // the block is already at every default. Same off-thread rebuild plumbing
+  // as the individual setters; false for a block that isn't a loaded IR.
+  bool resetBlockIrShape(const std::string& blockId);
 
   // Default NAM A2 size for newly added blocks (machine-wide user setting,
   // like multi-core), in the same slimmable-size domain. Existing blocks
@@ -540,6 +596,16 @@ private:
   // computed once at load, in file-rate samples.
   static int computeIrContentLengthSamples(const juce::AudioBuffer<float>& samples,
                                            double sampleRate);
+  // Where the IR's audible content STARTS: mirrors
+  // computeIrContentLengthSamples exactly (thresholdDb relative to peak, ~2ms
+  // pooled-RMS windows) but scans forward from sample 0 and backs off by a
+  // margin (same 5ms-floor-or-10%-of-detected-span rule) so the attack
+  // transient itself is never clipped. Feeds Trim Init (ChainBlock::
+  // irOnsetSamples/irOnsetSamplesRelaxed, the latter from a second call with
+  // a higher thresholdDb) - opt-in, see setBlockIrTrimInit - never applied
+  // automatically. Computed once at load, in file-rate samples.
+  static int computeIrOnsetSamples(const juce::AudioBuffer<float>& samples, double sampleRate,
+                                   float thresholdDb = -60.0f);
   // Downsampled { min, max } per column across the first `contentLengthSamples`
   // of the buffer (all channels combined, mono-ish display, not a true stereo
   // waveform) - the source data for the block card's static waveform view.
@@ -563,10 +629,14 @@ private:
   // Shared tail of loadLocalTone / loadLocalTonePath: dedupe the stashed
   // models by content id, synthesize the local tone JSON, and route it
   // through swapTone (existing tone tile) or loadTone (insert slot).
+  // `forceGear` becomes the synthesized tone's own `gear` property - see
+  // loadLocalTone's own comment. Defaults empty (prior behavior) so
+  // loadLocalTonePath's own callers need no change.
   juce::var finishLocalToneLoad(const juce::String& title,
                                 const juce::Array<juce::var>& stashedModels,
                                 const juce::String& firstError, int fileCount,
-                                const std::string& targetInsertId);
+                                const std::string& targetInsertId,
+                                const juce::String& forceGear = {});
 
   /** Largest frame count the chain stage can see per boundary callback at the
       base rate: the host max block size converted to 48 kHz frames (and never
@@ -611,6 +681,11 @@ private:
     // Detected end of audible content (file-rate samples), from
     // computeIrContentLengthSamples; see ChainBlock::irContentLengthSamples.
     int irContentLengthSamples = 0;
+    // Detected start of audible content (file-rate samples), from
+    // computeIrOnsetSamples; see ChainBlock::irOnsetSamples.
+    int irOnsetSamples = 0;
+    // Same, at the relaxed threshold; see ChainBlock::irOnsetSamplesRelaxed.
+    int irOnsetSamplesRelaxed = 0;
     // Downsampled { min, max } per column for the static waveform display.
     std::vector<std::pair<float, float>> irWaveformPeaks;
   };
@@ -653,19 +728,39 @@ private:
       power-curve shape - see the .cpp for the exact formula) over the
       truncated content, then a short fade-out over the cut point (always,
       regardless of the envelope - the click-free guarantee shouldn't
-      depend on where Decay Level happens to land), and builds engine(s) of
-      the given (frozen) short/long shape. No file/network I/O: `rawSamples`
-      is the block's own already-loaded ChainBlock::irRawSamples, just a
-      copy so the caller's original stays untouched. */
+      depend on where Decay Level happens to land). `sizeNormalized`
+      (irSizeDurationRatio) is applied on top as a declared-sample-rate
+      scale at the loadImpulseResponse call, upstream of nothing else in
+      this function - it never touches the trimmed buffer's sample count,
+      so every fraction above still lands where it says regardless of Size.
+      `widthNormalized` reshapes a *separate* copy of the trimmed/enveloped
+      buffer for the stereo engine only (mono-fallback convolverMono always
+      keeps the untouched image); no-op when `irNumChannels` is 1.
+      `trimStartSamples` (0 when Trim Init is off) shifts where the copy
+      into the trimmed buffer starts within `rawSamples` - the block's
+      detected onset (ChainBlock::irOnsetSamples) when on, so a source's
+      own leading silence stops masquerading as unwanted predelay; every
+      other length here (Decay Length's total, Size's clamp reference) is
+      measured relative to that same shifted start, never re-including the
+      skipped silence. `reverseEnabled` flips the trimmed/enveloped buffer
+      end-for-end - applied last, after the envelope and its fade-out, so it
+      reverses exactly what's audible (whatever shape was dialed in), not
+      the raw source; independent of trimStartSamples's own detection,
+      which always scans the source in its true orientation. Builds
+      engine(s) of the given (frozen) short/long shape. No file/network I/O:
+      `rawSamples` is the block's own already-loaded ChainBlock::
+      irRawSamples, just a copy so the caller's original stays untouched. */
   PreparedIrShapeRebuild prepareIrShapeRebuild(const juce::AudioBuffer<float>& rawSamples,
                                                double rawSampleRate, int origContentLengthSamples,
+                                               int trimStartSamples, bool reverseEnabled,
                                                int irNumChannels, bool engineLongIr,
                                                float initLevelNormalized,
                                                float attackLengthNormalized,
                                                float attackCurveNormalized,
                                                float decayLengthNormalized,
                                                float decayLevelNormalized,
-                                               float decayCurveNormalized);
+                                               float decayCurveNormalized,
+                                               float sizeNormalized, float widthNormalized);
 
   /** Short path under `chainMutex` only: swaps the new engines onto `block`
       and stamps `newType` (a tone swap may change the block's type; the old

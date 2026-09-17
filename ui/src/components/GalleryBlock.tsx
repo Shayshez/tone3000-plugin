@@ -9,7 +9,6 @@ import {
   PlusCircle,
   Power,
   Trash2,
-  Upload,
 } from './icons';
 import { BlockEnergyBorder, BlockLed } from './BlockLed';
 import { ToneImage } from './GearIcon';
@@ -24,7 +23,7 @@ import { TileMenu } from './TileMenu';
 import type { TileMenuAnchor, TileMenuItem } from './TileMenu';
 import type { ChainActions } from '../hooks/useChainActions';
 import { useToast } from './Toast';
-import { GRAY, ICON_SIZE, SURFACE, SURFACE_RAISED } from './theme';
+import { FONT_MONO, HIGHLIGHT, ICON_SIZE, SURFACE, SURFACE_RAISED, WHITE } from './theme';
 import { IS_IOS } from '../hooks/useUiScale';
 
 /**
@@ -46,7 +45,6 @@ const DRAG_GHOST_OPACITY = 0.75;
 const FILE_DROP_BORDER = '2rem dashed rgba(0, 209, 59, 0.50)';
 const ADD_TILE_BORDER_WIDTH = 2;
 const ADD_TILE_BORDER = `${ADD_TILE_BORDER_WIDTH}rem dashed rgba(141, 141, 147, 0.65)`;
-const FILE_DROP_ICON_SIZE = 36;
 
 const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes('Files');
 
@@ -240,6 +238,55 @@ interface TileActions {
   onRetryLoad: () => void;
 }
 
+/** The two-half IR/Cab drop target shown while a file drag is armed -
+    shared by AddTile (an empty slot) and GalleryBlock's own occupied-tile
+    drop (see TileSurface) so both entry points route a dropped local .wav
+    the same way: IR always lands a plain IR block (content-duration guess
+    decides Cab/IrPlayer within it, same as before this existed); Cab forces
+    a real ChainBlockType::CAB block regardless of the file's own length
+    (see loadLocalTone's forceGear param) - no more "drop, then notice it
+    guessed wrong, then convert" two-step, on an empty slot or an existing
+    tile alike. */
+const SplitFileDropZone: React.FC<{
+  hoverHalf: 'ir' | 'cab' | null;
+  onArmHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
+  onDropOnHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
+}> = ({ hoverHalf, onArmHalf, onDropOnHalf }) => {
+  const half = (category: 'ir' | 'cab', label: string) => (
+    <div
+      onDragOver={onArmHalf(category)}
+      onDrop={onDropOnHalf(category)}
+      style={{
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: hoverHalf === category ? HIGHLIGHT : 'transparent',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: '13rem',
+          fontWeight: 400,
+          color: WHITE,
+          textTransform: 'uppercase',
+          pointerEvents: 'none',
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+      {half('ir', 'IR')}
+      <div style={{ width: '1rem', backgroundColor: 'rgba(235, 235, 245, 0.24)' }} />
+      {half('cab', 'Cab')}
+    </div>
+  );
+};
+
 /**
  * The complete tile visual: artwork, loading scrim, top action strip and
  * bottom meter. `dragging` pins the action strip visible while the tile
@@ -250,10 +297,26 @@ const TileSurface: React.FC<{
   size: number;
   enabled: boolean;
   dragging: boolean;
-  /** OS file drag is hovering this tile (upload icon + dashed green border). */
+  /** OS file drag is hovering this tile (split IR/Cab drop target + dashed
+      green border) - same split treatment as an empty slot's AddTile, so
+      swapping an occupied tile's content routes IR/Cab exactly like adding
+      a new one instead of falling back to the old single-zone guess. */
   dropArmed: boolean;
+  hoverHalf: 'ir' | 'cab' | null;
+  onArmHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
+  onDropOnHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   actions: TileActions;
-}> = ({ block, size, enabled, dragging, dropArmed, actions }) => {
+}> = ({
+  block,
+  size,
+  enabled,
+  dragging,
+  dropArmed,
+  hoverHalf,
+  onArmHalf,
+  onDropOnHalf,
+  actions,
+}) => {
   const { blockId, tone } = block;
 
   // A model download/prepare is in flight: `modelLoading` covers switches
@@ -296,16 +359,12 @@ const TileSurface: React.FC<{
         }}
       >
         {dropArmed ? (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Upload size={FILE_DROP_ICON_SIZE} color={GRAY} />
+          <div style={{ position: 'absolute', inset: 0 }}>
+            <SplitFileDropZone
+              hoverHalf={hoverHalf}
+              onArmHalf={onArmHalf}
+              onDropOnHalf={onDropOnHalf}
+            />
           </div>
         ) : (
           <div
@@ -321,6 +380,7 @@ const TileSurface: React.FC<{
               alt={tone.title}
               gear={tone.gear}
               local={tone.local}
+              blockType={block.blockType}
               boxSize={size}
               iconSize={64}
               draggable={false}
@@ -455,8 +515,12 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
     // (same pattern as the detail card).
     const [enabled, setEnabled] = useState(params.enabled);
     useEffect(() => setEnabled(params.enabled), [params.enabled]);
-    // True while an OS file drag hovers the tile (upload icon + green dash).
+    // True while an OS file drag hovers the tile (split IR/Cab drop target +
+    // green dash - see SplitFileDropZone/AddTile's own copy of this same
+    // pattern, which this mirrors so an occupied tile routes a dropped
+    // local file exactly like an empty slot does).
     const [dropArmed, setDropArmed] = useState(false);
+    const [hoverHalf, setHoverHalf] = useState<'ir' | 'cab' | null>(null);
 
     const { ref, isDragging } = useSortable({ id: blockId, index, group });
 
@@ -471,13 +535,23 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
       [actions, blockId]
     );
 
-    const handleDrop = async (e: React.DragEvent) => {
+    const handleDropOnHalf = (category: 'ir' | 'cab') => async (e: React.DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       setDropArmed(false);
+      setHoverHalf(null);
       const item = e.dataTransfer.items[0];
       if (!item) return;
-      const error = await actions.loadLocalFile(blockId, item);
+      const error = await actions.loadLocalFile(blockId, item, category);
       if (error) toast.show(error);
+    };
+
+    const armHalf = (category: 'ir' | 'cab') => (e: React.DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      setHoverHalf(category);
     };
 
     return (
@@ -486,8 +560,10 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
         onContextMenu={openMenu}
         {...longPressProps}
         onDragOver={(e) => armFileDrag(e, setDropArmed)}
-        onDragLeave={(e) => disarmFileDrag(e, setDropArmed)}
-        onDrop={handleDrop}
+        onDragLeave={(e) => {
+          disarmFileDrag(e, setDropArmed);
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverHalf(null);
+        }}
         style={{
           // Dim the tile while it travels with the pointer; the hidden
           // placeholder dnd-kit leaves in the lane reveals the plus-circle
@@ -505,6 +581,9 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
           enabled={enabled}
           dragging={isDragging}
           dropArmed={dropArmed}
+          hoverHalf={hoverHalf}
+          onArmHalf={armHalf}
+          onDropOnHalf={handleDropOnHalf}
           actions={{
             onOpen: (e) => {
               if (shouldIgnoreClick(e)) return;
@@ -611,16 +690,37 @@ export const AddTile: React.FC<AddTileProps> = ({
   const toast = useToast();
   // True while an OS file drag hovers the tile (drop-target highlight).
   const [dropArmed, setDropArmed] = useState(false);
+  // Which half of the split drop zone the pointer is currently over - only
+  // meaningful while dropArmed (the halves only render then). An empty slot
+  // has no existing block to infer a category from, unlike a swap onto an
+  // occupied tile (GalleryBlock's own handleDrop, unchanged) or a catalog
+  // pick (gear comes from the tone metadata) - so the drop target itself has
+  // to carry the choice.
+  const [hoverHalf, setHoverHalf] = useState<'ir' | 'cab' | null>(null);
   const { ref, isDragging } = useSortable({ id, index, group });
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDropOnHalf = (category: 'ir' | 'cab') => async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setDropArmed(false);
+    setHoverHalf(null);
     // The item (not files[0]): folders only surface through the entry API.
     const item = e.dataTransfer.items[0];
     if (!item) return;
-    const error = await actions.loadLocalFile(id, item);
+    const error = await actions.loadLocalFile(id, item, category);
     if (error) toast.show(error);
+  };
+
+  // Own dragover per half (not just the tile-wide armFileDrag above): the
+  // browser only allows a drop on an element that itself keeps cancelling
+  // dragover, and only one half should highlight at a time as the pointer
+  // crosses between them.
+  const armHalf = (category: 'ir' | 'cab') => (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setHoverHalf(category);
   };
 
   // Anchored inside the tile's border (absolute children position against
@@ -650,8 +750,13 @@ export const AddTile: React.FC<AddTileProps> = ({
       onContextMenu={openMenu}
       {...longPressProps}
       onDragOver={(e) => armFileDrag(e, setDropArmed)}
-      onDragLeave={(e) => disarmFileDrag(e, setDropArmed)}
-      onDrop={handleDrop}
+      onDragLeave={(e) => {
+        disarmFileDrag(e, setDropArmed);
+        // Crossing between the two halves below still fires dragLeave on
+        // this (their shared parent) - the same bubbling disarmFileDrag
+        // itself already guards against, via the same contains() check.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverHalf(null);
+      }}
       {...helpProps(HELP.addTile)}
       style={{
         ...addTileFaceStyle(size),
@@ -662,6 +767,10 @@ export const AddTile: React.FC<AddTileProps> = ({
         touchAction: 'none',
         // Above the neighboring tiles while the action sheet is up.
         zIndex: menuAnchor ? 5 : undefined,
+        // Clips the two drop-zone halves' hover tint to the tile's own
+        // rounded corners below - without this their square tint rects
+        // would poke past the border radius.
+        overflow: 'hidden',
       }}
     >
       {!dropArmed &&
@@ -673,7 +782,11 @@ export const AddTile: React.FC<AddTileProps> = ({
         (routing === 'right' || routing === 'both') &&
         routingLine('right')}
       {dropArmed ? (
-        <Upload size={FILE_DROP_ICON_SIZE} color={GRAY} />
+        <SplitFileDropZone
+          hoverHalf={hoverHalf}
+          onArmHalf={armHalf}
+          onDropOnHalf={handleDropOnHalf}
+        />
       ) : (
         <PlusCircle size={plusIconSize(size)} strokeWidth={1} />
       )}

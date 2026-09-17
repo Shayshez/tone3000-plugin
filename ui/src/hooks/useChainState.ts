@@ -74,6 +74,11 @@ export function useChainState() {
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setBlockIrDecay: backend.getPluginFunction('setBlockIrDecay'),
+      setBlockIrSize: backend.getPluginFunction('setBlockIrSize'),
+      setBlockIrWidth: backend.getPluginFunction('setBlockIrWidth'),
+      setBlockIrTrimInit: backend.getPluginFunction('setBlockIrTrimInit'),
+      setBlockIrReverse: backend.getPluginFunction('setBlockIrReverse'),
+      resetBlockIrShape: backend.getPluginFunction('resetBlockIrShape'),
       setBlockIrCategory: backend.getPluginFunction('setBlockIrCategory'),
       convertBlockType: backend.getPluginFunction('convertBlockType'),
       setNamSlimSizeDefault: backend.getPluginFunction('setNamSlimSizeDefault'),
@@ -144,16 +149,24 @@ export function useChainState() {
         run<string>('loadTone', () => native.loadTone(toneJson, targetInsertId ?? '')),
       /** Load dropped local file(s) as one block (a single .nam/.wav, or a
           folder's files; bytes as base64). `targetInsertId` is an insert
-          slot (adds) or an existing tone block (swaps in place). Native
-          validates each file (NAM must be A2). Resolves to a user-facing
-          error message, or null on success. */
+          slot (adds) or an existing tone block (swaps in place).
+          `forceGear` is the empty-slot split drop zone's explicit IR/Cab
+          choice (see ChainActions.loadLocalFile) - forwarded to native's
+          own forceGear param as-is. Bug fix: 'ir' is NOT inert like a plain
+          '' - native keys "skip the content-duration category guess" off
+          *any* non-empty gear (see loadTone, ProcessorChain.cpp), so
+          collapsing 'ir' to '' here silently let a short dropped IR file
+          guess its way back to Cab despite the user's explicit choice.
+          Native validates each file (NAM must be A2). Resolves to a
+          user-facing error message, or null on success. */
       loadLocalTone: async (
         title: string,
         files: { name: string; data: string }[],
-        targetInsertId: string
+        targetInsertId: string,
+        forceGear?: 'ir' | 'cab'
       ) => {
         const res = await run<{ blockId?: string; error?: string } | null>('loadLocalTone', () =>
-          native.loadLocalTone(title, files, targetInsertId)
+          native.loadLocalTone(title, files, targetInsertId, forceGear ?? '')
         );
         if (res?.blockId) return null;
         return res?.error ?? "Couldn't load the file";
@@ -242,6 +255,33 @@ export function useChainState() {
             decayCurveNormalized
           )
         ),
+      /** IR Size: vari-speed duration/pitch (see BlockParams.size). Same
+          off-thread-rebuild caveat as setBlockIrDecay - the caller commits
+          once per drag gesture (on release), not continuously. */
+      setBlockIrSize: (blockId: string, sizeNormalized: number) =>
+        run<boolean>('setBlockIrSize', () => native.setBlockIrSize(blockId, sizeNormalized)),
+      /** IR Width: stereo-image crossfade/phase-inversion (see BlockParams.
+          width). Same off-thread-rebuild/commit-on-release caveat as
+          setBlockIrSize; native no-ops on a mono-source IR. */
+      setBlockIrWidth: (blockId: string, widthNormalized: number) =>
+        run<boolean>('setBlockIrWidth', () => native.setBlockIrWidth(blockId, widthNormalized)),
+      /** Trim Init: manual leading-silence-trim toggle (see BlockParams.
+          trimInit/trimRelaxed). Same off-thread rebuild shape as
+          setBlockIrSize/setBlockIrWidth, but a plain on/off. `relaxed`
+          defaults false so 2-arg call sites keep the standard threshold. */
+      setBlockIrTrimInit: (blockId: string, enabled: boolean, relaxed = false) =>
+        run<boolean>('setBlockIrTrimInit', () =>
+          native.setBlockIrTrimInit(blockId, enabled, relaxed)
+        ),
+      /** Reverse: manual backward-playback toggle (see BlockParams.
+          reverse). Same off-thread rebuild shape as setBlockIrTrimInit. */
+      setBlockIrReverse: (blockId: string, enabled: boolean) =>
+        run<boolean>('setBlockIrReverse', () => native.setBlockIrReverse(blockId, enabled)),
+      /** Resets every IR shaping parameter to default in one step (see
+          BlockParams). Single undo entry regardless of how many fields
+          change. */
+      resetBlockIrShape: (blockId: string) =>
+        run<boolean>('resetBlockIrShape', () => native.resetBlockIrShape(blockId)),
       /** Default NAM A2 size for newly added blocks (machine-wide; existing
           blocks keep their own size). Persists on disk. */
       setNamSlimSizeDefault: (slimSize: number) =>

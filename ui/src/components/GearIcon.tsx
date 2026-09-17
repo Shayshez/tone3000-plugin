@@ -1,5 +1,5 @@
 import React from 'react';
-import { GRAY, SURFACE } from './theme';
+import { FONT_MONO, GRAY, SURFACE } from './theme';
 import { rem } from '../hooks/useUiScale';
 
 /**
@@ -337,22 +337,80 @@ export const GearImageFallback: React.FC<{
  * glyph instead: there is no artwork and no gear id to fall back to.
  * Fills its parent like a plain cover <img>.
  */
+/** Local-drop fallback glyph + label for the two block types with a real
+    icon to show (Cab/IR); every other local drop (NAM) keeps the plain
+    file glyph. Pulled out of ToneImage so both branches (Cab/IR) share one
+    layout instead of two near-duplicate divs. */
+const LocalTypeGlyph: React.FC<{
+  gear: string;
+  label: string;
+  glyphSize: number;
+  boxSize: number;
+}> = ({ gear, label, glyphSize, boxSize }) => (
+  <div
+    style={{
+      width: '100%',
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: rem(6),
+      backgroundColor: SURFACE,
+    }}
+  >
+    <GearIcon gear={gear} size={glyphSize} color={GRAY} />
+    <span
+      style={{
+        fontFamily: FONT_MONO,
+        fontSize: rem(Math.max(10, Math.round(boxSize * 0.09))),
+        fontWeight: 400,
+        color: GRAY,
+        textTransform: 'uppercase',
+        letterSpacing: rem(0.5),
+      }}
+    >
+      {label}
+    </span>
+  </div>
+);
+
 export const ToneImage: React.FC<{
   src: string | undefined;
   alt: string;
   gear?: string;
   local?: boolean;
+  /** Live chain-block type (ToneBlock.blockType) - only read for a local
+      drop's own fallback glyph below, deliberately *not* `gear`. Converting
+      an existing block's category (IrCategoryControl, the header button)
+      changes `blockType`/`irCategory` but never rewrites the block's
+      originally-loaded tone JSON (see convertBlockTypeInBackground,
+      ProcessorChain.cpp - it updates the live block, not its persisted
+      `gear`), so a local block's own `gear` value goes stale the moment
+      it's converted. `blockType` is read fresh off getChainState every
+      poll, so it can't go stale the same way. */
+  blockType?: 'nam' | 'ir' | 'cab';
   boxSize: number;
   /** Override the fallback glyph size (defaults to ~40% of `boxSize`). */
   iconSize?: number;
   draggable?: boolean;
-}> = ({ src, alt, gear, local, boxSize, iconSize, draggable }) => {
+}> = ({ src, alt, gear, local, blockType, boxSize, iconSize, draggable }) => {
   const [failed, setFailed] = React.useState(false);
   // A new URL (tone swap/model switch) gets a fresh chance to load.
   React.useEffect(() => setFailed(false), [src]);
   const glyphSize = iconSize ?? Math.round(boxSize * 0.4);
 
   if (local) {
+    // Cab/IR read as real gear, not just "some local file" - same glyph a
+    // catalog tone's own missing-image fallback would show for that gear,
+    // plus a text label a bare icon alone wouldn't convey here (unlike the
+    // catalog fallback, there's no title/model name shown alongside this
+    // local tile to disambiguate). NAM has no equivalent treatment here
+    // (out of scope - falls through to the generic file glyph).
+    if (blockType === 'cab')
+      return <LocalTypeGlyph gear="cab" label="Cab" glyphSize={glyphSize} boxSize={boxSize} />;
+    if (blockType === 'ir')
+      return <LocalTypeGlyph gear="ir" label="IR" glyphSize={glyphSize} boxSize={boxSize} />;
     return (
       <div
         style={{

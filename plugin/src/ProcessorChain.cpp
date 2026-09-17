@@ -29,6 +29,23 @@ bool isInsertBlock(const std::unique_ptr<ChainBlock>& b) {
   return b != nullptr && b->type == ChainBlockType::INSERT;
 }
 
+// Which onset detection result Trim Init should use - see
+// ChainBlock::trimRelaxed/irOnsetSamplesRelaxed. Independent of
+// trimInitEnabled: callers decide separately whether trim is on at all.
+int irEffectiveOnsetSamples(const ChainBlock& block) {
+  return block.trimRelaxed ? block.irOnsetSamplesRelaxed : block.irOnsetSamples;
+}
+
+// Forward declarations: defined further down (with queueIrShapeRebuild's
+// other, older use sites), but needed here for the model-load/swap paths
+// above those - a swapped-in IR must reapply the block's *existing*
+// Size/Width/envelope/Trim Init onto its freshly-loaded content, or those
+// settings silently stop affecting the audio while still showing their old
+// values on the knobs (see blockHasNonDefaultIrShape's own comment).
+void queueIrShapeRebuild(TONE3000Processor& processor, ChainBlock& block,
+                        juce::ThreadPool& loadingThreadPool);
+bool blockHasNonDefaultIrShape(const ChainBlock& block);
+
 }  // namespace
 
 // See the declaration for the invariant. Called after every structural lane
@@ -316,16 +333,22 @@ std::string TONE3000Processor::loadTone(const juce::String& toneJsonString,
   block->applyDefaultMixOnLoad = true;
 
   if (parsed.type == ChainBlockType::IR) {
-    if (parsed.local) {
-      // No catalog `gear` tag exists for a dropped file; seed the category
-      // once the model lands and its real content can be scanned (see
-      // ChainBlock::irCategoryNeedsDurationGuess / applyPreparedModelTo
-      // ChainBlock). A real, editable value from the moment it loads, same
-      // as a site-loaded tone's - just not known yet at this exact instant.
+    // A plain dropped file (no catalog `gear`, and no explicit choice from
+    // the empty-slot split drop zone either - see loadLocalTone's forceGear
+    // and finishLocalToneLoad) has no known category yet; seed it once the
+    // model lands and its real content can be scanned (see ChainBlock::
+    // irCategoryNeedsDurationGuess / applyPreparedModelToChainBlock). A
+    // local drop that DID carry an explicit gear (the split zone's "IR"
+    // half sets gear="ir", never collapsed to empty - the very content-
+    // duration guess this skips is exactly what silently overrode that
+    // explicit choice back to Cab for a short dropped file, before this
+    // fix) is known immediately, same as catalog metadata below - no need
+    // to wait for the model to arrive, and no guess to contradict it later.
+    if (parsed.local && parsed.gear.isEmpty()) {
       block->irCategoryNeedsDurationGuess = true;
     } else {
-      // Known immediately from catalog metadata, before the download even
-      // starts - no need to wait for the model to arrive.
+      // Known immediately (catalog metadata, or the split zone's explicit
+      // choice) - no need to wait for the model to arrive.
       block->irCategory = irCategoryFromGear(parsed.gear);
     }
   }
@@ -506,16 +529,55 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
 
   pushChainHistory();
 
-  // Replace the tone in place: same block id (chain position preserved), same
-  // user params (enabled/gains/mix). The old engines (and the block type
-  // they belong to) stay live and keep processing until the new model is
-  // spliced in by applyPreparedModelToChainBlock (which also stamps the new
-  // type); `modelLoading` drives the UI's loading state meanwhile.
+  // Replace the tone in place: same block id (chain position preserved). A
+  // catalog swap keeps the user's params (enabled/gains/mix/envelope) - the
+  // old engines (and the block type they belong to) stay live and keep
+  // processing until the new model is spliced in by
+  // applyPreparedModelToChainBlock (which also stamps the new type);
+  // `modelLoading` drives the UI's loading state meanwhile.
   setToneOnBlock(*block, parsed.toneId, parsed.toneJson, parsed.toneVar);
   block->activeModelId = parsed.firstModelId;
   block->modelLoading = true;
   block->loadFailed = false;
   block->modelCache.clear();
+
+  // Bug fix, 2026-09-17: a *local* file drop onto an already-occupied tile
+  // (GalleryBlock.tsx's own drop, including the split IR/Cab zone) kept
+  // every one of the old content's mix/envelope values, when the user
+  // expects a dropped file to behave like a fresh add of that type - Mix in
+  // particular has a real per-category rule (Cab 100%, IrPlayer 50%, see
+  // applyPreparedModelToChainBlock) that a stale carried-over value
+  // silently violates. Scoped to `parsed.local` specifically: a *catalog*
+  // swap (Select-flow's swap button) is deliberately NOT included here -
+  // that's the "keep the user's params" case the comment above describes,
+  // unchanged. Mirrors loadTone's own unconditional default-mix arming for
+  // a fresh add; applyPreparedModelToChainBlock consumes and clears this
+  // flag once applied either way.
+  if (parsed.local)
+    block->applyDefaultMixOnLoad = true;
+
+  // Bug fix, 2026-09-17: irCategory/irCategoryNeedsDurationGuess previously
+  // carried straight over from whatever the block's *previous* content had
+  // - loadToneInBackground (shared with a fresh loadTone add, via
+  // queueToneLoad below) reads them assuming the caller already resolved
+  // them for the tone now being loaded, which loadTone's own add path does
+  // but this swap path never did. Invisible for catalog-to-catalog swaps
+  // (every non-cab catalog tone resolves to the same IrPlayer regardless),
+  // but a real bug for any local drop landing on an already-occupied tile
+  // (GalleryBlock.tsx): a plain unlabeled swap kept reusing the previous
+  // content's category instead of re-guessing the new file's own duration,
+  // and the empty-slot split zone's explicit IR/Cab choice (forceGear) had
+  // no effect at all once swapped onto an occupied tile - exactly mirrors
+  // loadTone's own resolution now, so both cases behave identically
+  // whether the drop lands on an empty slot or an existing tile.
+  if (parsed.type == ChainBlockType::IR) {
+    if (parsed.local && parsed.gear.isEmpty()) {
+      block->irCategoryNeedsDurationGuess = true;
+    } else {
+      block->irCategory = irCategoryFromGear(parsed.gear);
+      block->irCategoryNeedsDurationGuess = false;
+    }
+  }
 
   DBG("Swapped tone on block " << blockId << " -> tone " << parsed.toneId);
 
@@ -886,6 +948,12 @@ void TONE3000Processor::loadToneInBackground(const std::string& blockId, int fir
     }
 
     applyPreparedModelToChainBlock(*block, type, prepared);
+    // Reapply this block's own existing shape onto the freshly swapped-in
+    // content (see blockHasNonDefaultIrShape) - a swap alone never does
+    // this, only setBlockIrDecay/Size/Width/TrimInit do.
+    if (prepared.success && block->type == ChainBlockType::IR &&
+        blockHasNonDefaultIrShape(*block))
+      queueIrShapeRebuild(*this, *block, loadingThreadPool);
   }
   // `prepared` now holds the block's *previous* engines (if any); they are
   // destroyed here, after the lock; teardown is too heavy to hold it.
@@ -989,6 +1057,10 @@ void TONE3000Processor::switchModelInBackground(const std::string& blockId, int 
     }
 
     applyPreparedModelToChainBlock(*block, blockTypeForPrepare, prepared);
+    // Same reapply as loadToneInBackground - see its own comment.
+    if (prepared.success && block->type == ChainBlockType::IR &&
+        blockHasNonDefaultIrShape(*block))
+      queueIrShapeRebuild(*this, *block, loadingThreadPool);
   }
   // `prepared` now holds the block's *previous* engines (if any); they are
   // destroyed here, after the lock; teardown is too heavy to hold it.
@@ -1118,6 +1190,11 @@ void TONE3000Processor::convertBlockTypeInBackground(const std::string& blockId,
     }
 
     applyPreparedModelToChainBlock(*block, targetType, prepared);
+    // Same reapply as loadToneInBackground - see its own comment. Only ever
+    // fires for the IrPlayer target; CAB carries no shaping fields at all.
+    if (prepared.success && block->type == ChainBlockType::IR &&
+        blockHasNonDefaultIrShape(*block))
+      queueIrShapeRebuild(*this, *block, loadingThreadPool);
 
     // Converting back to IR Player always lands in that category explicitly
     // (applyPreparedModelToChainBlock only seeds irCategory from the
@@ -1171,6 +1248,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     int activeModelId = 0;
     bool loaded = false, loadFailed = false, modelLoading = false, irLong = false;
     double irContentLengthMs = 0.0;
+    double irRawContentLengthMs = 0.0;
+    double irOnsetFraction = 0.0;
     IrCategory irCategory = IrCategory::IrPlayer;
     bool hasInputDbu = false, hasOutputDbu = false;
     double inputDbu = 0.0, outputDbu = 0.0;
@@ -1180,6 +1259,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     float initLevel = 1.0f;
     float attackLength = 0.0f, attackCurve = 0.5f;
     float decayLength = 1.0f, decayLevel = 1.0f, decayCurve = 0.5f;
+    float size = 0.5f, width = 0.75f;
+    bool trimInit = false;
+    bool trimRelaxed = false;
+    bool reverse = false;
+    int irNumChannels = 1;
     juce::var eq;
     bool rtFailed = false;
   };
@@ -1227,10 +1311,43 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.loadFailed = block->loadFailed;
         row.modelLoading = block->modelLoading;
         row.irLong = block->type == ChainBlockType::IR && block->irIsLong;
-        if (block->type == ChainBlockType::IR && block->irRawSampleRate > 0.0)
-          row.irContentLengthMs =
-              block->irContentLengthSamples / block->irRawSampleRate * 1000.0;
+        if (block->type == ChainBlockType::IR && block->irRawSampleRate > 0.0) {
+          // Reflects Trim Init (see ChainBlock::trimInitEnabled/
+          // irOnsetSamples) exactly like prepareIrShapeRebuild's own
+          // trimStartSamples math - same source-duration reasoning,
+          // duplicated by necessity (no shared code across the two call
+          // sites). Scaled by Size's *clamped* duration ratio on top so the
+          // displayed length/D Len always matches what prepareIrShapeRebuild
+          // actually built, never a pre-clamp number the engine silently
+          // capped (see kIrSizeMaxEffectiveSeconds).
+          const int trimStartSamples =
+              block->trimInitEnabled ? irEffectiveOnsetSamples(*block) : 0;
+          const double contentDurationSeconds =
+              juce::jmax(0, block->irContentLengthSamples - trimStartSamples) /
+              block->irRawSampleRate;
+          row.irRawContentLengthMs = contentDurationSeconds * 1000.0;
+          row.irContentLengthMs = contentDurationSeconds * 1000.0 *
+                                  irSizeClampedDurationRatio(block->sizeNormalized,
+                                                             contentDurationSeconds);
+          // Onset as a fraction of irContentLengthSamples specifically -
+          // the exact span irWaveformPeaks was downsampled over
+          // (computeIrWaveformPeaks) - not irRawContentLengthMs above,
+          // which is already trim-adjusted when Trim Init is on and would
+          // make this circular (see kIrSizeMaxEffectiveSeconds's own
+          // circularity story for why that distinction matters). Always
+          // shipped, regardless of trimInitEnabled - the UI decides whether
+          // to crop the waveform backdrop with it. Picks the relaxed
+          // detection's onset when trimRelaxed is set, same selector as
+          // trimStartSamples above, so the dotted marker always matches
+          // whichever onset would actually be used if trim were on.
+          if (block->irContentLengthSamples > 0)
+            row.irOnsetFraction = juce::jlimit(
+                0.0, 1.0,
+                static_cast<double>(irEffectiveOnsetSamples(*block)) /
+                    block->irContentLengthSamples);
+        }
         row.irCategory = block->irCategory;
+        row.irNumChannels = block->irNumChannels;
         // NAM calibration metadata off the loaded engine, absent when the
         // model carries none. Non-finite values never ship; the JSON bridge
         // can't carry them (and the DSP rejects them too).
@@ -1259,6 +1376,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.decayLength = block->decayLengthNormalized;
         row.decayLevel = block->decayLevelNormalized;
         row.decayCurve = block->decayCurveNormalized;
+        row.size = block->sizeNormalized;
+        row.width = block->widthNormalized;
+        row.trimInit = block->trimInitEnabled;
+        row.trimRelaxed = block->trimRelaxed;
+        row.reverse = block->reverseEnabled;
         row.eq = block->eq.toVar();
         out.push_back(std::move(row));
       }
@@ -1327,12 +1449,30 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       item->setProperty("irLong", row.irLong);
       // Detected content length (ms), same window computeIrWaveformPeaks
       // trims the waveform display to - single source of truth. 0 for NAM
-      // blocks and IR blocks not yet loaded.
+      // blocks and IR blocks not yet loaded. Already scaled by Size's
+      // clamped ratio (see above), so it moves with the Size knob.
       item->setProperty("irContentLengthMs", row.irContentLengthMs);
+      // Load-time content length (ms), *not* scaled by Size - the fixed
+      // reference the Size knob's own display clamps against (see
+      // sizePercentScale in knobScale.ts). Using irContentLengthMs there
+      // instead would be circular: it already reflects the current clamped
+      // Size ratio, so re-deriving the clamp from it converges wrong (a
+      // knob stuck reading 100% once the engine ever clamped once).
+      item->setProperty("irRawContentLengthMs", row.irRawContentLengthMs);
+      // Detected onset (see computeIrOnsetSamples), as a fraction 0..1 of
+      // irContentLengthSamples - the exact span the waveform backdrop
+      // (irWaveformPeaks) was downsampled over. Always shipped regardless
+      // of trimInit; the UI crops the backdrop with it only when trimInit
+      // is on (see WaveformDisplay/IrEnvelopeGraph's startFraction prop).
+      item->setProperty("irOnsetFraction", row.irOnsetFraction);
       // Explicit IR category ("cab"/"irPlayer"): drives the UI's Mix knob
       // default/Alt-click reset and the Out knob help (Cab carries the
       // -18 dB pad, IrPlayer doesn't). See IrCategory in ChainBlock.h.
       item->setProperty("irCategory", irCategoryToString(row.irCategory));
+      // Channels in the loaded IR file (1 or 2), never re-derived in the UI
+      // (see ChainBlock::irNumChannels) - the sole source of truth for
+      // locking the Width knob on a mono-source IR.
+      item->setProperty("irNumChannels", row.irNumChannels);
 
       if (row.hasInputDbu)
         item->setProperty("inputLevelDbu", row.inputDbu);
@@ -1353,6 +1493,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("decayLength", row.decayLength);
       params->setProperty("decayLevel", row.decayLevel);
       params->setProperty("decayCurve", row.decayCurve);
+      params->setProperty("size", row.size);
+      params->setProperty("width", row.width);
+      params->setProperty("trimInit", row.trimInit);
+      params->setProperty("trimRelaxed", row.trimRelaxed);
+      params->setProperty("reverse", row.reverse);
       params->setProperty("eq", row.eq);
       item->setProperty("params", juce::var(params.get()));
 
@@ -1754,11 +1899,11 @@ bool TONE3000Processor::setBlockIrCategory(const std::string& blockId,
   pushChainHistory();
   block->irCategory = newCategory;
   // V1: no memory of a prior per-category mix - switching category always
-  // resets to its fixed default, same as a fresh load (see
-  // applyPreparedModelToChainBlock). Both this and the -18 dB cab pad
-  // (Processor.cpp) are pulled from smoothed values every block, so a live
-  // block glides through the change rather than clicking.
-  block->mixNormalized = newCategory == IrCategory::Cab ? 1.0f : 0.5f;
+  // resets to its fixed default (Cab 100%, IrPlayer 25%), same as a fresh
+  // load (see applyPreparedModelToChainBlock). Both this and the -18 dB cab
+  // pad (Processor.cpp) are pulled from smoothed values every block, so a
+  // live block glides through the change rather than clicking.
+  block->mixNormalized = newCategory == IrCategory::Cab ? 1.0f : 0.25f;
 
   bumpChainRevision();
   return true;
@@ -1829,6 +1974,27 @@ void queueIrShapeRebuild(TONE3000Processor& processor, ChainBlock& block,
   };
   loadingThreadPool.addJob(new RebuildIrShapeJob(processor, blockId, generation), true);
 }
+
+// Shared by loadToneInBackground/switchModelInBackground/
+// convertBlockTypeInBackground: a freshly loaded/swapped IR's engine is
+// built straight from the raw file by prepareBlockModelOffThread, with none
+// of the block's own Size/Width/envelope/Trim Init baked in (those only
+// ever get applied by prepareIrShapeRebuild, queued above). For a NEW block
+// that's a correct no-op (everything's still at its default), but for a
+// SWAP onto a block that already carries a non-default shape from whatever
+// was loaded before, skipping the reapply left the knobs showing the old
+// values while the audio silently reverted to untouched/100% - this is
+// what the caller checks before queuing that rebuild. Only meaningful for
+// ChainBlockType::IR; CAB blocks carry no shaping fields at all (see
+// ChainBlockType's own comment), and NAM resets them to default on every
+// swap (applyPreparedModelToChainBlock's NAM branch) so never needs this.
+bool blockHasNonDefaultIrShape(const ChainBlock& block) {
+  return block.sizeNormalized != 0.5f || block.widthNormalized != 0.75f ||
+        block.trimInitEnabled || block.reverseEnabled || block.initLevelNormalized != 1.0f ||
+        block.attackLengthNormalized != 0.0f || block.attackCurveNormalized != 0.5f ||
+        block.decayLengthNormalized != 1.0f || block.decayLevelNormalized != 1.0f ||
+        block.decayCurveNormalized != 0.5f;
+}
 }  // namespace
 
 bool TONE3000Processor::setBlockIrDecay(const std::string& blockId, double initLevelNormalized,
@@ -1880,11 +2046,126 @@ bool TONE3000Processor::setBlockIrDecay(const std::string& blockId, double initL
   return true;
 }
 
+bool TONE3000Processor::setBlockIrSize(const std::string& blockId, double sizeNormalized) {
+  const float clampedSize = juce::jlimit(0.0f, 1.0f, static_cast<float>(sizeNormalized));
+
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::IR || !block->loaded) {
+    juce::Logger::writeToLog("setBlockIrSize: not a loaded IR block: " + juce::String(blockId));
+    return false;
+  }
+  if (block->sizeNormalized == clampedSize)
+    return true;
+
+  // Same coalesced-rebuild shape as setBlockIrDecay: the persisted value
+  // updates immediately (undo/redo, presets, duplication see it right
+  // away), the audible rebuild trails behind on the loader pool.
+  pushChainHistory("param:" + juce::String(blockId) + ":size");
+  block->sizeNormalized = clampedSize;
+  deferredRevisionBump();
+  queueIrShapeRebuild(*this, *block, loadingThreadPool);
+  return true;
+}
+
+bool TONE3000Processor::setBlockIrWidth(const std::string& blockId, double widthNormalized) {
+  const float clampedWidth = juce::jlimit(0.0f, 1.0f, static_cast<float>(widthNormalized));
+
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::IR || !block->loaded) {
+    juce::Logger::writeToLog("setBlockIrWidth: not a loaded IR block: " + juce::String(blockId));
+    return false;
+  }
+  // No stereo image to widen - matches the UI's disabled knob. A no-op
+  // return rather than silently clamping to mono, so a stale/racing UI call
+  // never queues a pointless rebuild.
+  if (block->irNumChannels <= 1) {
+    juce::Logger::writeToLog("setBlockIrWidth: mono source, ignored: " + juce::String(blockId));
+    return false;
+  }
+  if (block->widthNormalized == clampedWidth)
+    return true;
+
+  pushChainHistory("param:" + juce::String(blockId) + ":width");
+  block->widthNormalized = clampedWidth;
+  deferredRevisionBump();
+  queueIrShapeRebuild(*this, *block, loadingThreadPool);
+  return true;
+}
+
+bool TONE3000Processor::setBlockIrTrimInit(const std::string& blockId, bool enabled,
+                                           bool relaxed) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::IR || !block->loaded) {
+    juce::Logger::writeToLog("setBlockIrTrimInit: not a loaded IR block: " + juce::String(blockId));
+    return false;
+  }
+  if (block->trimInitEnabled == enabled && block->trimRelaxed == relaxed)
+    return true;
+
+  pushChainHistory("param:" + juce::String(blockId) + ":trimInit");
+  block->trimInitEnabled = enabled;
+  block->trimRelaxed = relaxed;
+  deferredRevisionBump();
+  queueIrShapeRebuild(*this, *block, loadingThreadPool);
+  return true;
+}
+
+bool TONE3000Processor::setBlockIrReverse(const std::string& blockId, bool enabled) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::IR || !block->loaded) {
+    juce::Logger::writeToLog("setBlockIrReverse: not a loaded IR block: " + juce::String(blockId));
+    return false;
+  }
+  if (block->reverseEnabled == enabled)
+    return true;
+
+  pushChainHistory("param:" + juce::String(blockId) + ":reverse");
+  block->reverseEnabled = enabled;
+  deferredRevisionBump();
+  queueIrShapeRebuild(*this, *block, loadingThreadPool);
+  return true;
+}
+
+bool TONE3000Processor::resetBlockIrShape(const std::string& blockId) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::IR || !block->loaded) {
+    juce::Logger::writeToLog("resetBlockIrShape: not a loaded IR block: " + juce::String(blockId));
+    return false;
+  }
+  if (!blockHasNonDefaultIrShape(*block))
+    return true;
+
+  // One history entry for every field below, not one per field - the whole
+  // point of a single Reset action undoing as a single step.
+  pushChainHistory("param:" + juce::String(blockId) + ":resetShape");
+  block->initLevelNormalized = 1.0f;
+  block->attackLengthNormalized = 0.0f;
+  block->attackCurveNormalized = 0.5f;
+  block->decayLengthNormalized = 1.0f;
+  block->decayLevelNormalized = 1.0f;
+  block->decayCurveNormalized = 0.5f;
+  block->sizeNormalized = 0.5f;
+  block->widthNormalized = 0.75f;
+  block->trimInitEnabled = false;
+  block->trimRelaxed = false;
+  block->reverseEnabled = false;
+  deferredRevisionBump();
+  queueIrShapeRebuild(*this, *block, loadingThreadPool);
+  return true;
+}
+
 void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
                                                     int targetGeneration) {
   juce::AudioBuffer<float> rawCopy;
   double rawSampleRate = 0.0;
   int origContentLengthSamples = 0;
+  int trimStartSamples = 0;
+  bool reverseEnabled = false;
   int irNumChannels = 1;
   bool engineLongIr = false;
   float initLevelNormalized = 1.0f;
@@ -1893,6 +2174,8 @@ void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
   float decayLengthNormalized = 1.0f;
   float decayLevelNormalized = 1.0f;
   float decayCurveNormalized = 0.5f;
+  float sizeNormalized = 0.5f;
+  float widthNormalized = 0.75f;
 
   {
     juce::ScopedLock lock(chainMutex);
@@ -1913,6 +2196,8 @@ void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
     rawCopy = block->irRawSamples;  // copy: irRawSamples must stay the untouched original
     rawSampleRate = block->irRawSampleRate;
     origContentLengthSamples = block->irContentLengthSamples;
+    trimStartSamples = block->trimInitEnabled ? irEffectiveOnsetSamples(*block) : 0;
+    reverseEnabled = block->reverseEnabled;
     irNumChannels = block->irNumChannels;
     engineLongIr = block->irIsLong;  // frozen classification, never re-decided here
     initLevelNormalized = block->initLevelNormalized;
@@ -1921,12 +2206,15 @@ void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
     decayLengthNormalized = block->decayLengthNormalized;
     decayLevelNormalized = block->decayLevelNormalized;
     decayCurveNormalized = block->decayCurveNormalized;
+    sizeNormalized = block->sizeNormalized;
+    widthNormalized = block->widthNormalized;
   }
 
   PreparedIrShapeRebuild prepared = prepareIrShapeRebuild(
-      rawCopy, rawSampleRate, origContentLengthSamples, irNumChannels, engineLongIr,
-      initLevelNormalized, attackLengthNormalized, attackCurveNormalized, decayLengthNormalized,
-      decayLevelNormalized, decayCurveNormalized);
+      rawCopy, rawSampleRate, origContentLengthSamples, trimStartSamples, reverseEnabled,
+      irNumChannels, engineLongIr, initLevelNormalized, attackLengthNormalized,
+      attackCurveNormalized, decayLengthNormalized, decayLevelNormalized, decayCurveNormalized,
+      sizeNormalized, widthNormalized);
 
   // The outgoing engine keeps processing until this moment; fade it out on
   // the audio thread first. Same shape as an engine swap (see ChainBlock.h):

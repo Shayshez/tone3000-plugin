@@ -67,6 +67,13 @@ constexpr int kIrPlayerLongContentBaseSamples =
 // reverb head size.
 constexpr int kIrNonUniformHeadSamples = 8192;
 
+// Trim Init's "relaxed" onset threshold (see ChainBlock::trimRelaxed/
+// irOnsetSamplesRelaxed): computeIrOnsetSamples's default -60dB clears well
+// before the audible transient on IRs with a slow-building tail (reverbs,
+// room tone), landing the detected onset too early. -45dB requires a louder
+// signal before triggering, pushing the onset later toward the real attack.
+constexpr float kIrOnsetRelaxedThresholdDb = -45.0f;
+
 // Downsampled columns computed for the block card's static waveform display
 // (see ChainBlock::irWaveformPeaks). Comfortably above the card's actual
 // pixel width (192px design box) so higher UI scale/DPI doesn't look blocky;
@@ -472,6 +479,56 @@ int TONE3000Processor::computeIrContentLengthSamples(const juce::AudioBuffer<flo
   return std::min(numSamples, contentEndSample + margin);
 }
 
+int TONE3000Processor::computeIrOnsetSamples(const juce::AudioBuffer<float>& samples,
+                                              double sampleRate, float thresholdDb) {
+  const int numSamples = samples.getNumSamples();
+  const int numChannels = samples.getNumChannels();
+  if (numSamples <= 0 || numChannels <= 0 || sampleRate <= 0.0)
+    return 0;
+
+  float peakAbs = 0.0f;
+  for (int ch = 0; ch < numChannels; ++ch) {
+    const float* data = samples.getReadPointer(ch);
+    for (int i = 0; i < numSamples; ++i)
+      peakAbs = std::max(peakAbs, std::abs(data[i]));
+  }
+  const float threshold = peakAbs * juce::Decibels::decibelsToGain(thresholdDb);
+  const int windowSamples = std::max(1, static_cast<int>(std::llround(sampleRate * 0.002)));
+
+  // Mirrors computeIrContentLengthSamples's backward scan, forward instead:
+  // contentStartSample is the start of the first (temporally) window whose
+  // RMS clears the threshold. Silence (or a peak of exactly zero) never
+  // clears it, so this naturally falls through to contentStartSample=0 -
+  // never trims a source that's silent throughout, which would otherwise
+  // collapse to an empty kernel.
+  int contentStartSample = 0;
+  for (int windowStart = 0; windowStart < numSamples; windowStart += windowSamples) {
+    const int windowEnd = std::min(numSamples, windowStart + windowSamples);
+    double sumSq = 0.0;
+    int count = 0;
+    for (int ch = 0; ch < numChannels; ++ch) {
+      const float* data = samples.getReadPointer(ch);
+      for (int i = windowStart; i < windowEnd; ++i) {
+        sumSq += static_cast<double>(data[i]) * data[i];
+        ++count;
+      }
+    }
+    const float windowRms = count > 0 ? static_cast<float>(std::sqrt(sumSq / count)) : 0.0f;
+    if (windowRms > threshold) {
+      contentStartSample = windowStart;
+      break;
+    }
+  }
+
+  // Same margin rule as the end-scan, but backing OFF (toward 0) rather
+  // than forward: a hard cut right at the detection threshold risks
+  // clipping the leading edge of the attack transient itself.
+  const int margin =
+      std::max(static_cast<int>(std::llround(sampleRate * 0.005)),
+               static_cast<int>(contentStartSample * 0.1));
+  return juce::jlimit(0, numSamples, contentStartSample - margin);
+}
+
 std::vector<std::pair<float, float>> TONE3000Processor::computeIrWaveformPeaks(
     const juce::AudioBuffer<float>& samples, int numColumns, int contentLengthSamples) {
   std::vector<std::pair<float, float>> peaks(
@@ -504,13 +561,26 @@ std::vector<std::pair<float, float>> TONE3000Processor::computeIrWaveformPeaks(
 
 TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebuild(
     const juce::AudioBuffer<float>& rawSamples, double rawSampleRate, int origContentLengthSamples,
-    int irNumChannels, bool engineLongIr, float initLevelNormalized,
-    float attackLengthNormalized, float attackCurveNormalized, float decayLengthNormalized,
-    float decayLevelNormalized, float decayCurveNormalized) {
+    int trimStartSamples, bool reverseEnabled, int irNumChannels, bool engineLongIr,
+    float initLevelNormalized, float attackLengthNormalized, float attackCurveNormalized,
+    float decayLengthNormalized, float decayLevelNormalized, float decayCurveNormalized,
+    float sizeNormalized, float widthNormalized) {
   PreparedIrShapeRebuild out;
   const int numRawSamples = rawSamples.getNumSamples();
   if (numRawSamples <= 0 || rawSampleRate <= 0.0 || irNumChannels <= 0)
     return out;
+
+  // Trim Init (see ChainBlock::trimInitEnabled/irOnsetSamples): shifts where
+  // the "start" of the source effectively is, everywhere below - the
+  // trimmed/enveloped buffer copies from here instead of raw sample 0, and
+  // every length (Decay Length's total, Size's clamp reference) is measured
+  // against the shrunk span that remains, never re-including the skipped
+  // leading silence. Clamped defensively; 0 (the common case, Trim Init
+  // off) makes every line below identical to before this feature existed.
+  const int clampedTrimStart = juce::jlimit(0, numRawSamples, trimStartSamples);
+  const int usableRawSamples = numRawSamples - clampedTrimStart;
+  const int usableContentLengthSamples =
+      std::max(0, origContentLengthSamples - clampedTrimStart);
 
   // Decay Length is the TOTAL truncated length - the real "End" position,
   // exactly the old standalone Length knob's own convention: a fraction 0..1
@@ -526,7 +596,7 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
   // Decay Length does that.
   const int minSamples = std::max(1, static_cast<int>(std::llround(rawSampleRate * 0.005)));
   const int maxContentSamples =
-      std::min(numRawSamples, std::max(minSamples, origContentLengthSamples));
+      std::min(usableRawSamples, std::max(minSamples, usableContentLengthSamples));
   const int targetSamples = juce::jlimit(
       minSamples, maxContentSamples,
       static_cast<int>(std::llround(juce::jmap(juce::jlimit(0.0f, 1.0f, decayLengthNormalized),
@@ -539,7 +609,7 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
 
   juce::AudioBuffer<float> trimmed(irNumChannels, targetSamples);
   for (int ch = 0; ch < irNumChannels; ++ch)
-    trimmed.copyFrom(ch, 0, rawSamples, ch, 0, targetSamples);
+    trimmed.copyFrom(ch, 0, rawSamples, ch, clampedTrimStart, targetSamples);
 
   // Envelope: Init Level (sample 0) ramps through the Attack segment to
   // unity/0dB (Attack's peak is pinned, not adjustable - standard
@@ -681,6 +751,17 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
     }
   }
 
+  // Reverse: flips the fully-shaped buffer end-for-end, last - after Trim
+  // Init's copy offset and the Attack/Decay envelope + fade-out above, so
+  // it reverses exactly what's audible (whatever shape is dialed in), not
+  // the raw source. Independent of Size (which never touches sample order,
+  // only the declared rate below) and of Width (which reshapes a copy of
+  // this same, by-then-already-reversed buffer further down).
+  if (reverseEnabled) {
+    for (int ch = 0; ch < irNumChannels; ++ch)
+      std::reverse(trimmed.getWritePointer(ch), trimmed.getWritePointer(ch) + targetSamples);
+  }
+
   // Same engine shape the block was originally classified/built as (frozen,
   // like the short/long classification itself - a Length edit never changes
   // either), not re-decided from the (now shorter) trimmed length.
@@ -692,12 +773,32 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
   juce::dsp::ProcessSpec spec{kChainBaseSampleRate, static_cast<juce::uint32>(chainBaseBlockSize()),
                               2};
 
+  // IR Size (vari-speed): never touches `trimmed`'s sample count - it only
+  // scales the sample rate declared to loadImpulseResponse below, which is
+  // what actually drives its internal resampler. Declaring a *higher* rate
+  // than the buffer's true content makes loadImpulseResponse squeeze it into
+  // fewer samples at the engine's fixed processing rate (shorter + higher
+  // pitch); a lower declared rate stretches it out (longer + lower pitch) -
+  // exactly a vari-speed/sample-rate-change effect, matching the source
+  // audible behavior this was built against. Applied to both engines so a
+  // fallback to convolverMono (mono audio path, or a downstream NAM
+  // collapsing the image) never silently reverts the Size the user set.
+  // The ratio is clamped to kIrSizeMaxEffectiveSeconds (irSizeClampedDurationRatio)
+  // regardless of source length or how far the knob is turned - an
+  // already-long source stretched further can build a convolution tail
+  // long enough to risk the real-time budget under ordinary concurrent UI
+  // activity (see that constant's own comment for the measurement this is
+  // based on).
+  const double effectiveRawSampleRate =
+      rawSampleRate /
+      irSizeClampedDurationRatio(sizeNormalized, usableContentLengthSamples / rawSampleRate);
+
   // fixNumChannels (juce_Convolution.cpp) reduces to 1/2 channels internally
   // per the Stereo flag, so the same 2-channel trimmed buffer works for both
   // calls - just a fresh copy each time since loadImpulseResponse consumes
   // its buffer by move.
   auto convolverMono = makeConvolver();
-  convolverMono->loadImpulseResponse(juce::AudioBuffer<float>(trimmed), rawSampleRate,
+  convolverMono->loadImpulseResponse(juce::AudioBuffer<float>(trimmed), effectiveRawSampleRate,
                                      juce::dsp::Convolution::Stereo::no,
                                      juce::dsp::Convolution::Trim::no,
                                      juce::dsp::Convolution::Normalise::no);
@@ -706,8 +807,46 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
   out.convolverMono = std::move(convolverMono);
 
   if (irNumChannels > 1) {
+    // IR Width: a *separate* copy, never applied to convolverMono above -
+    // that engine must always stay the untouched image (the mono fallback
+    // has no stereo image to widen, and must not silently pick up Width's
+    // artificial phase manipulation). 0..100% (|widthSigned| <= 1)
+    // crossfades between the mono sum and the IR's real recorded image
+    // (sign only flips L/R orientation of the crossfade target, not the
+    // blend amount); beyond 100% (|widthSigned| > 1) additionally blends
+    // one channel toward the polarity-inverted opposite channel - which
+    // channel is picked by sign, not magnitude, per the spec this was built
+    // against. widthSigned spans -2..+2 (widthNormalized's 0..1, 0.5 =
+    // mono/0%).
+    juce::AudioBuffer<float> widened(trimmed);
+    const float widthSigned = (juce::jlimit(0.0f, 1.0f, widthNormalized) - 0.5f) * 4.0f;
+    const float amt = std::min(std::abs(widthSigned), 1.0f);
+    const float extra = std::max(0.0f, std::abs(widthSigned) - 1.0f);
+    const bool widenRightChannel = widthSigned >= 0.0f;
+    const float* srcL = trimmed.getReadPointer(0);
+    const float* srcR = trimmed.getReadPointer(1);
+    float* dstL = widened.getWritePointer(0);
+    float* dstR = widened.getWritePointer(1);
+    for (int i = 0; i < targetSamples; ++i) {
+      const float l = srcL[i];
+      const float r = srcR[i];
+      const float mono = 0.5f * (l + r);
+      // Sign flips which recorded channel is the crossfade's "right"/
+      // "left" target, orienting the image without changing blend amount.
+      const float targetL = widenRightChannel ? l : r;
+      const float targetR = widenRightChannel ? r : l;
+      float blendedL = mono + (targetL - mono) * amt;
+      float blendedR = mono + (targetR - mono) * amt;
+      if (widenRightChannel)
+        blendedR = blendedR * (1.0f - extra) + (-blendedL) * extra;
+      else
+        blendedL = blendedL * (1.0f - extra) + (-blendedR) * extra;
+      dstL[i] = blendedL;
+      dstR[i] = blendedR;
+    }
+
     auto convolverStereo = makeConvolver();
-    convolverStereo->loadImpulseResponse(std::move(trimmed), rawSampleRate,
+    convolverStereo->loadImpulseResponse(std::move(widened), effectiveRawSampleRate,
                                          juce::dsp::Convolution::Stereo::yes,
                                          juce::dsp::Convolution::Trim::no,
                                          juce::dsp::Convolution::Normalise::no);
@@ -720,13 +859,14 @@ TONE3000Processor::PreparedIrShapeRebuild TONE3000Processor::prepareIrShapeRebui
   out.irLengthBaseSamples =
       engineSize > 0 ? engineSize
                      : static_cast<int>(std::llround(static_cast<double>(targetSamples) *
-                                                     kChainBaseSampleRate / rawSampleRate));
+                                                     kChainBaseSampleRate / effectiveRawSampleRate));
   out.success = true;
   return out;
 }
 
 juce::var TONE3000Processor::loadLocalTone(const juce::String& title, const juce::var& files,
-                                           const std::string& targetInsertId) {
+                                           const std::string& targetInsertId,
+                                           const juce::String& forceGear) {
   const auto* fileArray = files.getArray();
   if (fileArray == nullptr || fileArray->isEmpty())
     return localToneError(title, "Nothing to load");
@@ -747,7 +887,8 @@ juce::var TONE3000Processor::loadLocalTone(const juce::String& title, const juce
     models.add(model);
   }
 
-  return finishLocalToneLoad(title, models, firstError, fileArray->size(), targetInsertId);
+  return finishLocalToneLoad(title, models, firstError, fileArray->size(), targetInsertId,
+                             forceGear);
 }
 
 juce::var TONE3000Processor::loadLocalTonePath(const juce::File& source,
@@ -867,7 +1008,8 @@ juce::var TONE3000Processor::loadLocalToneUrls(const juce::Array<juce::URL>& sou
 juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,
                                                  const juce::Array<juce::var>& stashedModels,
                                                  const juce::String& firstError, int fileCount,
-                                                 const std::string& targetInsertId) {
+                                                 const std::string& targetInsertId,
+                                                 const juce::String& forceGear) {
   // Identical bytes under two names would collide on the content-derived
   // id (cache key, picker selection); the first name wins.
   juce::Array<juce::var> models;
@@ -892,6 +1034,12 @@ juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,
   tone->setProperty("local", true);
   tone->setProperty("title", title);
   tone->setProperty("format", isNam ? "nam" : "ir");
+  // Empty-slot drop zone's explicit IR/Cab choice (see loadLocalTone's own
+  // comment) - inert for a NAM-format tone (irCategoryFromGear/
+  // toneEngineType only ever consult gear when format != "nam"), so no
+  // extra isNam guard needed here.
+  if (forceGear.isNotEmpty())
+    tone->setProperty("gear", forceGear);
   tone->setProperty("models", models);
 
   const juce::String toneJson = juce::JSON::toString(juce::var(tone.get()));
@@ -1392,6 +1540,9 @@ TONE3000Processor::PreparedBlockModel TONE3000Processor::prepareBlockModelOffThr
           computeIrNormalizationGain(out.irRawSamples, out.irRawSampleRate);
       out.irContentLengthSamples =
           computeIrContentLengthSamples(out.irRawSamples, out.irRawSampleRate);
+      out.irOnsetSamples = computeIrOnsetSamples(out.irRawSamples, out.irRawSampleRate);
+      out.irOnsetSamplesRelaxed = computeIrOnsetSamples(out.irRawSamples, out.irRawSampleRate,
+                                                        kIrOnsetRelaxedThresholdDb);
       out.irWaveformPeaks = computeIrWaveformPeaks(out.irRawSamples, kIrWaveformColumns,
                                                     out.irContentLengthSamples);
 
@@ -1658,6 +1809,11 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     block.irRawSamples.setSize(0, 0);
     block.irRawSampleRate = 0.0;
     block.irContentLengthSamples = 0;
+    block.irOnsetSamples = 0;
+    block.irOnsetSamplesRelaxed = 0;
+    block.trimInitEnabled = false;
+    block.trimRelaxed = false;
+    block.reverseEnabled = false;
     block.irWaveformPeaks.clear();
     block.initLevelNormalized = 1.0f;
     block.attackLengthNormalized = 0.0f;
@@ -1687,6 +1843,8 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     block.irRawSamples = std::move(prepared.irRawSamples);
     block.irRawSampleRate = prepared.irRawSampleRate;
     block.irContentLengthSamples = prepared.irContentLengthSamples;
+    block.irOnsetSamples = prepared.irOnsetSamples;
+    block.irOnsetSamplesRelaxed = prepared.irOnsetSamplesRelaxed;
     block.irWaveformPeaks = std::move(prepared.irWaveformPeaks);
 
     // Category wasn't known at prepare time (local file load; or state
@@ -1713,9 +1871,9 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
 
     // Fresh blocks (Select-flow loads) default their mix by IR category: Cab
     // replaces the signal (fully wet), IrPlayer is a reverb/effect meant to
-    // be blended (half wet). Category is resolved above (or, for a site-
-    // loaded tone, already known before the download - see loadTone), so
-    // this is safe to apply immediately - NOT block.irIsLong, which is
+    // be blended lightly (25% wet). Category is resolved above (or, for a
+    // site-loaded tone, already known before the download - see loadTone),
+    // so this is safe to apply immediately - NOT block.irIsLong, which is
     // purely an engine-selection/CPU signal, deliberately decoupled from
     // every audible default (see IrCategory in ChainBlock.h and TONE3000
     // issue #89: coupling the pad/mix to a length-derived flag is exactly
@@ -1724,7 +1882,7 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     // user's envelope shaping rather than starting the new content
     // untouched.
     if (block.applyDefaultMixOnLoad) {
-      block.mixNormalized = block.irCategory == IrCategory::Cab ? 1.0f : 0.5f;
+      block.mixNormalized = block.irCategory == IrCategory::Cab ? 1.0f : 0.25f;
       block.initLevelNormalized = 1.0f;
       block.attackLengthNormalized = 0.0f;
       block.attackCurveNormalized = 0.5f;

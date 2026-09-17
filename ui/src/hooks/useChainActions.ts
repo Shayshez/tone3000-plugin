@@ -24,9 +24,16 @@ export interface ChainActions {
   ) => void;
   /** Load a drop on a tile: a .nam / .wav file (NAM must be A2), or a folder
       of them (one block, one model per file). An insert slot adds; an
-      existing tone tile swaps in place. Resolves to a user-facing error
-      message, or null on success. */
-  loadLocalFile: (targetBlockId: string, item: DataTransferItem) => Promise<string | null>;
+      existing tone tile swaps in place. `category` is the empty-slot split
+      drop zone's explicit IR/Cab choice (AddTile.tsx) - 'cab' forces a real
+      Cab block regardless of the file's own detected length; omitted (every
+      other drop target) keeps the existing content-duration guess.
+      Resolves to a user-facing error message, or null on success. */
+  loadLocalFile: (
+    targetBlockId: string,
+    item: DataTransferItem,
+    category?: 'ir' | 'cab'
+  ) => Promise<string | null>;
   /** Menu-driven sibling of loadLocalFile: native opens its OS file picker
       and loads the pick (a .nam/.wav file, or a folder of them) from its
       path. Same targeting rules; the reliable route on Linux, where OS file
@@ -125,6 +132,27 @@ export interface ChainActions {
     decayLevelNormalized: number,
     decayCurveNormalized: number
   ) => void;
+  /** IR Size: vari-speed duration/pitch (see BlockParams.size). Same
+      off-thread-rebuild caveat as setBlockIrDecay - callers commit once per
+      drag gesture (on release), not continuously. */
+  setBlockIrSize: (blockId: string, sizeNormalized: number) => void;
+  /** IR Width: stereo-image crossfade/phase-inversion (see BlockParams.
+      width). Same off-thread-rebuild/commit-on-release caveat as
+      setBlockIrSize; no-op on a mono-source IR. */
+  setBlockIrWidth: (blockId: string, widthNormalized: number) => void;
+  /** Trim Init: manual leading-silence-trim toggle (see BlockParams.
+      trimInit/trimRelaxed). Same off-thread rebuild shape as setBlockIrSize/
+      setBlockIrWidth, but a plain on/off - no drag gesture to debounce.
+      `relaxed` (default false) picks the less-sensitive onset threshold;
+      always pass both together so a single click is a single undo step. */
+  setBlockIrTrimInit: (blockId: string, enabled: boolean, relaxed?: boolean) => void;
+  /** Reverse: manual backward-playback toggle (see BlockParams.reverse).
+      Same off-thread rebuild shape as setBlockIrTrimInit. */
+  setBlockIrReverse: (blockId: string, enabled: boolean) => void;
+  /** Resets every IR shaping parameter (Init/Attack/Decay, Size, Width,
+      Trim Init, Reverse) to default in one step - a single undo entry
+      regardless of how many fields actually change. */
+  resetBlockIrShape: (blockId: string) => void;
   /** Fire-and-forget whole-band EQ setter (see useChainState). */
   setBlockEqBand: (blockId: string, bandIndex: number, band: EqBand) => void;
   /** EQ power/bypass: band settings persist, processing is skipped. */

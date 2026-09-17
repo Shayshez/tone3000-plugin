@@ -192,7 +192,7 @@ TEST(IrCategoryTest, LocalFileLoadGuessesCategoryFromDetectedContent) {
   const juce::var reverbBlock = firstToneBlock(procReverb);
   ASSERT_FALSE(reverbBlock.isVoid());
   EXPECT_EQ(reverbBlock["irCategory"].toString(), juce::String("irPlayer"));
-  EXPECT_FLOAT_EQ(static_cast<float>(reverbBlock["params"]["mix"]), 0.5f);
+  EXPECT_FLOAT_EQ(static_cast<float>(reverbBlock["params"]["mix"]), 0.25f);
 }
 
 // setBlockIrCategory resets pad/mix to the new category's fixed default (V1:
@@ -213,7 +213,7 @@ TEST(IrCategoryTest, SetBlockIrCategoryResetsMixToFixedDefault) {
   {
     const juce::var block = firstToneBlock(proc);
     EXPECT_EQ(block["irCategory"].toString(), juce::String("irPlayer"));
-    EXPECT_FLOAT_EQ(static_cast<float>(block["params"]["mix"]), 0.5f);
+    EXPECT_FLOAT_EQ(static_cast<float>(block["params"]["mix"]), 0.25f);
   }
 
   // A user mix tweak is discarded by the next category switch (V1: fixed

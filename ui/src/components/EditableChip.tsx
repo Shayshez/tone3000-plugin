@@ -104,3 +104,51 @@ export const EditableChip: React.FC<{
     </div>
   );
 };
+
+/** Same visual family as EditableChip (same track/label/value layout, meant
+    to sit in the same row) but for a plain boolean, not a typed value: click
+    anywhere on the chip to flip it, no text-entry mode. Used by ChainBlock's
+    IR envelope row for Trim Init (see setBlockIrTrimInit) - unlike the
+    numeric chips, there's nothing to type, just on/off. */
+export const ToggleChip: React.FC<{
+  label: string;
+  on: boolean;
+  onToggle: () => void;
+  /** Fixed width of the value area in px, matching EditableChip's own so a
+      toggle chip lines up with its numeric neighbors in the same row. */
+  valueWidth: number;
+  disabled?: boolean;
+  help?: string;
+  style?: React.CSSProperties;
+  fontSize?: number;
+  /** Overrides the default On/Off text - for a chip that cycles through
+      more than two states (see ChainBlock's Trim Off/Std/Lax cycle) while
+      `on` still just drives the label color (true = anything but the first,
+      "off", state). Keep any override this short - the value column's
+      width is sized for "Off". */
+  value?: string;
+}> = ({ label, on, onToggle, valueWidth, disabled = false, help, style, fontSize = 12, value }) => (
+  <div
+    {...(help && !disabled ? helpProps(help) : {})}
+    onClick={() => {
+      if (!disabled) onToggle();
+    }}
+    style={{ ...style, cursor: disabled ? undefined : 'pointer' }}
+  >
+    <span style={{ fontSize: `${fontSize}rem`, fontFamily: FONT_MONO, color: SUBTLE }}>
+      {label}
+    </span>
+    <span
+      style={{
+        width: `${valueWidth}rem`,
+        fontSize: `${fontSize}rem`,
+        fontFamily: FONT_MONO,
+        color: on ? '#ffffff' : SUBTLE,
+        textAlign: 'left',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {value ?? (on ? 'On' : 'Off')}
+    </span>
+  </div>
+);

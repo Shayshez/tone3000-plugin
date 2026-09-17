@@ -193,6 +193,24 @@ export const WaveformDisplay: React.FC<{
       backdrop (mins/maxs) never moves or rescales while dragging; only this
       overlay does. Omitted or >=1 hides it. */
   cutFraction?: number;
+  /** Trim Init's detected onset (see ToneBlock.irOnsetFraction), 0..1
+      against this same fixed window. Drawn as a dimmed region + line
+      *before* it - the mirror image of cutFraction's dimming, on the
+      opposite edge, since Trim Init removes the *start* rather than the
+      end. Same fixed-window philosophy as cutFraction: the backdrop itself
+      never re-crops or rescales, only this overlay. Omitted or <=0 hides
+      it - callers pass this only while Trim Init is actually on
+      (BlockParams.trimInit), never unconditionally off irOnsetFraction,
+      since that's detected but not necessarily applied. */
+  startFraction?: number;
+  /** True while Reverse is on (BlockParams.reverse). Mirrors the backdrop
+      and every overlay (cut/start lines, envelope curve) horizontally as
+      one rigid unit - a single transform on their shared group, not
+      per-element re-derivation - so everything that's already correctly
+      positioned pre-flip stays correctly positioned relative to each other.
+      The length label is deliberately outside that group (mirrored text is
+      unreadable). */
+  reversed?: boolean;
   /** Envelope knobs' current position (see BlockParams.initLevel/
       attackCurve/decayLevel/decayCurve). Attack's peak is pinned at
       unity/0dB (not a param). `attackFraction` is where the Attack/Decay
@@ -211,7 +229,17 @@ export const WaveformDisplay: React.FC<{
     decayLevel: number;
     decayCurve: number;
   };
-}> = ({ mins, maxs, width, height, contentLengthMs, cutFraction, decay }) => {
+}> = ({
+  mins,
+  maxs,
+  width,
+  height,
+  contentLengthMs,
+  cutFraction,
+  startFraction,
+  reversed,
+  decay,
+}) => {
   const path = useMemo(
     () => buildWaveformPath(mins, maxs, width, height),
     [mins, maxs, width, height]
@@ -221,6 +249,8 @@ export const WaveformDisplay: React.FC<{
 
   const hasCut = Number.isFinite(cutFraction) && (cutFraction as number) < 1;
   const cutX = hasCut ? width * Math.max(0, cutFraction as number) : width;
+  const hasStart = Number.isFinite(startFraction) && (startFraction as number) > 0;
+  const startX = hasStart ? width * Math.min(1, startFraction as number) : 0;
 
   // Envelope line: only within [0, cutX] (the truncated content the
   // envelope actually shapes), only when every level isn't at its 1.0 no-op
@@ -270,42 +300,70 @@ export const WaveformDisplay: React.FC<{
           <stop offset="100%" stopColor={BRAND_RED} />
         </linearGradient>
       </defs>
-      {/* Center (zero-amplitude) reference line, under the waveform - same
-          treatment as the EQ graph's 0dB line. */}
-      <line
-        x1={0}
-        y1={height / 2}
-        x2={width}
-        y2={height / 2}
-        stroke="rgba(235, 235, 245, 0.18)"
-        strokeWidth={1}
-      />
-      <path
-        d={path}
-        fill={`url(#${gradientId})`}
-        fillOpacity={0.3}
-        stroke={`url(#${gradientId})`}
-        strokeWidth={1}
-        strokeOpacity={0.9}
-      />
-      {hasCut && (
-        <g>
-          {/* Everything past the cut: this is what Length would remove. */}
-          <rect x={cutX} y={0} width={width - cutX} height={height} fill="rgba(10, 10, 14, 0.55)" />
-          <line
-            x1={cutX}
-            y1={0}
-            x2={cutX}
-            y2={height}
-            stroke={MUTED}
-            strokeWidth={1.5}
-            strokeDasharray="3 2"
-          />
-        </g>
-      )}
-      {hasDecay && decayPath && (
-        <path d={decayPath} fill="none" stroke={WHITE} strokeWidth={1.5} strokeOpacity={0.85} />
-      )}
+      {/* Reverse mirrors the backdrop and every overlay as one rigid unit
+          (Reverse plays the whole shaped result backward, so what was
+          correctly positioned pre-flip stays correctly positioned relative
+          to everything else after it) - the length label below stays
+          outside this group deliberately; mirrored text is unreadable. */}
+      <g transform={reversed ? `scale(-1,1) translate(${-width},0)` : undefined}>
+        {/* Center (zero-amplitude) reference line, under the waveform - same
+            treatment as the EQ graph's 0dB line. */}
+        <line
+          x1={0}
+          y1={height / 2}
+          x2={width}
+          y2={height / 2}
+          stroke="rgba(235, 235, 245, 0.18)"
+          strokeWidth={1}
+        />
+        <path
+          d={path}
+          fill={`url(#${gradientId})`}
+          fillOpacity={0.3}
+          stroke={`url(#${gradientId})`}
+          strokeWidth={1}
+          strokeOpacity={0.9}
+        />
+        {hasStart && (
+          <g>
+            {/* Everything before the onset: this is what Trim Init removes. */}
+            <rect x={0} y={0} width={startX} height={height} fill="rgba(10, 10, 14, 0.55)" />
+            <line
+              x1={startX}
+              y1={0}
+              x2={startX}
+              y2={height}
+              stroke={MUTED}
+              strokeWidth={1.5}
+              strokeDasharray="3 2"
+            />
+          </g>
+        )}
+        {hasCut && (
+          <g>
+            {/* Everything past the cut: this is what Length would remove. */}
+            <rect
+              x={cutX}
+              y={0}
+              width={width - cutX}
+              height={height}
+              fill="rgba(10, 10, 14, 0.55)"
+            />
+            <line
+              x1={cutX}
+              y1={0}
+              x2={cutX}
+              y2={height}
+              stroke={MUTED}
+              strokeWidth={1.5}
+              strokeDasharray="3 2"
+            />
+          </g>
+        )}
+        {hasDecay && decayPath && (
+          <path d={decayPath} fill="none" stroke={WHITE} strokeWidth={1.5} strokeOpacity={0.85} />
+        )}
+      </g>
       {lengthLabel && (
         <g>
           <rect
