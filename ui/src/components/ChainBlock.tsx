@@ -580,6 +580,9 @@ const DualSideCard: React.FC<{
   const isLocal = tone.local === true;
   const formatBadge = formatLabel(tone.format);
   const eqActive = (child.params.eq?.enabled ?? false) && !isEqFlat(child.params.eq);
+  // A model download/prepare is in flight (switch or first load) - same
+  // derivation the full card's own thumbnail dims/spins on.
+  const modelBusy = child.modelLoading || (!child.loaded && !child.loadFailed);
   const handleShare = async () => {
     if (await actions.shareBlock(child)) toast.show('Link Copied');
   };
@@ -640,15 +643,41 @@ const DualSideCard: React.FC<{
             cursor: 'pointer',
           }}
         >
-          <ToneImage
-            src={tone.images?.[0]}
-            alt={tone.title}
-            gear={tone.gear}
-            local={tone.local}
-            blockType={child.blockType}
-            boxSize={boxSize}
-            draggable={false}
-          />
+          <div
+            style={{
+              opacity: modelBusy || child.loadFailed ? 0.35 : 1,
+              transition: 'opacity 0.2s ease',
+              width: '100%',
+              height: '100%',
+            }}
+          >
+            <ToneImage
+              src={tone.images?.[0]}
+              alt={tone.title}
+              gear={tone.gear}
+              local={tone.local}
+              blockType={child.blockType}
+              boxSize={boxSize}
+              draggable={false}
+            />
+          </div>
+          {(modelBusy || child.loadFailed) && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {child.loadFailed ? (
+                <RetryLoadBadge onRetry={() => actions.retryLoad(child.blockId)} />
+              ) : (
+                <LoadingDots />
+              )}
+            </div>
+          )}
         </button>
         <div
           style={{
@@ -724,12 +753,9 @@ const DualSideCard: React.FC<{
           value={mix}
           onChange={(val) => {
             setMix(val);
-            if (!knobDragRef.current) actions.setBlockParam(child.blockId, 'mix', val);
+            actions.setBlockParam(child.blockId, 'mix', val);
           }}
-          onDragStateChange={(dragging) => {
-            handleKnobDragState(dragging);
-            if (!dragging) actions.setBlockParam(child.blockId, 'mix', mix);
-          }}
+          onDragStateChange={handleKnobDragState}
           size={KNOB_SIZE_SECONDARY}
           labelBottom={false}
           thumb="secondary"
@@ -741,12 +767,9 @@ const DualSideCard: React.FC<{
           value={vol}
           onChange={(val) => {
             setVol(val);
-            if (!knobDragRef.current) actions.setBlockParam(child.blockId, 'outputGain', val);
+            actions.setBlockParam(child.blockId, 'outputGain', val);
           }}
-          onDragStateChange={(dragging) => {
-            handleKnobDragState(dragging);
-            if (!dragging) actions.setBlockParam(child.blockId, 'outputGain', vol);
-          }}
+          onDragStateChange={handleKnobDragState}
           size={KNOB_SIZE_SECONDARY}
           labelBottom={false}
           thumb="secondary"
@@ -816,6 +839,20 @@ interface ChainBlockProps {
       child, this just swaps the strip for a plain spacer so the header row
       stays balanced. */
   hideChainStrip?: boolean;
+  /** Set alongside `hideChainStrip` for a Dual Mono side's own full editor:
+      which wrapper block/side this render actually belongs to. Swap and
+      Trash in the header must route through the dual-aware actions
+      (addToDualSlot/removeDualSlotContent) instead of the ordinary
+      swapBlock/removeBlock a ChainBlock instance uses everywhere else -
+      those act on a *lane slot*, which this child was never in (it's
+      nested), so calling them on the child's own id either silently no-ops
+      (removeChainBlock only scans the two top-level lanes) or, worse,
+      leaves the picker's post-pick navigation pointed at an id ChainView
+      can never resolve (DETAIL_BLOCK_STORAGE_KEY set to a child id that
+      isn't in chain/chainRight - a real bug this fixes: swapping a side's
+      tone from inside its own full editor left the whole center panel
+      permanently blank). */
+  dualParent?: { blockId: string; isLeftSide: boolean };
 }
 
 /** The detail card (full block view). All mutations come from the
@@ -835,6 +872,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   initialShowEq = false,
   initialShowInfo = false,
   hideChainStrip = false,
+  dualParent,
 }) => {
   const { blockId, tone, params } = block;
   const actions = useChainActions();
@@ -1770,6 +1808,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             initialShowEq={openChildInitial === 'eq'}
             initialShowInfo={openChildInitial === 'info'}
             hideChainStrip
+            dualParent={{ blockId, isLeftSide: openChildSide === 'left' }}
             onBack={() => {
               setOpenChildSide(null);
               setOpenChildInitial(null);
@@ -2369,13 +2408,24 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               )}
               <ChromeIconButton
                 help={HELP.swapTone}
-                onClick={() => actions.swapBlock(blockId, { navigateToDetail: true })}
+                onClick={() =>
+                  dualParent
+                    ? actions.addToDualSlot(dualParent.blockId, dualParent.isLeftSide)
+                    : actions.swapBlock(blockId, { navigateToDetail: true })
+                }
               >
                 <ArrowLeftRight />
               </ChromeIconButton>
               <ChromeIconButton
                 help={HELP.removeBlock}
-                onClick={() => actions.removeBlock(blockId)}
+                onClick={() => {
+                  if (dualParent) {
+                    actions.removeDualSlotContent(dualParent.blockId, dualParent.isLeftSide);
+                    onBack();
+                  } else {
+                    actions.removeBlock(blockId);
+                  }
+                }}
               >
                 <Trash2 />
               </ChromeIconButton>
