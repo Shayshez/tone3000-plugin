@@ -273,6 +273,7 @@ const HELP_DESKTOP = {
   dualWidth: knobHelp('Width', 'Blend between mono and the full panned image.'),
   addDualSlotLeft: 'Left: pick a tone for this slot.',
   addDualSlotRight: 'Right: pick a tone for this slot.',
+  dualSideOpen: 'Open: this side’s full editor.',
   panLeft: knobHelp('Pan L', 'Left chain, hard left ↔ center.'),
   panRight: knobHelp('Pan R', 'Right chain, center ↔ hard right.'),
   panLink: 'Link Pans: mirror both pan knobs.',

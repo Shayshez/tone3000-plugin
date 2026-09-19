@@ -292,6 +292,87 @@ const CompactToneMetaRow: React.FC<{
   </div>
 );
 
+/** Model list + switch-model wiring for one block's `ModelSelect` picker -
+    extracted so the Dual Mono compact card's per-side picker (see
+    DualSideCard) can share the exact same fetch/switch behavior as the full
+    card's own picker, rather than duplicating it. `block` is null while a
+    Dual Mono side is empty; every returned value degrades to an inert
+    default in that case (hooks still run unconditionally either way, same
+    call order every render - required by the rules of hooks). Local tones
+    own their model list directly; catalog tones fetch it client-side once
+    (native persists only the active model). */
+function useModelPicker(block: ToneBlock | null) {
+  const actions = useChainActions();
+  const tone = block?.tone;
+  const isLocal = tone?.local === true;
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [isSwitchingModel, setIsSwitchingModel] = useState(false);
+  const modelsFetchSeq = useRef(0);
+
+  const fetchModels = useCallback(async () => {
+    if (!tone || isLocal || !actions.authenticated) return;
+    const seq = ++modelsFetchSeq.current;
+    setModelsLoading(true);
+    try {
+      const list = await actions.listToneModels(tone.id, tone.format);
+      if (seq === modelsFetchSeq.current) setModels(list);
+    } catch (err) {
+      // No error UI: the picker keeps the stored model, and opening it
+      // retries (handleModelsOpen), so a transient failure never sticks.
+      console.error('Failed to load models', err);
+    } finally {
+      if (seq === modelsFetchSeq.current) setModelsLoading(false);
+    }
+    // Primitive deps deliberately, not `tone` itself: `block` (and so
+    // `tone`) gets a fresh object every poll tick, and re-fetching on every
+    // one of those (instead of only a genuine tone-identity change) is
+    // exactly what this was written to avoid - same reasoning the original,
+    // non-extracted version of this fetch used.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions, isLocal, tone?.format, tone?.id]);
+
+  // Fetch on mount, tone identity change, and auth arrival.
+  useEffect(() => {
+    setModels([]);
+    if (tone) void fetchModels();
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      modelsFetchSeq.current++;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchModels, tone?.id]);
+
+  const handleModelsOpen = useCallback(() => {
+    if (!modelsLoading && models.length === 0) void fetchModels();
+  }, [fetchModels, models.length, modelsLoading]);
+
+  const modelOptions = !tone ? [] : isLocal ? tone.models : models.length ? models : tone.models;
+  const modelsTotal = tone ? catalogModelCount(tone) : 0;
+
+  const handleModelSelect = useCallback(
+    async (id: string) => {
+      if (!block || !tone || isSwitchingModel) return;
+      const newModelId = parseInt(id, 10);
+      if (isNaN(newModelId) || newModelId === block.activeModelId) return;
+      const model = (isLocal ? tone.models : models).find((m) => m.id === newModelId);
+      if (!model?.model_url) return;
+      setIsSwitchingModel(true);
+      try {
+        await actions.switchModel(block.blockId, newModelId, {
+          ...model,
+          model_url: model.model_url,
+        });
+      } finally {
+        setIsSwitchingModel(false);
+      }
+    },
+    [actions, block, isLocal, isSwitchingModel, models, tone]
+  );
+
+  return { modelOptions, modelsLoading, modelsTotal, handleModelSelect, handleModelsOpen };
+}
+
 /** EQ view glyphs: 16×16, stroke inherits selected/muted color. */
 const EqSlidersIcon: React.FC = () => (
   <svg
@@ -395,6 +476,289 @@ const IrCategoryControl: React.FC<{
   </div>
 );
 
+/** One side of a Dual Mono block's detail view: an empty "+" socket, or -
+    once filled - a compact card carrying real per-block functionality
+    (icon row, thumbnail+title+tags, stats+author, a model prev/next
+    browser, and this side's own Pan/Mix/Vol) instead of the bare
+    thumbnail+swap/remove the block used to show. Reuses pieces the full
+    single-block card already has (CompactToneMetaRow, FormatBadge,
+    useModelPicker) rather than re-deriving any of it. Deliberately stays
+    read-only for anything that needs the full card's own richer state
+    (favoriting, the Info panel's full description/tags) - EQ/Info/the
+    thumbnail all hand off to `onOpenChild`, which recurses this exact same
+    side into the ordinary full `ChainBlock` card (see the isDualMono
+    branch below); Share is the one action simple enough to fire directly
+    from here. */
+const DualSideCard: React.FC<{
+  dualBlockId: string;
+  isLeftSide: boolean;
+  child: ToneBlock | undefined;
+  /** Dims Pan (inert while the enclosing lane has no spare channel to
+      widen into - see runDualMono's own fold-vs-widen decision). */
+  channelLimited: boolean;
+  panValue: number;
+  onPanChange: (val: number) => void;
+  onPanDragStateChange: (dragging: boolean) => void;
+  panHelp: string;
+  /** Open this side in the full single-block editor - `null` for a plain
+      open (thumbnail), 'eq'/'info' to land straight in that sub-view. */
+  onOpenChild: (initial: 'eq' | 'info' | null) => void;
+}> = ({
+  dualBlockId,
+  isLeftSide,
+  child,
+  channelLimited,
+  panValue,
+  onPanChange,
+  onPanDragStateChange,
+  panHelp,
+  onOpenChild,
+}) => {
+  const actions = useChainActions();
+  const toast = useToast();
+  const boxSize = 80;
+
+  const { modelOptions, modelsLoading, modelsTotal, handleModelSelect, handleModelsOpen } =
+    useModelPicker(child ?? null);
+
+  const knobDragRef = useRef(false);
+  const handleKnobDragState = useCallback((dragging: boolean) => {
+    knobDragRef.current = dragging;
+  }, []);
+  const [mix, setMix] = useState(child?.params.mix ?? 1.0);
+  const [vol, setVol] = useState(child?.params.outputGain ?? 0.5);
+  useEffect(() => {
+    if (!knobDragRef.current) setMix(child?.params.mix ?? 1.0);
+  }, [child?.params.mix]);
+  useEffect(() => {
+    if (!knobDragRef.current) setVol(child?.params.outputGain ?? 0.5);
+  }, [child?.params.outputGain]);
+
+  if (!child) {
+    return (
+      <div
+        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8rem' }}
+      >
+        <div
+          style={{
+            width: `${boxSize}rem`,
+            height: `${boxSize}rem`,
+            borderRadius: '12rem',
+            border: BORDER,
+            overflow: 'hidden',
+            position: 'relative',
+            flexShrink: 0,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => actions.addToDualSlot(dualBlockId, isLeftSide)}
+            {...helpProps(isLeftSide ? HELP.addDualSlotLeft : HELP.addDualSlotRight)}
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              color: GRAY,
+            }}
+          >
+            <Plus size={24} />
+          </button>
+        </div>
+        <span style={{ fontFamily: FONT_MONO, fontSize: '12rem', color: WHITE }}>
+          {isLeftSide ? 'Left' : 'Right'}
+        </span>
+      </div>
+    );
+  }
+
+  const { tone } = child;
+  const isLocal = tone.local === true;
+  const formatBadge = formatLabel(tone.format);
+  const eqActive = (child.params.eq?.enabled ?? false) && !isEqFlat(child.params.eq);
+  const handleShare = async () => {
+    if (await actions.shareBlock(child)) toast.show('Link Copied');
+  };
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12rem',
+        width: '340rem',
+        minWidth: 0,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8rem' }}>
+        <ChromeTextButton armed={eqActive} help={HELP.eqToggle} onClick={() => onOpenChild('eq')}>
+          EQ
+        </ChromeTextButton>
+        {!isLocal && (
+          <ChromeIconButton help={HELP.toneInfo} onClick={() => onOpenChild('info')}>
+            <Info size={ICON_SIZE} />
+          </ChromeIconButton>
+        )}
+        {!isLocal && (
+          <ChromeIconButton help={HELP.shareTone} onClick={() => void handleShare()}>
+            <Share size={ICON_SIZE} />
+          </ChromeIconButton>
+        )}
+        <ChromeIconButton
+          help={HELP.swapTone}
+          onClick={() => actions.addToDualSlot(dualBlockId, isLeftSide)}
+        >
+          <ArrowLeftRight size={ICON_SIZE} />
+        </ChromeIconButton>
+        <ChromeIconButton
+          help={HELP.removeBlock}
+          onClick={() => actions.removeDualSlotContent(dualBlockId, isLeftSide)}
+        >
+          <Trash2 size={ICON_SIZE} />
+        </ChromeIconButton>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'row', gap: '12rem', minWidth: 0 }}>
+        <button
+          type="button"
+          onClick={() => onOpenChild(null)}
+          {...helpProps(HELP.dualSideOpen)}
+          style={{
+            width: `${boxSize}rem`,
+            height: `${boxSize}rem`,
+            borderRadius: '12rem',
+            border: BORDER,
+            overflow: 'hidden',
+            position: 'relative',
+            flexShrink: 0,
+            padding: 0,
+            background: 'transparent',
+            cursor: 'pointer',
+          }}
+        >
+          <ToneImage
+            src={tone.images?.[0]}
+            alt={tone.title}
+            gear={tone.gear}
+            local={tone.local}
+            blockType={child.blockType}
+            boxSize={boxSize}
+            draggable={false}
+          />
+        </button>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6rem',
+            minWidth: 0,
+            flex: 1,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: '14rem',
+              color: WHITE,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {tone.title}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10rem' }}>
+            {tone.gear && (
+              <span style={{ fontSize: '12rem', color: MUTED, fontWeight: 400 }}>
+                {gearLabel(tone.gear)}
+              </span>
+            )}
+            {formatBadge && <FormatBadge label={formatBadge} a2={child.blockType === 'nam'} />}
+          </div>
+          {!isLocal && (
+            <CompactToneMetaRow
+              tone={tone}
+              favoritesCount={tone.favorites_count ?? 0}
+              favorited={tone.is_favorite === true}
+            />
+          )}
+        </div>
+      </div>
+
+      <div style={{ cursor: isLocal || actions.authenticated ? 'default' : 'not-allowed' }}>
+        <ModelSelect
+          options={modelOptions.map((m) => ({ id: String(m.id), name: m.name }))}
+          value={String(child.activeModelId)}
+          onChange={handleModelSelect}
+          onOpen={handleModelsOpen}
+          height={28}
+          disabled={!isLocal && !actions.authenticated}
+          loading={modelsLoading}
+          totalCount={isLocal ? tone.models.length : modelsTotal}
+        />
+      </div>
+
+      <div
+        className={uiOffClass(channelLimited)}
+        style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '16rem' }}
+      >
+        <KnobControl
+          label="Pan"
+          value={panValue}
+          onChange={onPanChange}
+          onDragStateChange={onPanDragStateChange}
+          size={KNOB_SIZE_SECONDARY}
+          labelBottom={false}
+          thumb="secondary"
+          scale={dualPanScale}
+          defaultValue={isLeftSide ? 0.0 : 1.0}
+          help={panHelp}
+        />
+        <KnobControl
+          label="Mix"
+          value={mix}
+          onChange={(val) => {
+            setMix(val);
+            if (!knobDragRef.current) actions.setBlockParam(child.blockId, 'mix', val);
+          }}
+          onDragStateChange={(dragging) => {
+            handleKnobDragState(dragging);
+            if (!dragging) actions.setBlockParam(child.blockId, 'mix', mix);
+          }}
+          size={KNOB_SIZE_SECONDARY}
+          labelBottom={false}
+          thumb="secondary"
+          defaultValue={1.0}
+          help={HELP.blockMix}
+        />
+        <KnobControl
+          label="Vol"
+          value={vol}
+          onChange={(val) => {
+            setVol(val);
+            if (!knobDragRef.current) actions.setBlockParam(child.blockId, 'outputGain', val);
+          }}
+          onDragStateChange={(dragging) => {
+            handleKnobDragState(dragging);
+            if (!dragging) actions.setBlockParam(child.blockId, 'outputGain', vol);
+          }}
+          size={KNOB_SIZE_SECONDARY}
+          labelBottom={false}
+          thumb="secondary"
+          scale={gainDbScale}
+          defaultValue={0.5}
+          help={HELP.blockOut}
+        />
+      </div>
+    </div>
+  );
+};
+
 interface ChainBlockProps {
   block: ToneBlock;
   /** Another enabled+loaded NAM after this block in its lane. With input
@@ -438,6 +802,20 @@ interface ChainBlockProps {
       mount - i.e. opening from the gallery, where the card was unmounted a
       moment ago. */
   initialShowEq?: boolean;
+  /** Same idea as `initialShowEq`, for the Info panel - the Dual Mono
+      compact card's per-side Info icon opens straight into a side's full
+      editor with this set (see DualSideCard below). Only matters at mount,
+      same reasoning as `initialShowEq`. */
+  initialShowInfo?: boolean;
+  /** True when this render is a Dual Mono side's own full editor (recursed
+      into by the isDualMono branch below, not reached through ChainView's
+      own detailBlockId - see that branch's own comment). A dual child has
+      no lane of its own to browse (each side is a fixed single socket, not
+      an insert-slot-bearing lane), so ChainMapStrip's onAdd/onPasteBlockAt
+      would be meaningless here; rather than invent lane semantics for a
+      child, this just swaps the strip for a plain spacer so the header row
+      stays balanced. */
+  hideChainStrip?: boolean;
 }
 
 /** The detail card (full block view). All mutations come from the
@@ -455,6 +833,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   onPasteBlockAt,
   onFillToFaceplate,
   initialShowEq = false,
+  initialShowInfo = false,
+  hideChainStrip = false,
 }) => {
   const { blockId, tone, params } = block;
   const actions = useChainActions();
@@ -516,12 +896,16 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const [dualLeftPan, setDualLeftPan] = useState(params.dualLeftPan ?? 0.0);
   const [dualRightPan, setDualRightPan] = useState(params.dualRightPan ?? 1.0);
   const [dualWidth, setDualWidth] = useState(params.dualWidth ?? 1.0);
+  // DUAL_MONO only: which side (if any) is showing its own full editor -
+  // see the isDualMono branch's own comment on why this stays local rather
+  // than going through ChainView's detailBlockId.
+  const [openChildSide, setOpenChildSide] = useState<'left' | 'right' | null>(null);
+  const [openChildInitial, setOpenChildInitial] = useState<'eq' | 'info' | null>(null);
   const [trimInit, setTrimInit] = useState(params.trimInit ?? false);
   const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
   const [reverse, setReverse] = useState(params.reverse ?? false);
-  const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [showEq, setShowEq] = useState(initialShowEq);
-  const [showInfo, setShowInfo] = useState(false);
+  const [showInfo, setShowInfo] = useState(initialShowInfo);
   const [infoTone, setInfoTone] = useState<Tone | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
@@ -1009,69 +1393,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // Native persists only the block's *active* model; the full catalog (tones
   // max out at 300 models) is fetched client-side in one call per tone.
   // Signed out the picker is disabled (and the API needs the token anyway).
-  const [models, setModels] = useState<Model[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Same stale guard as fetchInfo: only the newest request may touch state
-  // (retries reuse this fetch, so a flag can't cover it).
-  const modelsFetchSeq = useRef(0);
-  const fetchModels = useCallback(async () => {
-    if (isLocal || !actions.authenticated) return;
-    const seq = ++modelsFetchSeq.current;
-    setModelsLoading(true);
-    try {
-      const list = await actions.listToneModels(tone.id, tone.format);
-      if (seq === modelsFetchSeq.current) setModels(list);
-    } catch (err) {
-      // No error UI: the picker keeps the stored model, and opening it
-      // retries (handleModelsOpen), so a transient failure never sticks.
-      console.error('Failed to load models', err);
-    } finally {
-      if (seq === modelsFetchSeq.current) setModelsLoading(false);
-    }
-  }, [actions, isLocal, tone.format, tone.id]);
-
-  // Fetch on mount, tone change, and auth arrival (`actions` carries
-  // `authenticated`, so logging in re-runs this with the guard now open).
-  useEffect(() => {
-    setModels([]);
-    void fetchModels();
-    return () => {
-      // Reading the counter's latest value here is the point (bumping it
-      // orphans whatever fetch is in flight), not a stale-closure bug.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      modelsFetchSeq.current++;
-    };
-  }, [fetchModels]);
-
-  // A failed fetch leaves the catalog at just the stored model; opening the
-  // picker retries so the card never strands on "1/N". No-op once loaded.
-  const handleModelsOpen = useCallback(() => {
-    if (!modelsLoading && models.length === 0) void fetchModels();
-  }, [fetchModels, models.length, modelsLoading]);
-
-  // Local tones own their model list; catalog tones show the full catalog
-  // once loaded, just the active model until then.
-  const modelOptions = isLocal ? tone.models : models.length ? models : tone.models;
-
-  const handleModelSelect = async (id: string) => {
-    if (isSwitchingModel) return;
-    const newModelId = parseInt(id, 10);
-    if (isNaN(newModelId) || newModelId === block.activeModelId) return;
-
-    // Native only stores the active model, so the switch call carries the
-    // model object: from the fetched catalog, or the local tone's own list
-    // (whose entries ship their stash model_url).
-    const model = (isLocal ? tone.models : models).find((m) => m.id === newModelId);
-    if (!model?.model_url) return;
-
-    setIsSwitchingModel(true);
-    try {
-      await actions.switchModel(blockId, newModelId, { ...model, model_url: model.model_url });
-    } finally {
-      setIsSwitchingModel(false);
-    }
-  };
+  const { modelOptions, modelsLoading, modelsTotal, handleModelSelect, handleModelsOpen } =
+    useModelPicker(block);
 
   // A model download/prepare is in flight (switch, swap or first load). The
   // previous model keeps playing during a switch (`loaded` stays true), so
@@ -1143,9 +1466,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // Every NAM block in the chain is A2 (the browser filters the catalog and
   // local drops are validated), so NAM badges always carry the A2 mark.
   const formatBadge = formatLabel(tone.format);
-
-  // Picker "n/N" and the folder stat: A2 for NAM, models_count for IR.
-  const modelsTotal = catalogModelCount(tone);
 
   // EQ is shaping this block's audio: powered on and not flat (a flat or
   // bypassed EQ is skipped natively). Uses the optimistic power state so the
@@ -1421,97 +1741,55 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   }
 
   if (isDualMono) {
-    // One mini slot (Left/Right): empty shows a "+" that opens the same
-    // Select flow an ordinary insert slot uses (addToDualSlot, see
-    // useToneLoadFlow's handleAddToDualSlot); filled shows a small preview
-    // with its own swap/remove - "swap" reopens the same flow (it always
-    // replaces whatever's there), so no separate action is needed for it.
-    const renderDualSlot = (items: ChainItem[] | undefined, isLeftSide: boolean) => {
-      const child = items?.[0];
-      const filled = child != null && !isInsertSlot(child);
-      const boxSize = 96;
-      return (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '8rem',
-          }}
-        >
-          <div
-            style={{
-              width: `${boxSize}rem`,
-              height: `${boxSize}rem`,
-              borderRadius: '12rem',
-              border: BORDER,
-              overflow: 'hidden',
-              position: 'relative',
-              flexShrink: 0,
+    const rawLeftChild = block.dualLeft?.[0];
+    const dualLeft = rawLeftChild && !isInsertSlot(rawLeftChild) ? rawLeftChild : undefined;
+    const rawRightChild = block.dualRight?.[0];
+    const dualRight = rawRightChild && !isInsertSlot(rawRightChild) ? rawRightChild : undefined;
+
+    // Recurse into the exact same ChainBlock card every ordinary NAM/IR/CAB
+    // block uses, for whichever side is open - "Navigate", not a second
+    // rendering path (see this session's design discussion, recorded in
+    // dual_mono_ux_punchlist.md). Local state, not ChainView's own
+    // detailBlockId: a dual child is never reachable through the top-level
+    // chain/chainRight arrays ChainView resolves detail views from, so
+    // threading it through there would need ChainView to understand
+    // nesting it doesn't today (and its awaitingDetailBlock guard would
+    // render blank forever for an id it can never confirm - see the
+    // research this plan was built on). onBack here only clears this local
+    // state - it never touches ChainView, sessionStorage, or gallery
+    // scroll-restore, because we never left this Dual Mono block.
+    if (openChildSide != null) {
+      const childToOpen = openChildSide === 'left' ? dualLeft : dualRight;
+      if (childToOpen) {
+        return (
+          <ChainBlock
+            block={childToOpen}
+            namDownstream={false}
+            sampleRate={sampleRate}
+            namSlimSizeDefault={namSlimSizeDefault}
+            initialShowEq={openChildInitial === 'eq'}
+            initialShowInfo={openChildInitial === 'info'}
+            hideChainStrip
+            onBack={() => {
+              setOpenChildSide(null);
+              setOpenChildInitial(null);
             }}
-          >
-            {filled ? (
-              <ToneImage
-                src={child.tone.images?.[0]}
-                alt={child.tone.title}
-                gear={child.tone.gear}
-                local={child.tone.local}
-                blockType={child.blockType}
-                boxSize={boxSize}
-                draggable={false}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => actions.addToDualSlot(blockId, isLeftSide)}
-                {...helpProps(isLeftSide ? HELP.addDualSlotLeft : HELP.addDualSlotRight)}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: GRAY,
-                }}
-              >
-                <Plus size={24} />
-              </button>
-            )}
-          </div>
-          <span
-            style={{
-              fontFamily: FONT_MONO,
-              fontSize: '12rem',
-              color: WHITE,
-              maxWidth: `${boxSize}rem`,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {filled ? child.tone.title : isLeftSide ? 'Left' : 'Right'}
-          </span>
-          {filled && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8rem' }}>
-              <ChromeIconButton
-                help={HELP.swapTone}
-                onClick={() => actions.addToDualSlot(blockId, isLeftSide)}
-              >
-                <ArrowLeftRight size={ICON_SIZE} />
-              </ChromeIconButton>
-              <ChromeIconButton
-                help={HELP.removeBlock}
-                onClick={() => actions.removeDualSlotContent(blockId, isLeftSide)}
-              >
-                <Trash2 size={ICON_SIZE} />
-              </ChromeIconButton>
-            </div>
-          )}
-        </div>
-      );
+            chainStripItems={[]}
+            onJumpToBlock={() => {}}
+            onAddBlockAt={() => {}}
+            onPasteBlockAt={null}
+          />
+        );
+      }
+      // The side emptied out from under us (e.g. Trash from the other
+      // side's own detail view is impossible, but undo/redo or a state
+      // restore could still do it) - fall back to the compact card instead
+      // of rendering nothing.
+    }
+
+    const openChild = (side: 'left' | 'right', initial: 'eq' | 'info' | null) => {
+      setOpenChildSide(side);
+      setOpenChildInitial(initial);
     };
 
     return (
@@ -1615,7 +1893,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               display: 'flex',
               flexDirection: 'column',
               width: '100%',
-              height: `${CARD_HEIGHT}rem`,
+              // Auto, not the shared CARD_HEIGHT: this card's content (two
+              // per-side compact cards) is taller than the plain 3-knob row
+              // it replaces - same reasoning showInfo already uses to drop
+              // the fixed height elsewhere in this component.
               minHeight: `${CARD_HEIGHT}rem`,
               boxSizing: 'border-box',
               border: BORDER,
@@ -1663,45 +1944,41 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             <div
               className={uiOffClass(!enabled)}
               style={{
-                height: `${BODY_HEIGHT}rem`,
                 flexShrink: 0,
                 display: 'flex',
                 flexDirection: 'row',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 justifyContent: 'center',
-                gap: '48rem',
+                gap: '32rem',
+                padding: `${BODY_PADDING}rem`,
+                boxSizing: 'border-box',
                 transition: 'opacity 0.2s ease',
               }}
             >
-              {renderDualSlot(block.dualLeft, true)}
+              <DualSideCard
+                dualBlockId={blockId}
+                isLeftSide
+                child={dualLeft}
+                channelLimited={block.dualChannelLimited ?? false}
+                panValue={dualLeftPan}
+                onPanChange={handleDualLeftPanChange}
+                onPanDragStateChange={handleKnobDragState}
+                panHelp={HELP.dualPanLeft}
+                onOpenChild={(initial) => openChild('left', initial)}
+              />
               <div
                 className={uiOffClass(block.dualChannelLimited ?? false)}
-                style={{ display: 'flex', alignItems: 'flex-end', gap: '16rem' }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  // Roughly centers the Width knob against the two side
+                  // cards' own header rows, not their full (much taller)
+                  // height.
+                  minHeight: `${80 + 12 + 96}rem`,
+                }}
               >
-                <KnobControl
-                  label="Pan L"
-                  value={dualLeftPan}
-                  onChange={handleDualLeftPanChange}
-                  onDragStateChange={handleKnobDragState}
-                  size={KNOB_SIZE_SECONDARY}
-                  labelBottom={false}
-                  thumb="secondary"
-                  scale={dualPanScale}
-                  defaultValue={0.0}
-                  help={HELP.dualPanLeft}
-                />
-                <KnobControl
-                  label="Pan R"
-                  value={dualRightPan}
-                  onChange={handleDualRightPanChange}
-                  onDragStateChange={handleKnobDragState}
-                  size={KNOB_SIZE_SECONDARY}
-                  labelBottom={false}
-                  thumb="secondary"
-                  scale={dualPanScale}
-                  defaultValue={1.0}
-                  help={HELP.dualPanRight}
-                />
                 <KnobControl
                   label="Width"
                   value={dualWidth}
@@ -1715,7 +1992,17 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   help={HELP.dualWidth}
                 />
               </div>
-              {renderDualSlot(block.dualRight, false)}
+              <DualSideCard
+                dualBlockId={blockId}
+                isLeftSide={false}
+                child={dualRight}
+                channelLimited={block.dualChannelLimited ?? false}
+                panValue={dualRightPan}
+                onPanChange={handleDualRightPanChange}
+                onPanDragStateChange={handleKnobDragState}
+                panHelp={HELP.dualPanRight}
+                onOpenChild={(initial) => openChild('right', initial)}
+              />
             </div>
           </div>
         </div>
@@ -1796,30 +2083,37 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           {/* Every item in this block's lane, insert slots included, in
               chain order — so any block is one click away and every gap in
               the chain is a visible "+" at its real position, not just a
-              trailing add button. */}
-          <ChainMapStrip
-            items={chainStripItems}
-            currentBlockId={blockId}
-            onSelect={(id) => {
-              onJumpToBlock(id);
-              // Deterministic destination: a plain chip always lands on the
-              // block's main content, regardless of whatever view (EQ,
-              // Info) was active on screen before the click. Only
-              // onSelectEq below ever turns showEq back on.
-              setShowEq(false);
-            }}
-            onSelectEq={(id) => {
-              onJumpToBlock(id);
-              // Same pair the header's own EQ toggle sets (line ~1216):
-              // showEq wins the body's render regardless of showInfo, but a
-              // stale showInfo would still leave the Info chip reading
-              // "open" underneath.
-              setShowEq(true);
-              setShowInfo(false);
-            }}
-            onAdd={onAddBlockAt}
-            onPasteBlockAt={onPasteBlockAt}
-          />
+              trailing add button. Omitted for a Dual Mono side's own editor
+              (hideChainStrip - see that prop's own comment): a side isn't a
+              lane, it's a fixed single socket, so a plain spacer takes its
+              place instead of inventing strip semantics for it. */}
+          {hideChainStrip ? (
+            <div style={{ flex: 1 }} />
+          ) : (
+            <ChainMapStrip
+              items={chainStripItems}
+              currentBlockId={blockId}
+              onSelect={(id) => {
+                onJumpToBlock(id);
+                // Deterministic destination: a plain chip always lands on the
+                // block's main content, regardless of whatever view (EQ,
+                // Info) was active on screen before the click. Only
+                // onSelectEq below ever turns showEq back on.
+                setShowEq(false);
+              }}
+              onSelectEq={(id) => {
+                onJumpToBlock(id);
+                // Same pair the header's own EQ toggle sets (line ~1216):
+                // showEq wins the body's render regardless of showInfo, but a
+                // stale showInfo would still leave the Info chip reading
+                // "open" underneath.
+                setShowEq(true);
+                setShowInfo(false);
+              }}
+              onAdd={onAddBlockAt}
+              onPasteBlockAt={onPasteBlockAt}
+            />
+          )}
 
           {/* Invisible mirror of the ← BLOCK button: ChainMapStrip centers
               itself within its own flex:1 slot, but that slot only starts

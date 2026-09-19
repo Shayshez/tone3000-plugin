@@ -147,9 +147,19 @@ export function useToneLoadFlow({
         console.warn('Swap target no longer exists; adding tone as a new block');
       }
 
-      // Dual Mono child slot: no navigateToDetail (the caller is already on
-      // the Dual Mono block's own detail view - there's nothing further to
-      // navigate to, a filled child isn't independently opened).
+      // Dual Mono child slot: always reopens the wrapper's own detail view
+      // (there's no gallery-tile entry point for a dual slot pick, unlike
+      // swap/add above - handleAddToDualSlot is only ever called from
+      // inside that detail view - see its own comment), so this is
+      // unconditional, not a per-call-site navigateToDetail flag. Closing
+      // the browser unmounts ChainView (see the comment above), which loses
+      // its in-memory detailBlockId even though the *value* never actually
+      // changed - re-stamping DETAIL_BLOCK_STORAGE_KEY here is what the
+      // freshly-mounted ChainView reads on its next render (issue: without
+      // this, picking a tone for one side landed back on the gallery
+      // instead of staying put for the second side - the same fix the
+      // detail card's own swap button already needs and takes, see its
+      // `navigateToDetail: true`).
       if (dualTarget) {
         const [dualBlockId, sideFlag] = dualTarget.split(':');
         const childId = await actions.loadToneIntoDualSlot(
@@ -158,6 +168,7 @@ export function useToneLoadFlow({
           toneJson
         );
         if (!childId) console.error('Dual Mono slot target no longer exists');
+        else sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, dualBlockId);
         setShowToneBrowser(false);
         return;
       }
