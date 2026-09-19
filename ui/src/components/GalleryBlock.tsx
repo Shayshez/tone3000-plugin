@@ -412,10 +412,42 @@ const DualMonoTileHalf: React.FC<{ child: ChainItem | undefined; halfSize: numbe
     exists for). Both empty (a just-added block) still reads clearly via
     the two "+" hints side by side. */
 const DualMonoTileImage: React.FC<{ block: ToneBlock; size: number }> = ({ block, size }) => (
-  <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-    <DualMonoTileHalf child={block.dualLeft?.[0]} halfSize={size / 2} />
-    <div style={{ width: '1rem', backgroundColor: 'rgba(235, 235, 245, 0.24)', flexShrink: 0 }} />
-    <DualMonoTileHalf child={block.dualRight?.[0]} halfSize={size / 2} />
+  <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+      <DualMonoTileHalf child={block.dualLeft?.[0]} halfSize={size / 2} />
+      <div style={{ width: '1rem', backgroundColor: 'rgba(235, 235, 245, 0.24)', flexShrink: 0 }} />
+      <DualMonoTileHalf child={block.dualRight?.[0]} halfSize={size / 2} />
+    </div>
+    {/* Block-type identity, kept even once real artwork fills both halves -
+        two split thumbnails alone don't read as "this is a Dual Mono
+        block" at a glance the way the old generic glyph did. Bottom-left:
+        clear of the hover-only top action strip and BlockLed's own
+        bottom-right corner. Same abbreviated label ChainMapStrip's
+        BLOCK_TYPE_LABEL already uses for this type. */}
+    <div
+      style={{
+        position: 'absolute',
+        bottom: '8rem',
+        left: '8rem',
+        padding: '3rem 8rem',
+        borderRadius: '4rem',
+        backgroundColor: 'rgba(0, 0, 0, 0.55)',
+        pointerEvents: 'none',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: '11rem',
+          fontWeight: 400,
+          color: WHITE,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5rem',
+        }}
+      >
+        Dual
+      </span>
+    </div>
   </div>
 );
 
