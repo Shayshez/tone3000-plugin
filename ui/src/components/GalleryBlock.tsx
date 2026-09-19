@@ -17,8 +17,8 @@ import { RetryLoadBadge } from './RetryLoadBadge';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
-import type { ChainSide, ToneBlock } from '../types/chain';
-import { isEqFlat } from '../types/chain';
+import type { ChainSide, ChainItem, ToneBlock } from '../types/chain';
+import { isEqFlat, isInsertSlot } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
 import type { TileMenuAnchor, TileMenuItem } from './TileMenu';
@@ -345,6 +345,80 @@ const SplitFileDropZone: React.FC<{
   );
 };
 
+/** One side's own gallery-tile preview inside the Dual Mono split (see
+    DualMonoTileImage): the real tone artwork once loaded, a small loading
+    scrim while its model downloads, or a bare "+" hint over an empty
+    socket - deliberately not the full AddTile/mini-slot treatment (the
+    whole tile is one click target that opens the detail view; a half
+    isn't independently interactive here). */
+const DualMonoTileHalf: React.FC<{ child: ChainItem | undefined; halfSize: number }> = ({
+  child,
+  halfSize,
+}) => {
+  const filled = child != null && !isInsertSlot(child);
+  if (!filled) {
+    return (
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: SURFACE,
+        }}
+      >
+        <PlusCircle size={Math.round(halfSize * 0.22)} color={HIGHLIGHT} />
+      </div>
+    );
+  }
+  const busy = child.modelLoading || (!child.loaded && !child.loadFailed);
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div style={{ position: 'absolute', inset: 0, opacity: busy ? 0.35 : 1 }}>
+        <ToneImage
+          src={child.tone.images?.[0]}
+          alt={child.tone.title}
+          gear={child.tone.gear}
+          local={child.tone.local}
+          blockType={child.blockType}
+          boxSize={halfSize}
+          draggable={false}
+        />
+      </div>
+      {busy && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+          }}
+        >
+          <LoadingDots />
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** A Dual Mono tile's own artwork: each side's real thumbnail split down
+    the middle (matching SplitFileDropZone's own half/divider/half
+    layout), instead of the generic "00 DUAL MONO" glyph every other
+    LocalTypeGlyph fallback uses - lets Left/Right content be told apart
+    from the gallery without opening the block (the punch-list ask this
+    exists for). Both empty (a just-added block) still reads clearly via
+    the two "+" hints side by side. */
+const DualMonoTileImage: React.FC<{ block: ToneBlock; size: number }> = ({ block, size }) => (
+  <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+    <DualMonoTileHalf child={block.dualLeft?.[0]} halfSize={size / 2} />
+    <div style={{ width: '1rem', backgroundColor: 'rgba(235, 235, 245, 0.24)', flexShrink: 0 }} />
+    <DualMonoTileHalf child={block.dualRight?.[0]} halfSize={size / 2} />
+  </div>
+);
+
 /**
  * The complete tile visual: artwork, loading scrim, top action strip and
  * bottom meter. `dragging` pins the action strip visible while the tile
@@ -433,20 +507,35 @@ const TileSurface: React.FC<{
             style={{
               position: 'absolute',
               inset: 0,
-              opacity: enabled && !busy && !block.loadFailed ? 1 : 0.35,
+              // A Dual Mono tile has no download of its own (loaded=true the
+              // instant it exists - see addDualMonoBlock) and dims each
+              // side's own artwork internally instead (DualMonoTileHalf),
+              // so only `enabled` gates its opacity here.
+              opacity:
+                block.blockType === 'dualMono'
+                  ? enabled
+                    ? 1
+                    : 0.35
+                  : enabled && !busy && !block.loadFailed
+                    ? 1
+                    : 0.35,
               transition: 'opacity 0.2s ease',
             }}
           >
-            <ToneImage
-              src={tone.images?.[0]}
-              alt={tone.title}
-              gear={tone.gear}
-              local={tone.local}
-              blockType={block.blockType}
-              boxSize={size}
-              iconSize={64}
-              draggable={false}
-            />
+            {block.blockType === 'dualMono' ? (
+              <DualMonoTileImage block={block} size={size} />
+            ) : (
+              <ToneImage
+                src={tone.images?.[0]}
+                alt={tone.title}
+                gear={tone.gear}
+                local={tone.local}
+                blockType={block.blockType}
+                boxSize={size}
+                iconSize={64}
+                draggable={false}
+              />
+            )}
           </div>
         )}
 
