@@ -55,6 +55,10 @@ export function useChainState() {
       getChainState: backend.getPluginFunction('getChainState'),
       loadTone: backend.getPluginFunction('loadTone'),
       addEqBlock: backend.getPluginFunction('addEqBlock'),
+      addDualMonoBlock: backend.getPluginFunction('addDualMonoBlock'),
+      loadToneIntoDualSlot: backend.getPluginFunction('loadToneIntoDualSlot'),
+      removeDualSlotContent: backend.getPluginFunction('removeDualSlotContent'),
+      setDualImage: backend.getPluginFunction('setDualImage'),
       loadLocalTone: backend.getPluginFunction('loadLocalTone'),
       swapTone: backend.getPluginFunction('swapTone'),
       refreshToneMetadata: backend.getPluginFunction('refreshToneMetadata'),
@@ -192,6 +196,24 @@ export function useChainState() {
           nothing to pick or load. */
       addEqBlock: (targetInsertId: string) =>
         run<string>('addEqBlock', () => native.addEqBlock(targetInsertId)),
+      /** The tile menu's "Dual Mono" row - adds a ChainBlockType::DUAL_MONO
+          block, both child slots empty until loadToneIntoDualSlot fills
+          one. */
+      addDualMonoBlock: (targetInsertId: string) =>
+        run<string>('addDualMonoBlock', () => native.addDualMonoBlock(targetInsertId)),
+      loadToneIntoDualSlot: (dualBlockId: string, isLeftSide: boolean, toneJson: string) =>
+        run<string>('loadToneIntoDualSlot', () =>
+          native.loadToneIntoDualSlot(dualBlockId, isLeftSide, toneJson)
+        ),
+      removeDualSlotContent: (dualBlockId: string, isLeftSide: boolean) =>
+        run('removeDualSlotContent', () => native.removeDualSlotContent(dualBlockId, isLeftSide)),
+      /** Fire-and-forget, safe at knob-drag rates - same shape as
+          setBlockParam above, not run()'s coalescing treatment. */
+      setDualImage: (blockId: string, leftPan: number, rightPan: number, width: number) => {
+        Promise.resolve(native.setDualImage(blockId, leftPan, rightPan, width)).catch((error) =>
+          console.error('setDualImage failed:', error)
+        );
+      },
       removeBlock: (blockId: string) =>
         run('removeChainBlock', () => native.removeChainBlock(blockId)),
       reorderBlocks: (orderedIds: string[]) =>

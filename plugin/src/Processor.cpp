@@ -319,6 +319,11 @@ void TONE3000Processor::applyOversamplingSettings() {
     scratch.setSize(2, juce::jmax(1, chainDomainBlockSize()), false, false, true);
     scratch.clear();
   }
+  for (auto* scratchArray : {&dualLeftBuf, &dualLeftDryScratch, &dualRightBuf, &dualRightDryScratch})
+    for (auto& scratch : *scratchArray) {
+      scratch.setSize(1, juce::jmax(1, chainDomainBlockSize()), false, false, true);
+      scratch.clear();
+    }
 
   for (auto& l : lanes)
     prepareChain(l);
@@ -472,6 +477,24 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       // predelay field at all (structurally minimal by design).
       block->predelay.prepare(kChainBaseSampleRate,
                               block->predelayNormalized * BlockPredelay::kMaxDelayMs);
+    }
+
+    if (block->type == ChainBlockType::DUAL_MONO) {
+      // Hard reset (not just a new target): a re-prepare has no live signal
+      // continuity to protect, same reasoning as every other smoother above.
+      block->dualLeftPanSmoother.reset(chainRate, 0.05f);
+      block->dualRightPanSmoother.reset(chainRate, 0.05f);
+      block->dualWidthSmoother.reset(chainRate, 0.05f);
+      block->dualLeftPanSmoother.setCurrentAndTargetValue(block->dualLeftPanNormalized);
+      block->dualRightPanSmoother.setCurrentAndTargetValue(block->dualRightPanNormalized);
+      block->dualWidthSmoother.setCurrentAndTargetValue(block->dualWidthNormalized);
+      // Recurses at most one level deep: a dual child is never itself a
+      // DUAL_MONO block (nothing on the creation path can produce one -
+      // loadToneIntoDualSlot only ever loads an ordinary tone), so this
+      // can't recurse further regardless of what the type system would
+      // technically allow.
+      prepareChain(block->dualLeft);
+      prepareChain(block->dualRight);
     }
 
     // Initialize per-block smoothers (input gain, output gain, mix, NAM
@@ -836,6 +859,11 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     scratch.setSize(2, chainDomainBlockSize(), false, false, true);
     scratch.clear();
   }
+  for (auto* scratchArray : {&dualLeftBuf, &dualLeftDryScratch, &dualRightBuf, &dualRightDryScratch})
+    for (auto& scratch : *scratchArray) {
+      scratch.setSize(1, chainDomainBlockSize(), false, false, true);
+      scratch.clear();
+    }
   chainScratchChannel.setSize(1, samplesPerBlock, false, false, true);
   chainScratchChannel.clear();
 
@@ -990,6 +1018,90 @@ void TONE3000Processor::updateCachedParameters() {
   cacheChainInvertRight = loadBool(paramRefs.chainInvertRight);
 }
 
+// See the declaration (Processor.h). Called from processChainOnBuffer's own
+// per-block loop in place of the ordinary dry-copy/input-gain/model/mix
+// pipeline - a Dual Mono block splits into two independent per-block runs
+// then recombines, a different shape than every other block type's single
+// continuous path.
+void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<float>& buffer,
+                                    int laneSlot) {
+  const int numSamples = buffer.getNumSamples();
+  const int numChannels = buffer.getNumChannels();
+  const size_t slot = static_cast<size_t>(laneSlot);
+
+  auto& dl = dualLeftBuf[slot];
+  auto& dr = dualRightBuf[slot];
+  jassert(dl.getNumSamples() >= numSamples);
+  jassert(dr.getNumSamples() >= numSamples);
+
+  // Seed: 2 channels present -> channel 0 feeds left, channel 1 feeds
+  // right, distinctly. Only 1 channel present -> duplicated into both (a
+  // genuine mono signal diverging into two independent paths).
+  dl.copyFrom(0, 0, buffer, 0, 0, numSamples);
+  dr.copyFrom(0, 0, buffer, numChannels > 1 ? 1 : 0, 0, numSamples);
+
+  // Run each present child (0 or 1 element - see ChainBlock::dualLeft/
+  // dualRight) through the ordinary per-block path. An empty side is a
+  // no-op, leaving dl/dr as the seeded pass-through signal - a Dual Mono
+  // block with nothing loaded on either side is inaudible pass-through,
+  // same as adding any other still-empty block.
+  processChainOnBuffer(dualBlock.dualLeft, dl, dualLeftDryScratch[slot], 0);
+  processChainOnBuffer(dualBlock.dualRight, dr, dualRightDryScratch[slot], 0);
+
+  // Recombine: constant-power pan per side, summed, then blended against
+  // the mono sum by width. Widen-vs-fold is decided purely by
+  // buffer.getNumChannels() - checking it directly is the real rule, not
+  // an approximation of one, so no extra plumbing is needed to reach it
+  // from here.
+  const float* dlData = dl.getReadPointer(0);
+  const float* drData = dr.getReadPointer(0);
+  float peak = 0.0f;
+
+  if (numChannels >= 2) {
+    // Re-arm the smoothers' targets from the raw fields every call, same
+    // idiom every other per-block smoother uses: setDualImage only ever
+    // targets them live, so this is what a fresh block's fields reach even
+    // before the UI calls it for the first time.
+    dualBlock.dualLeftPanSmoother.setTargetValue(dualBlock.dualLeftPanNormalized);
+    dualBlock.dualRightPanSmoother.setTargetValue(dualBlock.dualRightPanNormalized);
+    dualBlock.dualWidthSmoother.setTargetValue(dualBlock.dualWidthNormalized);
+
+    // Pan/width read per-sample off the smoothers, not the raw *Normalized
+    // fields directly - a live knob drag glides instead of stepping.
+    float* outL = buffer.getWritePointer(0);
+    float* outR = buffer.getWritePointer(1);
+    for (int i = 0; i < numSamples; ++i) {
+      const float leftPan = dualBlock.dualLeftPanSmoother.getNextValue();
+      const float rightPan = dualBlock.dualRightPanSmoother.getNextValue();
+      const float width = dualBlock.dualWidthSmoother.getNextValue();
+      const auto gL = constantPowerPanGains(leftPan);
+      const auto gR = constantPowerPanGains(rightPan);
+      const float l = dlData[i];
+      const float r = drData[i];
+      const float mono = 0.5f * (l + r);
+      const float panL = l * gL.first + r * gR.first;
+      const float panR = l * gL.second + r * gR.second;
+      outL[i] = mono + (panL - mono) * width;
+      outR[i] = mono + (panR - mono) * width;
+      peak = std::max(peak, std::max(std::abs(outL[i]), std::abs(outR[i])));
+    }
+  } else {
+    // Pinned to one physical channel: Pan/Width are inert here, same shape
+    // as imageMatrixGains's own foldToMono, ½(l + r).
+    float* outMono = buffer.getWritePointer(0);
+    for (int i = 0; i < numSamples; ++i) {
+      outMono[i] = 0.5f * (dlData[i] + drData[i]);
+      peak = std::max(peak, std::abs(outMono[i]));
+    }
+  }
+
+  // No single well-defined "input" for a two-way split, unlike an ordinary
+  // block's own input meter - both meters read the recombined output peak.
+  const float peakDb = peak > 0.0f ? juce::Decibels::gainToDecibels(peak) : -60.0f;
+  dualBlock.inputMeterDb.store(std::max(-60.0f, peakDb));
+  dualBlock.outputMeterDb.store(std::max(-60.0f, peakDb));
+}
+
 // ##########################
 // RT PROCESS A SINGLE CHAIN
 // ##########################
@@ -1053,6 +1165,18 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         block->spectrum.pushSamples(buffer.getReadPointer(0),
                                     numChannels > 1 ? buffer.getReadPointer(1) : nullptr,
                                     numSamples);
+      continue;
+    }
+
+    if (block->type == ChainBlockType::DUAL_MONO) {
+      // Self-contained: seeds/recombines its own two children directly into
+      // `buffer`, in place of the ordinary dry-copy/input-gain/model/mix
+      // pipeline below (which assumes one continuous signal path, not a
+      // split-then-recombine shape). Still respects the wet-fade/bypass
+      // bookkeeping above, so power-toggling or removing a Dual Mono block
+      // fades exactly like every other block.
+      const int laneSlot = (&blocks == &lanes[1]) ? 1 : 0;
+      runDualMono(*block, buffer, laneSlot);
       continue;
     }
 

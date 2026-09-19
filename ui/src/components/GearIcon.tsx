@@ -297,6 +297,18 @@ const Eq = ({ size = 40, color = GRAY }: Props) => (
   </svg>
 );
 
+// Not a real TONE3000 gear category, same as Eq above - only ever reached
+// through blockType's own 'dualMono' branch, for the Dual Mono block's
+// fallback glyph (see ChainBlockType::DUAL_MONO). Two parallel tracks,
+// echoing the block's own two fixed child slots rather than Eq's three
+// fader bars.
+const DualMono = ({ size = 40, color = GRAY }: Props) => (
+  <svg viewBox="0 0 40 40" fill="none" aria-label="Dual Mono" style={svgStyle(size)}>
+    <rect x="8" y="8" width="9" height="24" rx="2" stroke={color} strokeWidth="3" />
+    <rect x="23" y="8" width="9" height="24" rx="2" stroke={color} strokeWidth="3" />
+  </svg>
+);
+
 /** Mirrors the web's ICON_MAP (deprecated `full-rig` shares the Amp+Cab glyph). */
 const ICONS: Record<string, React.FC<Props>> = {
   'amp-cab': FullRig,
@@ -309,6 +321,7 @@ const ICONS: Record<string, React.FC<Props>> = {
   experimental: Experimental,
   ir: Ir,
   eq: Eq,
+  dualmono: DualMono,
 };
 
 /** Gear-type icon by TONE3000 gear id; unknown/missing gear falls back to the
@@ -406,7 +419,7 @@ export const ToneImage: React.FC<{
       `gear`), so a local block's own `gear` value goes stale the moment
       it's converted. `blockType` is read fresh off getChainState every
       poll, so it can't go stale the same way. */
-  blockType?: 'nam' | 'ir' | 'cab' | 'eq';
+  blockType?: 'nam' | 'ir' | 'cab' | 'eq' | 'dualMono';
   boxSize: number;
   /** Override the fallback glyph size (defaults to ~40% of `boxSize`). */
   iconSize?: number;
@@ -430,6 +443,10 @@ export const ToneImage: React.FC<{
       return <LocalTypeGlyph gear="ir" label="IR" glyphSize={glyphSize} boxSize={boxSize} />;
     if (blockType === 'eq')
       return <LocalTypeGlyph gear="eq" label="EQ" glyphSize={glyphSize} boxSize={boxSize} />;
+    if (blockType === 'dualMono')
+      return (
+        <LocalTypeGlyph gear="dualMono" label="Dual Mono" glyphSize={glyphSize} boxSize={boxSize} />
+      );
     return (
       <div
         style={{

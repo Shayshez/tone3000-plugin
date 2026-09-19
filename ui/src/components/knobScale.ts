@@ -206,6 +206,24 @@ export const crossoverHzScale: KnobScale = {
  * center), the right 0.5..1 (center .. hard right). Display is the pan
  * amount toward the side, 100 = hard, 0 = center.
  */
+/**
+ * Dual Mono block's own Pan L/Pan R knobs (see ChainBlock.tsx's isDualMono
+ * branch): unlike panScale above (a shared half-range for the chain-level
+ * pan rail), each knob here has its own full, independent 0..1 range -
+ * 0 = hard left, 0.5 = center, 1 = hard right. Same L/R/C readout
+ * convention as panScale for consistency.
+ */
+export const dualPanScale: KnobScale = {
+  toDisplay: (n) => (n - 0.5) * 200,
+  fromDisplay: (d) => 0.5 + d / 200,
+  format: (n) => {
+    const amount = Math.round((n - 0.5) * 200);
+    if (amount === 0) return 'C';
+    return amount < 0 ? `${-amount}L` : `${amount}R`;
+  },
+  editText: (n) => Math.round((n - 0.5) * 200).toString(),
+};
+
 export const panScale = (side: 'left' | 'right'): KnobScale => {
   const toDisplay = (n: number) => (side === 'left' ? (0.5 - n) * 200 : (n - 0.5) * 200);
   const fromDisplay = (d: number) => (side === 'left' ? 0.5 - d / 200 : 0.5 + d / 200);

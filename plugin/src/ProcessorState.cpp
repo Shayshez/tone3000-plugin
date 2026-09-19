@@ -144,6 +144,12 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
   blockState.setProperty("trimRelaxed", block.trimRelaxed, nullptr);
   blockState.setProperty("reverse", block.reverseEnabled, nullptr);
   blockState.setProperty("irCategory", irCategoryToString(block.irCategory), nullptr);
+  // Unconditional, like every other field above - cheap even for a block
+  // type that never uses them, and matches struct defaults so old states
+  // restore to the same no-op values a fresh block starts with.
+  blockState.setProperty("dualLeftPan", block.dualLeftPanNormalized, nullptr);
+  blockState.setProperty("dualRightPan", block.dualRightPanNormalized, nullptr);
+  blockState.setProperty("dualWidth", block.dualWidthNormalized, nullptr);
 
   if (block.type != ChainBlockType::INSERT) {
     blockState.setProperty("toneId", block.toneId, nullptr);
@@ -208,6 +214,16 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
     block.irCategoryNeedsDurationGuess = true;
   }
 
+  // Fallbacks match the struct's own defaults (hard-left/hard-right/full
+  // width), so a state saved before this field existed restores to the
+  // same no-op values a fresh Dual Mono block starts with.
+  block.dualLeftPanNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualLeftPan", 0.0f)));
+  block.dualRightPanNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualRightPan", 1.0f)));
+  block.dualWidthNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualWidth", 1.0f)));
+
   // States from before per-block sizes restore as lite (0.0). An engine the
   // restore keeps loaded (see reconcileChainFromTree) retiers in place: the
   // NAM container fast-paths an unchanged tier, and every restore path runs
@@ -230,6 +246,21 @@ void TONE3000Processor::serializeChainToTree(
     bool includeModelData) {
   for (const auto& block : blocks) {
     juce::ValueTree blockState = serializeBlockSettings(*block);
+
+    // DUAL_MONO only: nest the two fixed child slots the same way the
+    // top-level lanes nest under the snapshot root - mirrors
+    // reconcileChainFromTree's own recursion. At most one block per side
+    // (see ChainBlock.h), but reuses the same recursive call as any
+    // top-level lane since dualLeft/dualRight share Lane's own type.
+    if (block->type == ChainBlockType::DUAL_MONO) {
+      juce::ValueTree dualLeftState("DualLeftBlocks");
+      serializeChainToTree(block->dualLeft, dualLeftState, includeModelData);
+      blockState.appendChild(dualLeftState, nullptr);
+
+      juce::ValueTree dualRightState("DualRightBlocks");
+      serializeChainToTree(block->dualRight, dualRightState, includeModelData);
+      blockState.appendChild(dualRightState, nullptr);
+    }
 
     if (includeModelData && block->type != ChainBlockType::INSERT) {
       juce::ValueTree cacheState("ModelCache");

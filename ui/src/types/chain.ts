@@ -188,6 +188,16 @@ export interface BlockParams {
   reverse: boolean;
   /** Per-block 6-band EQ. Flat = skipped entirely on the audio thread. */
   eq: BlockEqParams;
+  /** DUAL_MONO only: recombine controls for the block's two fixed child
+      slots (see ToneBlock.dualLeft/dualRight). Normalized 0..1, constant-
+      power pan (0 = hard left, 1 = hard right); defaults hard-left/hard-
+      right/full-width - each side keeps its own place until the user dials
+      in something else. Set via `setDualImage`, called continuously while a
+      knob drags (native-side smoothing handles click-avoidance). Inert for
+      every other block type. */
+  dualLeftPan: number;
+  dualRightPan: number;
+  dualWidth: number;
 }
 
 /**
@@ -254,8 +264,12 @@ export interface ToneBlock {
       'eq' is a standalone ChainBlockType::EQ block (see addEqBlock): no
       model/tone at all, just this block's own eq processing everything
       that passes through - ChainBlock.tsx renders it as a completely
-      separate, much simpler card (see its own isEq early return). */
-  blockType: 'nam' | 'ir' | 'cab' | 'eq';
+      separate, much simpler card (see its own isEq early return).
+      'dualMono' is a fixed, non-extensible pair (ChainBlockType::DUAL_MONO,
+      see addDualMonoBlock): also no tone/model of its own - dualLeft/
+      dualRight below carry its two fixed child slots instead - rendered as
+      its own separate card too (ChainBlock.tsx's isDualMono branch). */
+  blockType: 'nam' | 'ir' | 'cab' | 'eq' | 'dualMono';
   /** Tone metadata for rendering (slim projection of the API tone). */
   tone: ToneSummary;
   activeModelId: number;
@@ -315,6 +329,19 @@ export interface ToneBlock {
   inputLevelDbu?: number;
   outputLevelDbu?: number;
   params: BlockParams;
+  /** DUAL_MONO only: the block's two fixed child slots, each 0 or 1 real
+      block (never an extensible chain of its own - see blockType's own
+      comment). Reuses ChainItem's own shape (insert slot when empty, a
+      full ToneBlock when filled) rather than a bespoke type, so the same
+      tile-preview rendering works for either state with no special-casing. */
+  dualLeft?: ChainItem[];
+  dualRight?: ChainItem[];
+  /** DUAL_MONO only: true when the enclosing lane currently has no spare
+      physical channel to widen into, so Pan/Width are momentarily inert
+      (native folds to mono regardless of their setting) - mirrors
+      runDualMono's own widen-vs-fold decision. Drives whether the detail
+      view dims those three knobs. */
+  dualChannelLimited?: boolean;
 }
 
 export type ChainItem = InsertSlot | ToneBlock;

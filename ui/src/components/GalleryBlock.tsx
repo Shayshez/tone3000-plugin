@@ -270,6 +270,15 @@ export const blockTypeMenuItems = (
     // behind a flyout.
     onSelect: () => actions.addEqBlock(targetBlockId),
   },
+  {
+    label: 'Dual Mono',
+    icon: <GearIcon gear="dualMono" size={16} color="currentColor" />,
+    help: HELP.addDualMonoTile,
+    // Same leaf-row shape as EQ: no submenu, since content for each of the
+    // block's two fixed slots is picked afterward from its own detail view
+    // (Select Tone flow), not at add time.
+    onSelect: () => actions.addDualMonoBlock(targetBlockId),
+  },
 ];
 
 /** Interactive wiring for a tile's chrome. */
@@ -527,8 +536,10 @@ const TileSurface: React.FC<{
                 EQ
               </ChromeIconButton>
               {/* A standalone EQ block has no tone/model to replace - see
-                  ChainBlockType::EQ. */}
-              {block.blockType !== 'eq' && (
+                  ChainBlockType::EQ. Same for Dual Mono: it has no tone of
+                  its own either, only its two child slots (swapped/cleared
+                  from its own detail view instead). */}
+              {block.blockType !== 'eq' && block.blockType !== 'dualMono' && (
                 <ChromeIconButton
                   help={HELP.swapTone}
                   onClick={actions.onSwap}

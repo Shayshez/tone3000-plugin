@@ -53,6 +53,23 @@ export interface ChainActions {
       Cab/IR's rows this doesn't navigate to the new block's detail view
       either, matching those rows' own behavior (add and stay put). */
   addEqBlock: (targetInsertId: string) => void;
+  /** The tile menu's "Dual Mono" row: adds a ChainBlockType::DUAL_MONO
+      block at the given insert slot - a fixed pair of two child slots,
+      both empty until addToDualSlot fills one. No submenu, no navigation,
+      same "add and stay put" behavior as addEqBlock. */
+  addDualMonoBlock: (targetInsertId: string) => void;
+  /** A Dual Mono child slot's own "+"/swap: opens the Select flow the same
+      way `addModel` does for an ordinary insert slot, remembering which
+      block + side to load the picked tone into (see useToneLoadFlow's
+      handleAddToDualSlot) - not a direct native call, same shape as
+      `addModel` not being one either. */
+  addToDualSlot: (dualBlockId: string, isLeftSide: boolean) => void;
+  /** Clears one side of a Dual Mono block back to empty. */
+  removeDualSlotContent: (dualBlockId: string, isLeftSide: boolean) => void;
+  /** Live Pan L/Pan R/Width for a Dual Mono block's recombine - called
+      continuously while a knob drags (native-side smoothing handles
+      click-avoidance), same idiom as every other continuous param. */
+  setDualImage: (blockId: string, leftPan: number, rightPan: number, width: number) => void;
   removeBlock: (blockId: string) => void;
   /** Launch the Select flow to replace this block's tone in place.
       `navigateToDetail` (default false, the gallery tile's own swap action):

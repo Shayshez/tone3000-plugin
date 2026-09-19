@@ -103,7 +103,24 @@ inline float irSizeGainCompensation(float durationRatio) {
 // dispatch, the *existing*, type-agnostic PRE/POST eq.isPre()/isActive()
 // checks that already run for every block are the entire DSP story here -
 // no new processing branch needed.
-enum class ChainBlockType { NAM, IR, INSERT, CAB, EQ };
+//
+// DUAL_MONO is a fixed, non-extensible pair: exactly two optional child
+// slots (dualLeft/dualRight below), never an open-ended sub-chain - this is
+// a deliberate redesign of an earlier "Split/Merge zone" concept (an
+// extensible dual-mono sub-lane between two marker blocks) that turned out
+// to be the wrong shape for the UI: nearly every visual bug that design hit
+// traced back to fitting an extensible mini-chain inside one gallery tile.
+// A fixed pair sidesteps that class of problem entirely - the gallery tile
+// stays one ordinary TILE_SIZE square; "two things live here" is confined
+// to this block's own detail view. Added via addDualMonoBlock, synthesized
+// with `loaded = true` like EQ (the block itself has no tone of its own -
+// its children do); queueActiveModelLoad recurses into whichever children
+// are present instead of early-returning outright. Unlike EQ, DOES get a
+// real new DSP dispatch branch (Processor.cpp): it seeds two mono scratch
+// buffers, runs each present child through the ordinary single-block
+// processing path, and recombines with Pan L/Pan R/Width (see
+// dualLeftPanNormalized et al. below).
+enum class ChainBlockType { NAM, IR, INSERT, CAB, EQ, DUAL_MONO };
 
 inline juce::String chainBlockTypeToString(ChainBlockType type) {
   switch (type) {
@@ -111,6 +128,7 @@ inline juce::String chainBlockTypeToString(ChainBlockType type) {
     case ChainBlockType::INSERT: return "insert";
     case ChainBlockType::CAB: return "cab";
     case ChainBlockType::EQ: return "eq";
+    case ChainBlockType::DUAL_MONO: return "dualMono";
     case ChainBlockType::IR: break;
   }
   return "ir";
@@ -121,6 +139,7 @@ inline ChainBlockType chainBlockTypeFromString(const juce::String& s) {
   if (s == "insert") return ChainBlockType::INSERT;
   if (s == "cab") return ChainBlockType::CAB;
   if (s == "eq") return ChainBlockType::EQ;
+  if (s == "dualMono") return ChainBlockType::DUAL_MONO;
   return ChainBlockType::IR;
 }
 
@@ -535,6 +554,42 @@ struct ChainBlock {
   // Spectrum analyzer for the EQ editor backdrop. Only fed by the audio thread
   // while the UI has this block's EQ view open (atomic enabled flag).
   BlockSpectrum spectrum;
+
+  // DUAL_MONO only: the two fixed child slots. Each is a
+  // std::vector<std::unique_ptr<ChainBlock>> holding 0 or 1 element - never
+  // more, never an extensible chain of its own (see ChainBlockType::
+  // DUAL_MONO's own comment above; the vector shape is purely an
+  // implementation convenience, not a UI capability) - so runDualMono
+  // (Processor.cpp) can drive each side through the existing, well-tested
+  // processChainOnBuffer directly with zero new per-block DSP dispatch, and
+  // an empty side (size 0) already behaves as inert pass-through with no
+  // special-casing (processChainOnBuffer over an empty vector is a no-op).
+  // Self-referential via unique_ptr is legal here the same way it was for
+  // the earlier zone design: inline member functions are parsed in
+  // complete-class context.
+  std::vector<std::unique_ptr<ChainBlock>> dualLeft;
+  std::vector<std::unique_ptr<ChainBlock>> dualRight;
+  // DUAL_MONO only: recombine controls for blending dualLeft/dualRight back
+  // into the main signal - ported near-verbatim from the earlier zone
+  // design's own zoneLeftPan/zoneRightPan/zoneWidth (see runDualMono,
+  // Processor.cpp): each side panned by constant-power gains, the two
+  // panned images summed, then blended against the mono sum by width.
+  // Defaults hard-left/hard-right/full-width, matching the old design's own
+  // reasoning: each side keeps its own place until the user dials in
+  // something else. Plain per-block fields, not APVTS parameters - these
+  // blocks are created/destroyed dynamically, same as mixNormalized.
+  float dualLeftPanNormalized{0.0f};
+  float dualRightPanNormalized{1.0f};
+  float dualWidthNormalized{1.0f};
+  // DUAL_MONO only: smoothed views of the three fields above, so a live
+  // knob drag (setDualImage, called on every tick) glides instead of
+  // stepping. Reset/seeded in prepareChain's DUAL_MONO branch and at
+  // creation time (addDualMonoBlock) - same duration every other per-block
+  // smoother uses; the recombine step reads these, never the raw
+  // *Normalized fields directly.
+  juce::LinearSmoothedValue<float> dualLeftPanSmoother;
+  juce::LinearSmoothedValue<float> dualRightPanSmoother;
+  juce::LinearSmoothedValue<float> dualWidthSmoother;
 
   ChainBlock(const std::string& blockId, ChainBlockType blockType)
       : id(blockId), type(blockType), toneId(0), activeModelId(0), loaded(false),

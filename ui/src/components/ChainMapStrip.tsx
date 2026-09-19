@@ -26,12 +26,14 @@ import type { ChainItem, ToneBlock } from '../types/chain';
 import { isEqFlat, isInsertSlot } from '../types/chain';
 
 /** Abbreviated strip label per native block type (ToneBlock.blockType):
-    mirrors the header's own NAM/IR split, plus the newer CAB and EQ types. */
+    mirrors the header's own NAM/IR split, plus the newer CAB, EQ, and
+    Dual Mono types. */
 const BLOCK_TYPE_LABEL: Record<ToneBlock['blockType'], string> = {
   nam: 'NAM',
   ir: 'IR',
   cab: 'CAB',
   eq: 'EQ',
+  dualMono: 'DUAL',
 };
 
 /** Every chip (tone label or "+") is this exact box, regardless of label

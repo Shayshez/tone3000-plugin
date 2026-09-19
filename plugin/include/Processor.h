@@ -88,6 +88,32 @@ public:
   // stale/absent), but synchronous - there is no model to fetch, so the
   // block is loaded the instant it exists. Returns the new block's id.
   std::string addEqBlock(const std::string& targetInsertId = {});
+  // Add a Dual Mono block (ChainBlockType::DUAL_MONO - see its own comment,
+  // ChainBlock.h) at an insert slot: same targeting as loadTone/addEqBlock,
+  // synchronous like addEqBlock (the block itself has no tone of its own).
+  // Both dualLeft/dualRight start empty - content is picked afterward from
+  // the block's own detail view (loadToneIntoDualSlot below), not at
+  // creation time. Returns the new block's id.
+  std::string addDualMonoBlock(const std::string& targetInsertId = {});
+  // Load a tone into one of a Dual Mono block's two fixed child slots,
+  // replacing whatever was there (a fresh child block, own engine/id - not
+  // an in-place tone swap, since a dual slot has no "chain position" to
+  // preserve the way swapTone's target does). Returns the new child's id,
+  // "" on failure (blockId isn't a DUAL_MONO block).
+  std::string loadToneIntoDualSlot(const std::string& dualBlockId, bool isLeftSide,
+                                   const juce::String& toneJsonString);
+  // Clears one side of a Dual Mono block back to empty. Returns false if
+  // blockId isn't a DUAL_MONO block; true (a no-op) if that side was
+  // already empty.
+  bool removeDualSlotContent(const std::string& dualBlockId, bool isLeftSide);
+  // Live Pan L/Pan R/Width for a Dual Mono block's recombine (see
+  // runDualMono, Processor.cpp) - called continuously while a knob drags
+  // (DSP-side smoothing handles click-avoidance, see dualLeftPanSmoother et
+  // al., ChainBlock.h), so this only ever targets the smoothers, never
+  // resets them. Clamps each value to [0,1]; false if blockId isn't a
+  // DUAL_MONO block.
+  bool setDualImage(const std::string& blockId, double leftPanNormalized,
+                    double rightPanNormalized, double widthNormalized);
   // Load dropped local files (`files` = [{ name, data }], base64 bytes; one
   // entry for a single file, many for a folder) as one tone block, one model
   // per file. `targetInsertId` is either an insert slot (adds, consuming
@@ -869,6 +895,20 @@ private:
                             juce::AudioBuffer<float>& dryScratch, int beginIdx = 0,
                             int endIdx = -1);
 
+  // A Dual Mono block's own DSP: seeds two 1-channel scratch buffers from
+  // `buffer` (2 channels present -> channel 0/1 feed left/right distinctly;
+  // 1 channel -> duplicated into both), runs each present child
+  // (dualBlock.dualLeft/dualRight, 0 or 1 element each) through the
+  // ordinary processChainOnBuffer, then recombines into `buffer` with
+  // constant-power Pan L/Pan R and a Width blend against the mono sum -
+  // widening to true stereo when `buffer` already has a spare channel,
+  // folding to mono otherwise (decided purely by buffer.getNumChannels(),
+  // ported from the same reasoning the earlier zone design used). Called
+  // from processChainOnBuffer's own per-block loop in place of the ordinary
+  // dry-copy/input-gain/model/mix pipeline. `laneSlot` selects which
+  // top-level lane's scratch buffers to use (see dualLeftBuf et al.).
+  void runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<float>& buffer, int laneSlot);
+
   // Run two independent chain sections, the `worker*` one on an RtWorkerPool
   // thread and the `local*` one on the calling (audio) thread, when this
   // callback forked (rtParallelLanes); strictly sequentially otherwise. The
@@ -977,7 +1017,13 @@ private:
   // background load. Caller must hold chainMutex, and must destroy the
   // returned retired blocks *after* releasing it (engine teardown is heavy).
   [[nodiscard]] Lane restoreChainSnapshot(const juce::ValueTree& snapshot);
-  void reconcileChainFromTree(const juce::ValueTree& chainState, Lane& target, Lane& retired);
+  // `padInserts`: false for a Dual Mono child slot (see the DUAL_MONO
+  // recursion in the .cpp) - a dual slot never carries insert placeholders
+  // (no "+" tile inside a block; the wrapper block itself is the only
+  // addressable slot), unlike a top-level lane, which always pads back up
+  // to kMinLaneSlots.
+  void reconcileChainFromTree(const juce::ValueTree& chainState, Lane& target, Lane& retired,
+                              bool padInserts = true);
   // Queue a background download+prepare of `block`'s active model, resolving
   // url/name from its tone JSON. Used by undo/redo when a restored block's
   // model isn't cached in memory anymore. When the model can't even be
@@ -1320,6 +1366,15 @@ private:
   // disjoint scratch and can process concurrently; each stays 2-channel
   // because mono mode runs a (possibly stereo) buffer through lane 0 alone.
   std::array<juce::AudioBuffer<float>, kNumLanes> laneDryScratch;
+
+  // Per-top-level-lane scratch for a Dual Mono block's recombine (see
+  // runDualMono, Processor.cpp): one slot per top-level lane (0/1) is
+  // enough even with multiple Dual Mono blocks in one lane, since they run
+  // sequentially, never concurrently, within that lane's own per-block
+  // walk. Each is 1-channel: a side is always mono internally.
+  std::array<juce::AudioBuffer<float>, kNumLanes> dualLeftBuf, dualLeftDryScratch, dualRightBuf,
+      dualRightDryScratch;
+
   double hostSampleRate = 48000.0;  // Default, updated dynamically in prepareToPlay
 
   // Default NAM A2 size for new blocks (see setNamSlimSizeDefault). Atomic:

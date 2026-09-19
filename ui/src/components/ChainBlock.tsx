@@ -8,6 +8,7 @@ import {
   FolderClosed,
   Gauge,
   Info,
+  Plus,
   Power,
   Share,
   Trash2,
@@ -27,6 +28,7 @@ import {
   lengthMsScale,
   attackLengthMsScale,
   curveScale,
+  dualPanScale,
   percentScale,
   sizePercentScale,
   widthPercentScale,
@@ -44,7 +46,13 @@ import { useChainActions } from '../hooks/useChainActions';
 import { useParameter } from '../hooks/useParameter';
 import type { BlockParamName, ChainItem, ToneBlock, ToneSummary } from '../types/chain';
 import { catalogModelCount, type Model, type Tone } from '../types/tone';
-import { isEqFlat, isSlimSizeFull, SLIM_SIZE_FULL, SLIM_SIZE_LITE } from '../types/chain';
+import {
+  isEqFlat,
+  isInsertSlot,
+  isSlimSizeFull,
+  SLIM_SIZE_FULL,
+  SLIM_SIZE_LITE,
+} from '../types/chain';
 import {
   CARD_WIDTH,
   CARD_HEIGHT,
@@ -468,6 +476,13 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // before this component's main JSX) rather than threading a check
   // through every NAM/IR/CAB-specific section of that one.
   const isEq = block.blockType === 'eq';
+  // A Dual Mono block (ChainBlockType::DUAL_MONO, see addDualMonoBlock) -
+  // also no tone/model of its own; its two fixed child slots (dualLeft/
+  // dualRight below) carry the real content instead. Same "own dedicated,
+  // much simpler card" treatment as isEq, for the same reason (threading
+  // this through the giant NAM/IR/CAB body would be worse than a clean
+  // early return).
+  const isDualMono = block.blockType === 'dualMono';
 
   // Optional (=) normalization toggle, revealed by Per-Block Normalization
   // in Plugin Settings.
@@ -495,6 +510,12 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // 0.75 (100%/full stereo) fallback, not the knob's 0.5 center - matches
   // native's ChainBlock::widthNormalized default (see its own comment).
   const [irWidth, setIrWidth] = useState(params.width ?? 0.75);
+  // DUAL_MONO only: recombine knobs. Defaults match native's own
+  // ChainBlock::dualLeftPanNormalized/dualRightPanNormalized/
+  // dualWidthNormalized (hard-left/hard-right/full-width).
+  const [dualLeftPan, setDualLeftPan] = useState(params.dualLeftPan ?? 0.0);
+  const [dualRightPan, setDualRightPan] = useState(params.dualRightPan ?? 1.0);
+  const [dualWidth, setDualWidth] = useState(params.dualWidth ?? 1.0);
   const [trimInit, setTrimInit] = useState(params.trimInit ?? false);
   const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
   const [reverse, setReverse] = useState(params.reverse ?? false);
@@ -570,6 +591,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => {
     if (!knobDragRef.current) setIrWidth(params.width ?? 0.75);
   }, [params.width]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualLeftPan(params.dualLeftPan ?? 0.0);
+  }, [params.dualLeftPan]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualRightPan(params.dualRightPan ?? 1.0);
+  }, [params.dualRightPan]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualWidth(params.dualWidth ?? 1.0);
+  }, [params.dualWidth]);
   useEffect(() => setTrimInit(params.trimInit ?? false), [params.trimInit]);
   useEffect(() => setTrimRelaxed(params.trimRelaxed ?? false), [params.trimRelaxed]);
   useEffect(() => setReverse(params.reverse ?? false), [params.reverse]);
@@ -649,6 +679,31 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       return !prev;
     });
   }, [actions, blockId]);
+
+  // DUAL_MONO only: each knob sends the full current triple - setDualImage
+  // takes all three together (native re-derives the recombine from them
+  // every call), same shape as setBlockIrDecay's own multi-value commit.
+  const handleDualLeftPanChange = useCallback(
+    (val: number) => {
+      setDualLeftPan(val);
+      actions.setDualImage(blockId, val, dualRightPan, dualWidth);
+    },
+    [actions, blockId, dualRightPan, dualWidth]
+  );
+  const handleDualRightPanChange = useCallback(
+    (val: number) => {
+      setDualRightPan(val);
+      actions.setDualImage(blockId, dualLeftPan, val, dualWidth);
+    },
+    [actions, blockId, dualLeftPan, dualWidth]
+  );
+  const handleDualWidthChange = useCallback(
+    (val: number) => {
+      setDualWidth(val);
+      actions.setDualImage(blockId, dualLeftPan, dualRightPan, val);
+    },
+    [actions, blockId, dualLeftPan, dualRightPan]
+  );
 
   // Resets every IR shaping field to default in one native call (a single
   // undo step - see resetBlockIrShape's own doc comment), and mirrors that
@@ -1358,6 +1413,309 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   help={HELP.blockOut}
                 />
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isDualMono) {
+    // One mini slot (Left/Right): empty shows a "+" that opens the same
+    // Select flow an ordinary insert slot uses (addToDualSlot, see
+    // useToneLoadFlow's handleAddToDualSlot); filled shows a small preview
+    // with its own swap/remove - "swap" reopens the same flow (it always
+    // replaces whatever's there), so no separate action is needed for it.
+    const renderDualSlot = (items: ChainItem[] | undefined, isLeftSide: boolean) => {
+      const child = items?.[0];
+      const filled = child != null && !isInsertSlot(child);
+      const boxSize = 96;
+      return (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '8rem',
+          }}
+        >
+          <div
+            style={{
+              width: `${boxSize}rem`,
+              height: `${boxSize}rem`,
+              borderRadius: '12rem',
+              border: BORDER,
+              overflow: 'hidden',
+              position: 'relative',
+              flexShrink: 0,
+            }}
+          >
+            {filled ? (
+              <ToneImage
+                src={child.tone.images?.[0]}
+                alt={child.tone.title}
+                gear={child.tone.gear}
+                local={child.tone.local}
+                blockType={child.blockType}
+                boxSize={boxSize}
+                draggable={false}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => actions.addToDualSlot(blockId, isLeftSide)}
+                {...helpProps(isLeftSide ? HELP.addDualSlotLeft : HELP.addDualSlotRight)}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: GRAY,
+                }}
+              >
+                <Plus size={24} />
+              </button>
+            )}
+          </div>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: '12rem',
+              color: WHITE,
+              maxWidth: `${boxSize}rem`,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {filled ? child.tone.title : isLeftSide ? 'Left' : 'Right'}
+          </span>
+          {filled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8rem' }}>
+              <ChromeIconButton
+                help={HELP.swapTone}
+                onClick={() => actions.addToDualSlot(blockId, isLeftSide)}
+              >
+                <ArrowLeftRight size={ICON_SIZE} />
+              </ChromeIconButton>
+              <ChromeIconButton
+                help={HELP.removeBlock}
+                onClick={() => actions.removeDualSlotContent(blockId, isLeftSide)}
+              >
+                <Trash2 size={ICON_SIZE} />
+              </ChromeIconButton>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: `${CARD_WIDTH}rem`,
+          height: '100%',
+          boxSizing: 'border-box',
+          overflowY: 'hidden',
+          overflowX: 'hidden',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: '16rem',
+              marginBottom: '16rem',
+              flexShrink: 0,
+            }}
+          >
+            <button
+              type="button"
+              onClick={onBack}
+              {...helpProps(HELP.backToChain)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16rem',
+                flexShrink: 0,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                color: WHITE,
+              }}
+            >
+              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: '16rem',
+                  fontWeight: 400,
+                  textTransform: 'uppercase',
+                  lineHeight: 1.4,
+                }}
+              >
+                Block
+              </span>
+            </button>
+
+            <ChainMapStrip
+              items={chainStripItems}
+              currentBlockId={blockId}
+              onSelect={(id) => {
+                onJumpToBlock(id);
+                setShowEq(false);
+              }}
+              onSelectEq={(id) => {
+                onJumpToBlock(id);
+                setShowEq(true);
+                setShowInfo(false);
+              }}
+              onAdd={onAddBlockAt}
+              onPasteBlockAt={onPasteBlockAt}
+            />
+
+            <div
+              aria-hidden
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16rem',
+                flexShrink: 0,
+                visibility: 'hidden',
+                pointerEvents: 'none',
+              }}
+            >
+              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+              <span
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: '16rem',
+                  fontWeight: 400,
+                  textTransform: 'uppercase',
+                  lineHeight: 1.4,
+                }}
+              >
+                Block
+              </span>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              width: '100%',
+              height: `${CARD_HEIGHT}rem`,
+              minHeight: `${CARD_HEIGHT}rem`,
+              boxSizing: 'border-box',
+              border: BORDER,
+              borderRadius: `${CARD_RADIUS}rem`,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: `${HEADER_HEIGHT}rem`,
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: `0 ${BODY_PADDING}rem`,
+                boxSizing: 'border-box',
+                borderBottom: BORDER,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16rem', flexShrink: 0 }}>
+                <ChromeIconButton
+                  tone="power"
+                  on={enabled}
+                  help={HELP.blockPower}
+                  onClick={handleToggleEnabled}
+                >
+                  <Power />
+                </ChromeIconButton>
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: '16rem',
+                    fontWeight: 400,
+                    color: WHITE,
+                  }}
+                >
+                  Dual Mono
+                </span>
+              </div>
+              <ChromeIconButton help={HELP.removeBlock} onClick={() => actions.removeBlock(blockId)}>
+                <Trash2 />
+              </ChromeIconButton>
+            </div>
+
+            <div
+              className={uiOffClass(!enabled)}
+              style={{
+                height: `${BODY_HEIGHT}rem`,
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '48rem',
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              {renderDualSlot(block.dualLeft, true)}
+              <div
+                className={uiOffClass(block.dualChannelLimited ?? false)}
+                style={{ display: 'flex', alignItems: 'flex-end', gap: '16rem' }}
+              >
+                <KnobControl
+                  label="Pan L"
+                  value={dualLeftPan}
+                  onChange={handleDualLeftPanChange}
+                  onDragStateChange={handleKnobDragState}
+                  size={KNOB_SIZE_SECONDARY}
+                  labelBottom={false}
+                  thumb="secondary"
+                  scale={dualPanScale}
+                  defaultValue={0.0}
+                  help={HELP.dualPanLeft}
+                />
+                <KnobControl
+                  label="Pan R"
+                  value={dualRightPan}
+                  onChange={handleDualRightPanChange}
+                  onDragStateChange={handleKnobDragState}
+                  size={KNOB_SIZE_SECONDARY}
+                  labelBottom={false}
+                  thumb="secondary"
+                  scale={dualPanScale}
+                  defaultValue={1.0}
+                  help={HELP.dualPanRight}
+                />
+                <KnobControl
+                  label="Width"
+                  value={dualWidth}
+                  onChange={handleDualWidthChange}
+                  onDragStateChange={handleKnobDragState}
+                  size={KNOB_SIZE_SECONDARY}
+                  labelBottom={false}
+                  thumb="secondary"
+                  scale={percentScale}
+                  defaultValue={1.0}
+                  help={HELP.dualWidth}
+                />
+              </div>
+              {renderDualSlot(block.dualRight, false)}
             </div>
           </div>
         </div>

@@ -14,12 +14,40 @@ std::vector<std::unique_ptr<ChainBlock>>& TONE3000Processor::activeChain() {
   return lane(ChainSide::Left);
 }
 
-// Find a block by id across both lanes (ids are globally unique).
+namespace {
+// TONE3000Processor::Lane isn't nameable from a free function (private
+// alias), so this works in terms of the bare vector type directly - Lane*
+// and this type's pointer are identical since Lane is only a type alias.
+// Recurses one level into a Dual Mono block's own children: structurally
+// the only nesting this data model allows (a dual child is never itself
+// DUAL_MONO - see ChainBlock.h), so one level is the whole story, no
+// deeper recursion possible regardless of what the type system permits.
+ChainBlock* findInLane(std::vector<std::unique_ptr<ChainBlock>>& lane,
+                       const std::string& blockId) {
+  for (auto& b : lane) {
+    if (!b)
+      continue;
+    if (b->id == blockId)
+      return b.get();
+    if (b->type == ChainBlockType::DUAL_MONO) {
+      if (ChainBlock* found = findInLane(b->dualLeft, blockId))
+        return found;
+      if (ChainBlock* found = findInLane(b->dualRight, blockId))
+        return found;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+// Find a block by id across both lanes and any Dual Mono block's own
+// children (ids are globally unique) - required so async model loading
+// (queueToneLoad's background completion) can re-locate a dual child after
+// the fetch finishes, same as it does for any top-level block.
 ChainBlock* TONE3000Processor::findBlockById(const std::string& blockId) {
   for (auto& l : lanes)
-    for (auto& b : l)
-      if (b && b->id == blockId)
-        return b.get();
+    if (ChainBlock* found = findInLane(l, blockId))
+      return found;
   return nullptr;
 }
 
@@ -458,6 +486,142 @@ std::string TONE3000Processor::addEqBlock(const std::string& targetInsertId) {
   return blockId;
 }
 
+std::string TONE3000Processor::addDualMonoBlock(const std::string& targetInsertId) {
+  // Same shape as addEqBlock: structural, mute-splice, synthetic tone,
+  // synchronous (no model of its own to fetch).
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  pushChainHistory();
+
+  const std::string blockId = juce::Uuid().toString().toStdString();
+  auto block = std::make_unique<ChainBlock>(blockId, ChainBlockType::DUAL_MONO);
+
+  juce::DynamicObject::Ptr tone = new juce::DynamicObject();
+  tone->setProperty("id", 0);
+  tone->setProperty("local", true);
+  tone->setProperty("title", "Dual Mono");
+  tone->setProperty("format", "dualMono");
+  const juce::var toneVar(tone.get());
+  setToneOnBlock(*block, 0, juce::JSON::toString(toneVar, true), toneVar);
+  // Nothing to load: the block itself has no tone of its own - its two
+  // children (empty until the UI loads content into a side) do. Both
+  // dualLeft/dualRight start empty (see ChainBlock.h's own comment).
+  block->loaded = true;
+
+  // The Pan/Width smoothers must be reset (which configures the ramp
+  // *duration*, not just the target) right here: this block comes to life
+  // synchronously, not through prepareChain's next pass (that only
+  // revisits blocks that already existed at prepareToPlay/rate-change
+  // time). Same duration prepareChain's own DUAL_MONO branch uses.
+  block->dualLeftPanSmoother.reset(chainSampleRate(), 0.05f);
+  block->dualRightPanSmoother.reset(chainSampleRate(), 0.05f);
+  block->dualWidthSmoother.reset(chainSampleRate(), 0.05f);
+  block->dualLeftPanSmoother.setCurrentAndTargetValue(block->dualLeftPanNormalized);
+  block->dualRightPanSmoother.setCurrentAndTargetValue(block->dualRightPanNormalized);
+  block->dualWidthSmoother.setCurrentAndTargetValue(block->dualWidthNormalized);
+
+  // Same slot-resolution as addEqBlock.
+  Lane* targetLane = nullptr;
+  Lane::iterator slot;
+  if (!targetInsertId.empty()) {
+    for (auto& l : lanes) {
+      auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+        return isInsertBlock(b) && b->id == targetInsertId;
+      });
+      if (it != l.end()) {
+        targetLane = &l;
+        slot = it;
+        break;
+      }
+    }
+  }
+  if (targetLane == nullptr) {
+    targetLane = &activeChain();
+    slot = std::find_if(targetLane->begin(), targetLane->end(), isInsertBlock);
+  }
+
+  if (slot != targetLane->end())
+    *slot = std::move(block);
+  else
+    targetLane->push_back(std::move(block));
+  alignBranchLaneLengths();
+
+  bumpChainRevision();
+  return blockId;
+}
+
+std::string TONE3000Processor::loadToneIntoDualSlot(const std::string& dualBlockId,
+                                                     bool isLeftSide,
+                                                     const juce::String& toneJsonString) {
+  const ParsedTone parsed = parseToneForLoading(toneJsonString);
+  if (!parsed.valid)
+    return "";
+
+  // Declared before the lock/fade so it destructs AFTER both release: engine
+  // teardown is heavy (same reasoning as removeChainBlock's own oldChild).
+  std::unique_ptr<ChainBlock> oldChild;
+  // Structural like addEqBlock/addDualMonoBlock - mute-splice unconditionally
+  // rather than only when replacing an already-loaded child: simpler, and a
+  // fresh load into an empty side (unloaded either way) costs nothing
+  // audible from the splice.
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  ChainBlock* dualBlock = findBlockById(dualBlockId);
+  if (dualBlock == nullptr || dualBlock->type != ChainBlockType::DUAL_MONO)
+    return "";
+
+  pushChainHistory();
+
+  const std::string blockId = juce::Uuid().toString().toStdString();
+  auto block = std::make_unique<ChainBlock>(blockId, parsed.type);
+  setToneOnBlock(*block, parsed.toneId, parsed.toneJson, parsed.toneVar);
+  block->activeModelId = parsed.firstModelId;
+  block->namSlimSize = namSlimSizeDefault.load();
+  block->loaded = false;
+  block->modelLoading = true;
+  block->applyDefaultMixOnLoad = true;
+
+  if (parsed.type == ChainBlockType::IR) {
+    if (parsed.local && parsed.gear.isEmpty())
+      block->irCategoryNeedsDurationGuess = true;
+    else
+      block->irCategory = irCategoryFromGear(parsed.gear);
+  }
+
+  auto& side = isLeftSide ? dualBlock->dualLeft : dualBlock->dualRight;
+  if (!side.empty())
+    oldChild = std::move(side[0]);
+  side.clear();
+  side.push_back(std::move(block));
+
+  bumpChainRevision();
+  queueToneLoad(blockId, parsed.firstModelId, parsed.modelUrl, parsed.modelName, parsed.type);
+
+  return blockId;
+}
+
+bool TONE3000Processor::removeDualSlotContent(const std::string& dualBlockId, bool isLeftSide) {
+  std::unique_ptr<ChainBlock> oldChild;  // destroyed after lock/fade release
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  ChainBlock* dualBlock = findBlockById(dualBlockId);
+  if (dualBlock == nullptr || dualBlock->type != ChainBlockType::DUAL_MONO)
+    return false;
+
+  auto& side = isLeftSide ? dualBlock->dualLeft : dualBlock->dualRight;
+  if (side.empty())
+    return true;  // already empty
+
+  pushChainHistory();
+  oldChild = std::move(side[0]);
+  side.clear();
+  bumpChainRevision();
+  return true;
+}
+
 std::string TONE3000Processor::landToneBlock(std::unique_ptr<ChainBlock> block,
                                              const juce::String& side, int index) {
   const std::string newId = block->id;
@@ -762,6 +926,33 @@ bool TONE3000Processor::switchModel(const std::string& blockId, int modelId,
 
   loadingThreadPool.addJob(new SwitchModelJob(*this, blockId, modelId, modelUrl, modelName), true);
 
+  return true;
+}
+
+bool TONE3000Processor::setDualImage(const std::string& blockId, double leftPanNormalized,
+                                     double rightPanNormalized, double widthNormalized) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualImage: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+
+  // Continuous (called every drag tick) - coalesces a whole gesture into one
+  // undo step, same idiom as setBlockParam's continuous params.
+  pushChainHistory("param:" + juce::String(blockId) + ":dualImage");
+
+  block->dualLeftPanNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(leftPanNormalized));
+  block->dualRightPanNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(rightPanNormalized));
+  block->dualWidthNormalized = juce::jlimit(0.0f, 1.0f, static_cast<float>(widthNormalized));
+  // Smoothers take the new target only - runDualMono's recombine glides
+  // toward it, never steps (see the fields' own comment in ChainBlock.h).
+  block->dualLeftPanSmoother.setTargetValue(block->dualLeftPanNormalized);
+  block->dualRightPanSmoother.setTargetValue(block->dualRightPanNormalized);
+  block->dualWidthSmoother.setTargetValue(block->dualWidthNormalized);
+
+  deferredRevisionBump();
   return true;
 }
 
@@ -1329,6 +1520,16 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     int irNumChannels = 1;
     juce::var eq;
     bool rtFailed = false;
+    // DUAL_MONO only: the two fixed child slots (each 0 or 1 row - see
+    // ChainBlock::dualLeft/dualRight), recombine controls, and whether the
+    // enclosing lane currently has a spare physical channel to widen into
+    // (false = folds to mono; mirrors runDualMono's own widen-vs-fold
+    // decision, which this can't read directly since it isn't inside the
+    // audio callback - stereo mode means every lane runs with exactly one
+    // physical channel, so any Dual Mono block in it must fold).
+    std::vector<BlockRow> dualLeft, dualRight;
+    float dualLeftPan = 0.0f, dualRightPan = 1.0f, dualWidth = 1.0f;
+    bool dualChannelLimited = false;
   };
 
   juce::uint32 revision = 0;
@@ -1353,7 +1554,14 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       return unchanged.get();
     }
 
-    auto copyLane = [](const Lane& l, std::vector<BlockRow>& out) {
+    // std::function, not auto: DUAL_MONO rows recurse into this same lambda
+    // for their two child slots (a plain auto lambda can't reference
+    // itself). `stereo` is captured by reference from the outer scope even
+    // though it's assigned after this lambda is first used below - only
+    // read once the lambda actually runs (during copyLane's own body,
+    // after `stereo` is set), never during its construction.
+    std::function<void(const Lane&, std::vector<BlockRow>&)> copyLane =
+        [&copyLane, &stereo](const Lane& l, std::vector<BlockRow>& out) {
       out.reserve(l.size());
       for (const auto& block : l) {
         BlockRow row;
@@ -1445,12 +1653,25 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.trimRelaxed = block->trimRelaxed;
         row.reverse = block->reverseEnabled;
         row.eq = block->eq.toVar();
+
+        if (block->type == ChainBlockType::DUAL_MONO) {
+          copyLane(block->dualLeft, row.dualLeft);
+          copyLane(block->dualRight, row.dualRight);
+          row.dualLeftPan = block->dualLeftPanNormalized;
+          row.dualRightPan = block->dualRightPanNormalized;
+          row.dualWidth = block->dualWidthNormalized;
+          row.dualChannelLimited = stereo;
+        }
+
         out.push_back(std::move(row));
       }
     };
 
-    copyLane(lane(ChainSide::Left), left);
+    // Read before the first copyLane call - DUAL_MONO rows need it (see
+    // copyLane's own capture comment) and it's cheap/stable to read this
+    // early regardless.
     stereo = stereoEnabled.load();
+    copyLane(lane(ChainSide::Left), left);
     if (stereo)
       copyLane(lane(ChainSide::Right), right);
 
@@ -1468,8 +1689,10 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     activeSide = pendingAddSide == ChainSide::Right ? "right" : "left";
   }
 
-  // Lock released; build the payload.
-  auto serializeChain = [](const std::vector<BlockRow>& rows) {
+  // Lock released; build the payload. std::function, not auto: DUAL_MONO
+  // rows recurse into this same lambda for their two child slots.
+  std::function<juce::Array<juce::var>(const std::vector<BlockRow>&)> serializeChain =
+      [&serializeChain](const std::vector<BlockRow>& rows) {
     juce::Array<juce::var> chainArray;
     for (const auto& row : rows) {
       if (row.rtFailed)
@@ -1562,7 +1785,21 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("trimRelaxed", row.trimRelaxed);
       params->setProperty("reverse", row.reverse);
       params->setProperty("eq", row.eq);
+      params->setProperty("dualLeftPan", row.dualLeftPan);
+      params->setProperty("dualRightPan", row.dualRightPan);
+      params->setProperty("dualWidth", row.dualWidth);
       item->setProperty("params", juce::var(params.get()));
+
+      // DUAL_MONO only: the two fixed child slots, nested the same shape as
+      // the top-level chain/chainRight arrays (each is 0 or 1 item - see
+      // ChainBlock::dualLeft/dualRight). dualChannelLimited mirrors
+      // runDualMono's own widen-vs-fold decision (see BlockRow's own
+      // comment) so the UI can dim Pan/Width when they're currently inert.
+      if (row.blockType == ChainBlockType::DUAL_MONO) {
+        item->setProperty("dualLeft", serializeChain(row.dualLeft));
+        item->setProperty("dualRight", serializeChain(row.dualRight));
+        item->setProperty("dualChannelLimited", row.dualChannelLimited);
+      }
 
       chainArray.add(juce::var(item.get()));
     }

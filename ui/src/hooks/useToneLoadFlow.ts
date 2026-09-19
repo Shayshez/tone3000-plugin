@@ -12,6 +12,12 @@ type ChainStateActions = ReturnType<typeof useChainState>['actions'];
 // Native falls back gracefully when an id went stale.
 const SWAP_STORAGE_KEY = 't3k.pendingSwapBlockId';
 const INSERT_TARGET_STORAGE_KEY = 't3k.pendingInsertBlockId';
+// A Dual Mono child slot isn't a lane insert slot (see ToneBlock.dualLeft/
+// dualRight) - it needs two values (which block, which side), encoded as
+// one string since sessionStorage only holds strings anyway. Exactly one of
+// SWAP_STORAGE_KEY / INSERT_TARGET_STORAGE_KEY / this is ever pending at a
+// time, same as the other two.
+const DUAL_TARGET_STORAGE_KEY = 't3k.pendingDualBlockId';
 /** Set only when the pending add/swap should open its resulting block's
     detail view once it lands (ChainMapStrip's "+", or the detail card's own
     ⇄ swap button — see ChainActions.addModel's and .swapBlock's own
@@ -110,11 +116,13 @@ export function useToneLoadFlow({
       }
 
       // Consume the pending targets up front so they can never leak into a
-      // later selection. (Each flow clears the other's key before starting.)
+      // later selection. (Each flow clears the other keys before starting.)
       const swapBlockId = sessionStorage.getItem(SWAP_STORAGE_KEY);
       sessionStorage.removeItem(SWAP_STORAGE_KEY);
       const insertBlockId = sessionStorage.getItem(INSERT_TARGET_STORAGE_KEY);
       sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
+      const dualTarget = sessionStorage.getItem(DUAL_TARGET_STORAGE_KEY);
+      sessionStorage.removeItem(DUAL_TARGET_STORAGE_KEY);
 
       const toneJson = JSON.stringify(tone);
 
@@ -137,6 +145,21 @@ export function useToneLoadFlow({
           return;
         }
         console.warn('Swap target no longer exists; adding tone as a new block');
+      }
+
+      // Dual Mono child slot: no navigateToDetail (the caller is already on
+      // the Dual Mono block's own detail view - there's nothing further to
+      // navigate to, a filled child isn't independently opened).
+      if (dualTarget) {
+        const [dualBlockId, sideFlag] = dualTarget.split(':');
+        const childId = await actions.loadToneIntoDualSlot(
+          dualBlockId,
+          sideFlag === 'L',
+          toneJson
+        );
+        if (!childId) console.error('Dual Mono slot target no longer exists');
+        setShowToneBrowser(false);
+        return;
       }
 
       const blockId = await actions.loadTone(toneJson, insertBlockId ?? undefined);
@@ -166,6 +189,24 @@ export function useToneLoadFlow({
       });
     },
     [actions, requireConnection, setShowToneBrowser, stereoEnabled]
+  );
+
+  // Dual Mono slot: remember which block + side, then run the same browse
+  // flow as add/swap. No side/stereo bookkeeping to survive the OAuth
+  // redirect (unlike handleAddModel's stereoEnabled/setActiveSide) - a dual
+  // slot's own side (left/right child) is independent of the chain's
+  // stereo mode.
+  const handleAddToDualSlot = useCallback(
+    (dualBlockId: string, isLeftSide: boolean) => {
+      requireConnection(() => {
+        sessionStorage.removeItem(SWAP_STORAGE_KEY);
+        sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
+        sessionStorage.setItem(DUAL_TARGET_STORAGE_KEY, `${dualBlockId}:${isLeftSide ? 'L' : 'R'}`);
+        sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
+        setShowToneBrowser(true);
+      });
+    },
+    [requireConnection, setShowToneBrowser]
   );
 
   // Swap: remember the target block, then run the same browse flow as add.
@@ -255,12 +296,14 @@ export function useToneLoadFlow({
   const clearPendingTargets = useCallback(() => {
     sessionStorage.removeItem(SWAP_STORAGE_KEY);
     sessionStorage.removeItem(INSERT_TARGET_STORAGE_KEY);
+    sessionStorage.removeItem(DUAL_TARGET_STORAGE_KEY);
     sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
   }, []);
 
   return {
     handleToneSelected,
     handleAddModel,
+    handleAddToDualSlot,
     handleSwapBlock,
     handleDropFile,
     clearPendingTargets,

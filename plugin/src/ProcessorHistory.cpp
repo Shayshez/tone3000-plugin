@@ -54,6 +54,38 @@ void TONE3000Processor::queueActiveModelLoad(ChainBlock& block) {
     return;
   }
 
+  // DUAL_MONO has no tone/model of its own either (its children do) - mark
+  // it loaded the same way, but recurse into whichever children are
+  // present so *their* loads still get queued (they're real tone-bearing
+  // blocks, reconstructed fresh by reconcileChainFromTree below just like
+  // any top-level block).
+  //
+  // The Pan/Width smoothers also need a hard reset here (configures the
+  // ramp *duration*, not just the target): a block reconstructed by
+  // undo/redo/restore never passes through prepareChain (that only
+  // revisits blocks that already existed at prepareToPlay/rate-change
+  // time), so without this its very first live Pan/Width drag would step
+  // instead of glide. Same duration prepareChain's own DUAL_MONO branch
+  // and addDualMonoBlock use.
+  if (block.type == ChainBlockType::DUAL_MONO) {
+    block.loaded = true;
+    block.loadFailed = false;
+    block.modelLoading = false;
+    block.dualLeftPanSmoother.reset(chainSampleRate(), 0.05f);
+    block.dualRightPanSmoother.reset(chainSampleRate(), 0.05f);
+    block.dualWidthSmoother.reset(chainSampleRate(), 0.05f);
+    block.dualLeftPanSmoother.setCurrentAndTargetValue(block.dualLeftPanNormalized);
+    block.dualRightPanSmoother.setCurrentAndTargetValue(block.dualRightPanNormalized);
+    block.dualWidthSmoother.setCurrentAndTargetValue(block.dualWidthNormalized);
+    for (auto& child : block.dualLeft)
+      if (child)
+        queueActiveModelLoad(*child);
+    for (auto& child : block.dualRight)
+      if (child)
+        queueActiveModelLoad(*child);
+    return;
+  }
+
   // Every bail below leaves the block unloadable, so flag it so the UI shows
   // the retry affordance instead of a loader that can never resolve, and log
   // at release level (these paths are the needle for "stuck loading after
@@ -120,7 +152,7 @@ void TONE3000Processor::queueActiveModelLoad(ChainBlock& block) {
 }
 
 void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState, Lane& target,
-                                               Lane& retired) {
+                                               Lane& retired, bool padInserts) {
   // Park the live blocks by id so matching ones can be moved back with their
   // engines/model caches intact. Anything left over at the end is a removal
   // and goes into `retired`; the caller destroys those after releasing
@@ -170,6 +202,20 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
     else
       block->toneId = toneId;
     block->activeModelId = activeModelId;
+
+    // DUAL_MONO only: reconcile the two fixed child slots the same way,
+    // recursing into the nested DualLeftBlocks/DualRightBlocks children -
+    // mirrors serializeChainToTree's own nesting. padInserts=false: a dual
+    // slot never carries insert placeholders (see the declaration's own
+    // comment). Threads the same `retired` vector so a removed/replaced
+    // child tears its engine down after the lock, exactly like top-level
+    // removals already do.
+    if (type == ChainBlockType::DUAL_MONO) {
+      reconcileChainFromTree(blockState.getChildWithName("DualLeftBlocks"), block->dualLeft,
+                             retired, /*padInserts=*/false);
+      reconcileChainFromTree(blockState.getChildWithName("DualRightBlocks"), block->dualRight,
+                             retired, /*padInserts=*/false);
+    }
 
     // Engines survive only when the loaded model is still the right one.
     // Everything else (fresh block, model switch, load still in flight)
@@ -222,8 +268,11 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
 
   // Reconciled chains always come back up to the minimum slot layout.
   // Snapshots from this build already satisfy the invariant (no-op); legacy
-  // states/presets that carried a single insert get padded here.
-  normalizeLaneInserts(target);
+  // states/presets that carried a single insert get padded here. Skipped
+  // for a Dual Mono child slot (padInserts=false) - it never carries insert
+  // placeholders in the first place.
+  if (padInserts)
+    normalizeLaneInserts(target);
 
   // Whatever is still parked was removed by this restore.
   for (auto& [id, b] : existing)

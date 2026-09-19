@@ -190,6 +190,43 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.addEqBlock(targetInsertId));
           }))
       .withNativeFunction(
+          // (targetInsertId?): the right-click menu's "Dual Mono" row - adds
+          // a Dual Mono block (ChainBlockType::DUAL_MONO) at that insert
+          // slot. Synchronous like addEqBlock; both child slots start empty
+          // (loadToneIntoDualSlot below picks their content afterward).
+          "addDualMonoBlock",
+          guarded(0, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            const std::string targetInsertId =
+                args.size() >= 1 ? args[0].toString().toStdString() : std::string();
+            return juce::var(editor->processor.addDualMonoBlock(targetInsertId));
+          }))
+      .withNativeFunction(
+          // (dualBlockId, isLeftSide, toneJson): loads a tone into one of a
+          // Dual Mono block's two fixed child slots, replacing whatever was
+          // there. Resolves to the new child's blockId, "" on failure.
+          "loadToneIntoDualSlot",
+          guarded(3, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.loadToneIntoDualSlot(
+                args[0].toString().toStdString(), coerceBool(args[1]), args[2].toString()));
+          }))
+      .withNativeFunction(
+          // (dualBlockId, isLeftSide): clears one side of a Dual Mono block
+          // back to empty.
+          "removeDualSlotContent",
+          guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.removeDualSlotContent(
+                args[0].toString().toStdString(), coerceBool(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, leftPan, rightPan, width): live Pan L/Pan R/Width for
+          // a Dual Mono block's recombine - called continuously while a
+          // knob drags, same idiom as setZoneImage used to be.
+          "setDualImage", guarded(4, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualImage(
+                args[0].toString().toStdString(), coerceDouble(args[1]), coerceDouble(args[2]),
+                coerceDouble(args[3])));
+          }))
+      .withNativeFunction(
           // (title, files, targetInsertId?, forceGear?): local .nam/.wav
           // file(s) dropped on an insert slot (one for a file, many for a
           // folder). The webview can't hand over file paths, so the bytes
