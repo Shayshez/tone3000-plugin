@@ -70,6 +70,17 @@ export interface ChainActions {
       continuously while a knob drags (native-side smoothing handles
       click-avoidance), same idiom as every other continuous param. */
   setDualImage: (blockId: string, leftPan: number, rightPan: number, width: number) => void;
+  /** Persists a Dual Mono block's Link toggle - the mirror/sync behavior
+      itself runs client-side (see BlockParams.dualLinked's own comment),
+      this just remembers on/off. */
+  setDualLinked: (blockId: string, linked: boolean) => void;
+  /** Exclusive per-side solo for a Dual Mono block - soloing one side
+      clears the other's. */
+  setDualSolo: (blockId: string, isLeftSide: boolean, soloed: boolean) => void;
+  /** Mutes a Dual Mono side's pass-through while it has nothing loaded (see
+      BlockParams.dualLeftEmptyMuted's own comment) - inert once a real
+      tone occupies the side. */
+  setDualEmptySideMuted: (blockId: string, isLeftSide: boolean, muted: boolean) => void;
   removeBlock: (blockId: string) => void;
   /** Launch the Select flow to replace this block's tone in place.
       `navigateToDetail` (default false, the gallery tile's own swap action):

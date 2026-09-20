@@ -198,6 +198,22 @@ export interface BlockParams {
   dualLeftPan: number;
   dualRightPan: number;
   dualWidth: number;
+  /** DUAL_MONO only: Link toggle - real per-block state (see
+      `setDualLinked`'s own native comment), but the actual mirror/sync
+      behavior when linked (Pan reflected around center, Mix/Vol matched)
+      runs client-side - this just tells the UI whether to do it. */
+  dualLinked: boolean;
+  /** DUAL_MONO only: exclusive per-side solo (see `setDualSolo`) - at most
+      one is ever true. */
+  dualSoloLeft: boolean;
+  dualSoloRight: boolean;
+  /** DUAL_MONO only: mutes a side's own pass-through while it has nothing
+      loaded (see `setDualEmptySideMuted`) - an empty side otherwise still
+      passes its half of the input straight through. Inert once a real tone
+      occupies the side; that side's Mute goes through the ordinary
+      `enabled` param on its own child block instead. */
+  dualLeftEmptyMuted: boolean;
+  dualRightEmptyMuted: boolean;
 }
 
 /**

@@ -30,6 +30,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 
 namespace {
 constexpr int kBlock = 512;
@@ -609,4 +610,272 @@ TEST(DualMonoBlockTest, PersistsThroughStateRestoreWithSidesAndImageIntact) {
   EXPECT_EQ((*rightArr)[0]["blockId"].toString(), juce::String("blk-ir"));
   EXPECT_EQ((*rightArr)[0]["blockType"].toString(), juce::String("ir"));
   EXPECT_TRUE(static_cast<bool>((*rightArr)[0]["loaded"]));
+}
+
+TEST(DualMonoBlockTest, LinkPersistsThroughStateRestore) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLinked"]))
+      << "Link should default off";
+
+  ASSERT_TRUE(proc.setDualLinked(blockId, true));
+  EXPECT_TRUE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLinked"]));
+
+  juce::MemoryBlock savedState;
+  proc.getStateInformation(savedState);
+
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, kBlock);
+  restored.prepareToPlay(kFs, kBlock);
+  restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
+  ASSERT_TRUE(waitForDualMonoLoaded(restored));
+
+  EXPECT_TRUE(static_cast<bool>(blockById(restored, blockId)["params"]["dualLinked"]))
+      << "Link didn't survive a state round trip";
+}
+
+TEST(DualMonoBlockTest, SoloIsExclusiveBetweenSides) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+
+  ASSERT_TRUE(proc.setDualSolo(blockId, /*isLeftSide=*/true, true));
+  {
+    const juce::var block = blockById(proc, blockId);
+    EXPECT_TRUE(static_cast<bool>(block["params"]["dualSoloLeft"]));
+    EXPECT_FALSE(static_cast<bool>(block["params"]["dualSoloRight"]));
+  }
+
+  // Soloing the other side flips exclusively - the first side's solo clears.
+  ASSERT_TRUE(proc.setDualSolo(blockId, /*isLeftSide=*/false, true));
+  {
+    const juce::var block = blockById(proc, blockId);
+    EXPECT_FALSE(static_cast<bool>(block["params"]["dualSoloLeft"]))
+        << "soloing Right didn't clear an existing Left solo";
+    EXPECT_TRUE(static_cast<bool>(block["params"]["dualSoloRight"]));
+  }
+
+  ASSERT_TRUE(proc.setDualSolo(blockId, /*isLeftSide=*/false, false));
+  {
+    const juce::var block = blockById(proc, blockId);
+    EXPECT_FALSE(static_cast<bool>(block["params"]["dualSoloLeft"]));
+    EXPECT_FALSE(static_cast<bool>(block["params"]["dualSoloRight"]));
+  }
+
+  EXPECT_FALSE(proc.setDualSolo("not-a-real-id", true, true));
+}
+
+// Solo silences the *other* side in the recombined output: with Left
+// soloed, the Right child's own content should no longer be audible in
+// either output channel (widen case - each side otherwise gets its own
+// channel, see WidenCaseGivesEachSideItsOwnOutputChannel).
+TEST(DualMonoBlockTest, SoloedSideSilencesTheOtherInWidenOutput) {
+  const auto in = makeNoise(20 * kBlock, 555, 0.25f);
+
+  auto namTree = [] { return makeNamBlockTree("blk-nam", 1, 100); };
+  auto irTree = [] { return makeIrBlockTree("blk-ir", 2, 200); };
+
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(makeDualMonoBlockTree("blk-dual", namTree(), irTree()), nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setDualSolo("blk-dual", /*isLeftSide=*/true, true));
+
+  // Long warmup lets the solo gain smoother fully settle before measuring.
+  processStereo(proc, makeNoise(kWarmupBlocks * 4 * kBlock, 1111, 0.25f));
+  const auto out = processStereo(proc, in);
+
+  float peakRight = 0.0f;
+  for (float sample : out.second) peakRight = std::max(peakRight, std::abs(sample));
+  std::printf("[DualMonoBlockTest] Right channel peak with Left soloed: %.6f\n",
+             static_cast<double>(peakRight));
+  EXPECT_LT(peakRight, 1e-4f) << "Left solo should silence the Right side's own output channel";
+}
+
+TEST(DualMonoBlockTest, EmptySideMutePersistsThroughStateRestore) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftEmptyMuted"]))
+      << "empty-side mute should default off";
+
+  ASSERT_TRUE(proc.setDualEmptySideMuted(blockId, /*isLeftSide=*/true, true));
+  EXPECT_TRUE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftEmptyMuted"]));
+  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualRightEmptyMuted"]))
+      << "empty-side mute is independent per side, unlike Solo's exclusivity";
+
+  juce::MemoryBlock savedState;
+  proc.getStateInformation(savedState);
+
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, kBlock);
+  restored.prepareToPlay(kFs, kBlock);
+  restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
+  ASSERT_TRUE(waitForDualMonoLoaded(restored));
+
+  EXPECT_TRUE(static_cast<bool>(blockById(restored, blockId)["params"]["dualLeftEmptyMuted"]))
+      << "empty-side mute didn't survive a state round trip";
+
+  EXPECT_FALSE(proc.setDualEmptySideMuted("not-a-real-id", true, true));
+}
+
+// An empty side is normally a live pass-through (EmptySidesPassThroughDistinct
+// ChannelsUnchanged) - muting it should silence that channel instead, and
+// leave the *other*, still-unmuted empty side passing through as before.
+TEST(DualMonoBlockTest, EmptySideMuteSilencesOnlyThatSidesPassThrough) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  ASSERT_TRUE(proc.setDualEmptySideMuted(blockId, /*isLeftSide=*/true, true));
+
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+
+  const auto inL = makeNoise(20 * kBlock, 4242, 0.25f);
+  const auto inR = makeNoise(20 * kBlock, 9999, 0.25f);
+  juce::AudioBuffer<float> buffer(2, kBlock);
+  juce::MidiBuffer midi;
+  std::vector<float> outL(inL.size()), outR(inR.size());
+  for (int off = 0; off + kBlock <= static_cast<int>(inL.size()); off += kBlock) {
+    buffer.copyFrom(0, 0, inL.data() + off, kBlock);
+    buffer.copyFrom(1, 0, inR.data() + off, kBlock);
+    proc.processBlock(buffer, midi);
+    std::copy(buffer.getReadPointer(0), buffer.getReadPointer(0) + kBlock, outL.begin() + off);
+    std::copy(buffer.getReadPointer(1), buffer.getReadPointer(1) + kBlock, outR.begin() + off);
+  }
+
+  float peakL = 0.0f;
+  for (float sample : outL) peakL = std::max(peakL, std::abs(sample));
+  const float diffR = maxAbsDiff(outR, inR);
+  std::printf(
+      "[DualMonoBlockTest] muted-empty-Left peak: %.6f; still-live-empty-Right pass-through max "
+      "|diff|: %.6f\n",
+      static_cast<double>(peakL), static_cast<double>(diffR));
+  EXPECT_LT(peakL, 1e-3f) << "muted empty Left should no longer pass its input through";
+  EXPECT_LT(diffR, 0.05f) << "the still-unmuted empty Right side should keep passing through";
+}
+
+namespace {
+// A strongly shaped band, well clear of "inert" (~0 dB) - same shape as
+// eq_post_routing_tests.cpp's own shapedBand().
+juce::var shapedMasterBand() {
+  auto* band = new juce::DynamicObject();
+  band->setProperty("type", "bell");
+  band->setProperty("freqHz", 1500.0);
+  band->setProperty("gainDb", 12.0);
+  band->setProperty("q", 1.2);
+  return juce::var(band);
+}
+
+// Both sides loaded with distinct content (widen case, mono mode) and run
+// through the processor - `configure` runs after restore/load but before
+// warmup, so callers can touch the wrapper's own master EQ (or leave it
+// alone) before the comparison window starts.
+std::pair<std::vector<float>, std::vector<float>> runDualWidenWithMasterEq(
+    const std::vector<float>& in, const std::function<void(ChainTestProcessor&)>& configure) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  EXPECT_TRUE(waitForDualMonoLoaded(proc));
+
+  configure(proc);
+
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  return processStereo(proc, in);
+}
+}  // namespace
+
+// Proves the master EQ's own gate: leaving every band flat (the default)
+// must be indistinguishable from explicitly disabling the EQ outright -
+// isActive() (enabled && anyBandActive) should already treat flat bands as
+// a no-op, same guarantee eq_post_routing_tests.cpp pins for an ordinary
+// block's own EQ.
+TEST(DualMonoBlockTest, MasterEqDefaultsToFlatAndIsInert) {
+  const auto in = makeNoise(20 * kBlock, 777, 0.25f);
+
+  const auto flatDefault = runDualWidenWithMasterEq(in, [](ChainTestProcessor&) {});
+  const auto explicitlyDisabled = runDualWidenWithMasterEq(in, [](ChainTestProcessor& proc) {
+    ASSERT_TRUE(proc.setBlockEqEnabled("blk-dual", false));
+  });
+
+  const float diff = std::max(maxAbsDiff(flatDefault.first, explicitlyDisabled.first),
+                              maxAbsDiff(flatDefault.second, explicitlyDisabled.second));
+  std::printf("[DualMonoBlockTest] master EQ flat-default vs explicitly-disabled max |diff|: %.9f\n",
+             static_cast<double>(diff));
+  EXPECT_LT(diff, 1e-4f) << "a flat (untouched) master EQ should already be a no-op, same as "
+                            "explicitly disabling it";
+}
+
+// Companion to the test above: proves a shaped band actually does something,
+// so a bug that made the master EQ a global no-op couldn't pass
+// MasterEqDefaultsToFlatAndIsInert vacuously.
+TEST(DualMonoBlockTest, MasterEqShapesTheRecombinedOutput) {
+  const auto in = makeNoise(20 * kBlock, 777, 0.25f);
+
+  const auto flat = runDualWidenWithMasterEq(in, [](ChainTestProcessor&) {});
+  const auto shaped = runDualWidenWithMasterEq(in, [](ChainTestProcessor& proc) {
+    ASSERT_TRUE(proc.setBlockEqBand("blk-dual", 2, shapedMasterBand()));
+  });
+
+  const float diff = std::max(maxAbsDiff(flat.first, shaped.first),
+                              maxAbsDiff(flat.second, shaped.second));
+  std::printf("[DualMonoBlockTest] master EQ flat vs shaped max |diff|: %.6f\n",
+             static_cast<double>(diff));
+  EXPECT_GT(diff, 1e-3f) << "a shaped master EQ band had no measurable effect on the recombined "
+                            "output";
+}
+
+TEST(DualMonoBlockTest, MasterEqSurvivesStateRestore) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  ASSERT_TRUE(proc.setBlockEqBand(blockId, 2, shapedMasterBand()));
+  ASSERT_TRUE(proc.setBlockEqEnabled(blockId, true));
+
+  juce::MemoryBlock savedState;
+  proc.getStateInformation(savedState);
+
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, kBlock);
+  restored.prepareToPlay(kFs, kBlock);
+  restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
+  ASSERT_TRUE(waitForDualMonoLoaded(restored));
+
+  const juce::var block = blockById(restored, blockId);
+  ASSERT_FALSE(block.isVoid());
+  const juce::var band2 = block["params"]["eq"]["bands"][2];
+  EXPECT_NEAR(static_cast<double>(band2["gainDb"]), 12.0, 1e-6)
+      << "the master EQ's own band didn't survive a state round trip";
+  EXPECT_TRUE(static_cast<bool>(block["params"]["eq"]["enabled"]));
 }

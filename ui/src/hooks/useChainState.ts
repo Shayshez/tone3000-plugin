@@ -59,6 +59,9 @@ export function useChainState() {
       loadToneIntoDualSlot: backend.getPluginFunction('loadToneIntoDualSlot'),
       removeDualSlotContent: backend.getPluginFunction('removeDualSlotContent'),
       setDualImage: backend.getPluginFunction('setDualImage'),
+      setDualLinked: backend.getPluginFunction('setDualLinked'),
+      setDualSolo: backend.getPluginFunction('setDualSolo'),
+      setDualEmptySideMuted: backend.getPluginFunction('setDualEmptySideMuted'),
       loadLocalTone: backend.getPluginFunction('loadLocalTone'),
       swapTone: backend.getPluginFunction('swapTone'),
       refreshToneMetadata: backend.getPluginFunction('refreshToneMetadata'),
@@ -214,6 +217,14 @@ export function useChainState() {
           console.error('setDualImage failed:', error)
         );
       },
+      setDualLinked: (blockId: string, linked: boolean) =>
+        run('setDualLinked', () => native.setDualLinked(blockId, linked)),
+      setDualSolo: (blockId: string, isLeftSide: boolean, soloed: boolean) =>
+        run('setDualSolo', () => native.setDualSolo(blockId, isLeftSide, soloed)),
+      setDualEmptySideMuted: (blockId: string, isLeftSide: boolean, muted: boolean) =>
+        run('setDualEmptySideMuted', () =>
+          native.setDualEmptySideMuted(blockId, isLeftSide, muted)
+        ),
       removeBlock: (blockId: string) =>
         run('removeChainBlock', () => native.removeChainBlock(blockId)),
       reorderBlocks: (orderedIds: string[]) =>

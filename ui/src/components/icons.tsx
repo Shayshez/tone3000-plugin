@@ -22,6 +22,7 @@ import {
   FolderClosed as LFolderClosed,
   Gauge as LGauge,
   GripVertical as LGripVertical,
+  Headphones as LHeadphones,
   Info as LInfo,
   Laptop as LLaptop,
   Link as LLink,
@@ -43,6 +44,7 @@ import {
   Undo2 as LUndo2,
   Upload as LUpload,
   Volume2 as LVolume2,
+  VolumeX as LVolumeX,
   WifiOff as LWifiOff,
   X as LX,
 } from 'lucide-react';
@@ -88,6 +90,7 @@ export const File = scaled(LFile, 'File');
 export const FolderClosed = scaled(LFolderClosed, 'FolderClosed');
 export const Gauge = scaled(LGauge, 'Gauge');
 export const GripVertical = scaled(LGripVertical, 'GripVertical');
+export const Headphones = scaled(LHeadphones, 'Headphones');
 export const Info = scaled(LInfo, 'Info');
 export const Laptop = scaled(LLaptop, 'Laptop');
 export const Link = scaled(LLink, 'Link');
@@ -109,5 +112,6 @@ export const Trash2 = scaled(LTrash2, 'Trash2');
 export const Undo2 = scaled(LUndo2, 'Undo2');
 export const Upload = scaled(LUpload, 'Upload');
 export const Volume2 = scaled(LVolume2, 'Volume2');
+export const VolumeX = scaled(LVolumeX, 'VolumeX');
 export const WifiOff = scaled(LWifiOff, 'WifiOff');
 export const X = scaled(LX, 'X');

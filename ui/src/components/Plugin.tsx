@@ -30,6 +30,7 @@ import Settings, { type SettingsTab } from './Settings';
 import { T3K_API } from '../t3k/config';
 import type { Model } from '../types/tone';
 import type { ToneBlock } from '../types/chain';
+import { isInsertSlot } from '../types/chain';
 
 export const Plugin: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -80,7 +81,8 @@ export const Plugin: React.FC = () => {
   const presetStore = usePresets(refresh);
 
   // The output carries a real stereo image only when a stereo-image feature
-  // is on (stereo mode, or mono-mode spread) AND the rig can reproduce it
+  // is on (stereo mode, mono-mode spread, or a Dual Mono block widening -
+  // see hasWideningDualMono below) AND the rig can reproduce it
   // (stereoOutput: stereo host bus / 2+ channel output device); drives the
   // output meter's stereo form. On a mono rig, Spread is idle and greyed
   // out, while stereo chains keep running and native sums them to mono
@@ -88,7 +90,18 @@ export const Plugin: React.FC = () => {
   // sum, so it stays visible whenever stereo chains are on, regardless of
   // the rig (balanceActive).
   const [spreadEnabled] = useParameter('spreadEnabled', 'toggle');
-  const stereoImage = (stereoEnabled || spreadEnabled) && stereoOutput;
+  // A Dual Mono block widens to independent L/R purely off buffer channel
+  // count (see runDualMono, Processor.cpp) - true in mono mode regardless
+  // of stereoEnabled/spreadEnabled, which predate this block type and don't
+  // know about it. Conservative on purpose: any Dual Mono block in the
+  // active mono-mode lane counts, not only once its two sides actually
+  // diverge - showing L/R needles that happen to move together is harmless,
+  // hiding a channel that can carry real content isn't. Stereo mode never
+  // reaches this (each lane is already pinned to one physical channel
+  // there, so a Dual Mono block folds instead - see dualChannelLimited).
+  const hasWideningDualMono =
+    !stereoEnabled && chain.some((item) => !isInsertSlot(item) && item.blockType === 'dualMono');
+  const stereoImage = (stereoEnabled || spreadEnabled || hasWideningDualMono) && stereoOutput;
   const balanceActive = stereoEnabled || (spreadEnabled && stereoOutput);
   const monoSum = stereoEnabled && !stereoOutput;
 
@@ -352,6 +365,9 @@ export const Plugin: React.FC = () => {
       addToDualSlot: loadFlow.handleAddToDualSlot,
       removeDualSlotContent: actions.removeDualSlotContent,
       setDualImage: actions.setDualImage,
+      setDualLinked: actions.setDualLinked,
+      setDualSolo: actions.setDualSolo,
+      setDualEmptySideMuted: actions.setDualEmptySideMuted,
       removeBlock: actions.removeBlock,
       swapBlock: loadFlow.handleSwapBlock,
       shareBlock: handleShareBlock,

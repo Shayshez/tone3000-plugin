@@ -3,15 +3,20 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   Bookmark,
+  ChevronRight,
   Download,
   Equal,
   FolderClosed,
   Gauge,
+  Headphones,
   Info,
+  Link,
   Plus,
   Power,
   Share,
   Trash2,
+  Volume2,
+  VolumeX,
 } from './icons';
 import { ChainMapStrip } from './ChainMapStrip';
 import { ToneImage } from './GearIcon';
@@ -73,6 +78,7 @@ import { ChromeIconButton, ChromeTextButton, chromeIcon } from './ChromeIconButt
 import { T3K_API } from '../t3k/config';
 import {
   BORDER,
+  BRAND_RED,
   GRAY,
   ICON_BOX_RADIUS,
   ICON_BOX_SIZE,
@@ -157,6 +163,11 @@ const chipStyle: React.CSSProperties = {
     symmetric unit at the end of the row. */
 const toggleChipStyle: React.CSSProperties = { ...chipStyle, width: '58rem' };
 const TOGGLE_CHIP_VALUE_WIDTH = 24;
+
+/** Every DUAL_MONO param this file mirrors (Pan/Mix/Vol) is a 0..1
+    normalized knob value - Link's delta math can walk either side past that
+    range, so every write goes through this first. */
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 /** Downloads / bookmarks / models count with a leading icon (same pattern as ToneBrowser).
     `fontSize` defaults to the full card's size; the IR compact card's meta
@@ -503,6 +514,36 @@ const DualSideCard: React.FC<{
   /** Open this side in the full single-block editor - `null` for a plain
       open (thumbnail), 'eq'/'info' to land straight in that sub-view. */
   onOpenChild: (initial: 'eq' | 'info' | null) => void;
+  /** Controlled from the parent rather than DualSideCard's own local state -
+      when Link is on, the parent computes the offset-preserving mirror
+      value for the sibling side and updates its knob too, same split Pan
+      itself already uses (see handleDualChildMixChange's own comment). */
+  mix: number;
+  onMixChange: (val: number) => void;
+  vol: number;
+  onVolChange: (val: number) => void;
+  isSoloed: boolean;
+  onSoloToggle: () => void;
+  /** Controlled from the parent, same reason mix/vol are - own explicit
+      Mute state, real and persisted. Only meaningful while `child` is set;
+      ignored otherwise (see `emptyMuted` below). */
+  muted: boolean;
+  onMuteToggle: () => void;
+  /** True when this side isn't itself muted but the *sibling* is soloed -
+      i.e. this side is being silenced anyway, just not by its own Mute.
+      Display-only (see handleToggleDualSolo's own comment): the Mute
+      button shows a distinct "implied" look (outline, not filled) rather
+      than pretending this side's own Mute flag is on - clicking it still
+      only ever sets *this* side's real Mute. Matches Logic's own solo
+      convention (soloing a channel highlights - doesn't set - every other
+      channel's Mute button). */
+  impliedMuted: boolean;
+  /** Only meaningful while `child` is undefined - mutes this side's own
+      pass-through (see BlockParams.dualLeftEmptyMuted's own comment).
+      Ignored once a side is loaded (that side's Mute goes through `muted`/
+      `onMuteToggle` above instead). */
+  emptyMuted: boolean;
+  onEmptyMuteToggle: () => void;
 }> = ({
   dualBlockId,
   isLeftSide,
@@ -513,10 +554,32 @@ const DualSideCard: React.FC<{
   onPanDragStateChange,
   panHelp,
   onOpenChild,
+  mix,
+  onMixChange,
+  vol,
+  onVolChange,
+  isSoloed,
+  onSoloToggle,
+  muted,
+  onMuteToggle,
+  impliedMuted,
+  emptyMuted,
+  onEmptyMuteToggle,
 }) => {
   const actions = useChainActions();
   const toast = useToast();
   const boxSize = 80;
+  // Noticeably bigger than the filled thumbnail's own 80rem - an empty
+  // side's "+" square used to be a fixed 80rem regardless of how much
+  // taller the OTHER side's filled card was, which (even after the
+  // equal-width fix below) still left the row looking lopsided: a small
+  // icon floating in a wide, mostly-empty column next to a dense filled
+  // card. TILE_SIZE (224, the main gallery's own tile size) was tried
+  // first, but its own label+Mute button pushed the empty column *taller*
+  // than the filled card's real footprint, clipping off the bottom of the
+  // plugin window - 160 keeps the bigger, more balanced footprint without
+  // outgrowing the filled side.
+  const emptyBoxSize = 160;
 
   const { modelOptions, modelsLoading, modelsTotal, handleModelSelect, handleModelsOpen } =
     useModelPicker(child ?? null);
@@ -525,53 +588,91 @@ const DualSideCard: React.FC<{
   const handleKnobDragState = useCallback((dragging: boolean) => {
     knobDragRef.current = dragging;
   }, []);
-  const [mix, setMix] = useState(child?.params.mix ?? 1.0);
-  const [vol, setVol] = useState(child?.params.outputGain ?? 0.5);
-  useEffect(() => {
-    if (!knobDragRef.current) setMix(child?.params.mix ?? 1.0);
-  }, [child?.params.mix]);
-  useEffect(() => {
-    if (!knobDragRef.current) setVol(child?.params.outputGain ?? 0.5);
-  }, [child?.params.outputGain]);
+  const [localEmptyMuted, setLocalEmptyMuted] = useState(emptyMuted);
+  useEffect(() => setLocalEmptyMuted(emptyMuted), [emptyMuted]);
+
+  const handleEmptyMuteToggle = () => {
+    setLocalEmptyMuted((prev) => !prev);
+    onEmptyMuteToggle();
+  };
 
   if (!child) {
     return (
       <div
-        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8rem' }}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8rem',
+          // Same width as the filled card below, so a block with only one
+          // side loaded stays centered instead of skewing toward whichever
+          // side has real content (issue: the empty placeholder used to
+          // shrink to its ~80rem "+" box's own width, leaving the row
+          // lopsided).
+          width: '340rem',
+        }}
       >
+        {/* Mute sits outside the dimmed group below (same "the button that
+            controls the section stays clickable" shape ImageDeckPanel's own
+            power button uses) so muting stays reachable once the rest goes
+            inert. */}
         <div
+          className={uiOffClass(localEmptyMuted)}
           style={{
-            width: `${boxSize}rem`,
-            height: `${boxSize}rem`,
-            borderRadius: '12rem',
-            border: BORDER,
-            overflow: 'hidden',
-            position: 'relative',
-            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '8rem',
           }}
         >
-          <button
-            type="button"
-            onClick={() => actions.addToDualSlot(dualBlockId, isLeftSide)}
-            {...helpProps(isLeftSide ? HELP.addDualSlotLeft : HELP.addDualSlotRight)}
+          <div
             style={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              color: GRAY,
+              width: `${emptyBoxSize}rem`,
+              height: `${emptyBoxSize}rem`,
+              borderRadius: '12rem',
+              border: BORDER,
+              overflow: 'hidden',
+              position: 'relative',
+              flexShrink: 0,
             }}
           >
-            <Plus size={24} />
-          </button>
+            <button
+              type="button"
+              onClick={() => actions.addToDualSlot(dualBlockId, isLeftSide)}
+              {...helpProps(isLeftSide ? HELP.addDualSlotLeft : HELP.addDualSlotRight)}
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: GRAY,
+              }}
+            >
+              <Plus size={Math.round(emptyBoxSize * 0.22)} />
+            </button>
+          </div>
+          <span style={{ fontFamily: FONT_MONO, fontSize: '12rem', color: WHITE }}>
+            {isLeftSide ? 'Left' : 'Right'}
+          </span>
         </div>
-        <span style={{ fontFamily: FONT_MONO, fontSize: '12rem', color: WHITE }}>
-          {isLeftSide ? 'Left' : 'Right'}
-        </span>
+        {/* An empty side is still a live pass-through (see
+            dualLeftEmptyMuted's own comment) - Mute silences that
+            pass-through, the only control that makes sense before
+            anything's loaded here (no child block yet to hold Pan/Mix/Vol/
+            Solo). */}
+        <ChromeIconButton
+          tone="danger"
+          on={localEmptyMuted}
+          help={HELP.dualMute}
+          onClick={handleEmptyMuteToggle}
+        >
+          {localEmptyMuted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
+        </ChromeIconButton>
       </div>
     );
   }
@@ -597,7 +698,9 @@ const DualSideCard: React.FC<{
         minWidth: 0,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8rem' }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8rem' }}
+      >
         <ChromeTextButton armed={eqActive} help={HELP.eqToggle} onClick={() => onOpenChild('eq')}>
           EQ
         </ChromeTextButton>
@@ -612,6 +715,30 @@ const DualSideCard: React.FC<{
           </ChromeIconButton>
         )}
         <ChromeIconButton
+          tone="danger"
+          on={muted}
+          help={HELP.dualMute}
+          onClick={onMuteToggle}
+          // Implied (silenced by the sibling's Solo, not this side's own
+          // Mute - see the prop's own comment): outline only, never the
+          // solid fill `on` alone would give, so it reads as "this is why
+          // you're not hearing it" rather than "you muted this yourself".
+          style={
+            impliedMuted && !muted
+              ? {
+                  backgroundColor: 'transparent',
+                  border: `1rem solid ${BRAND_RED}`,
+                  color: BRAND_RED,
+                }
+              : undefined
+          }
+        >
+          {muted || impliedMuted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
+        </ChromeIconButton>
+        <ChromeIconButton tone="armed" on={isSoloed} help={HELP.dualSolo} onClick={onSoloToggle}>
+          <Headphones size={ICON_SIZE} />
+        </ChromeIconButton>
+        <ChromeIconButton
           help={HELP.swapTone}
           onClick={() => actions.addToDualSlot(dualBlockId, isLeftSide)}
         >
@@ -625,158 +752,170 @@ const DualSideCard: React.FC<{
         </ChromeIconButton>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'row', gap: '12rem', minWidth: 0 }}>
-        <button
-          type="button"
-          onClick={() => onOpenChild(null)}
-          {...helpProps(HELP.dualSideOpen)}
-          style={{
-            width: `${boxSize}rem`,
-            height: `${boxSize}rem`,
-            borderRadius: '12rem',
-            border: BORDER,
-            overflow: 'hidden',
-            position: 'relative',
-            flexShrink: 0,
-            padding: 0,
-            background: 'transparent',
-            cursor: 'pointer',
-          }}
-        >
-          <div
+      {/* Muted: everything below (thumbnail/title, model picker, Pan/Mix/
+          Vol) dims and goes inert, same "the toggle itself sits outside the
+          dimmed wrapper" shape as every other power-style dim in this file
+          (ImageDeckPanel's own power button, the wrapper's own `enabled`
+          dim below) - only Mute stays clickable so un-muting is still one
+          click away. The rest of the icon row (EQ/Info/Share/Swap/Trash)
+          stays undimmed on purpose: those manage the tone itself, not its
+          audibility, so muting shouldn't block them. */}
+      <div
+        className={uiOffClass(muted)}
+        style={{ display: 'flex', flexDirection: 'column', gap: '12rem', minWidth: 0 }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'row', gap: '12rem', minWidth: 0 }}>
+          <button
+            type="button"
+            onClick={() => onOpenChild(null)}
+            {...helpProps(HELP.dualSideOpen)}
             style={{
-              opacity: modelBusy || child.loadFailed ? 0.35 : 1,
-              transition: 'opacity 0.2s ease',
-              width: '100%',
-              height: '100%',
+              width: `${boxSize}rem`,
+              height: `${boxSize}rem`,
+              borderRadius: '12rem',
+              border: BORDER,
+              overflow: 'hidden',
+              position: 'relative',
+              flexShrink: 0,
+              padding: 0,
+              background: 'transparent',
+              cursor: 'pointer',
             }}
           >
-            <ToneImage
-              src={tone.images?.[0]}
-              alt={tone.title}
-              gear={tone.gear}
-              local={tone.local}
-              blockType={child.blockType}
-              boxSize={boxSize}
-              draggable={false}
-            />
-          </div>
-          {(modelBusy || child.loadFailed) && (
             <div
               style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
+                opacity: modelBusy || child.loadFailed ? 0.35 : 1,
+                transition: 'opacity 0.2s ease',
+                width: '100%',
+                height: '100%',
               }}
             >
-              {child.loadFailed ? (
-                <RetryLoadBadge onRetry={() => actions.retryLoad(child.blockId)} />
-              ) : (
-                <LoadingDots />
-              )}
+              <ToneImage
+                src={tone.images?.[0]}
+                alt={tone.title}
+                gear={tone.gear}
+                local={tone.local}
+                blockType={child.blockType}
+                boxSize={boxSize}
+                draggable={false}
+              />
             </div>
-          )}
-        </button>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6rem',
-            minWidth: 0,
-            flex: 1,
-          }}
-        >
-          <span
+            {(modelBusy || child.loadFailed) && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {child.loadFailed ? (
+                  <RetryLoadBadge onRetry={() => actions.retryLoad(child.blockId)} />
+                ) : (
+                  <LoadingDots />
+                )}
+              </div>
+            )}
+          </button>
+          <div
             style={{
-              fontFamily: FONT_MONO,
-              fontSize: '14rem',
-              color: WHITE,
-              fontWeight: 700,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6rem',
+              minWidth: 0,
+              flex: 1,
             }}
           >
-            {tone.title}
-          </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10rem' }}>
-            {tone.gear && (
-              <span style={{ fontSize: '12rem', color: MUTED, fontWeight: 400 }}>
-                {gearLabel(tone.gear)}
-              </span>
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: '14rem',
+                color: WHITE,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {tone.title}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10rem' }}>
+              {tone.gear && (
+                <span style={{ fontSize: '12rem', color: MUTED, fontWeight: 400 }}>
+                  {gearLabel(tone.gear)}
+                </span>
+              )}
+              {formatBadge && <FormatBadge label={formatBadge} a2={child.blockType === 'nam'} />}
+            </div>
+            {!isLocal && (
+              <CompactToneMetaRow
+                tone={tone}
+                favoritesCount={tone.favorites_count ?? 0}
+                favorited={tone.is_favorite === true}
+              />
             )}
-            {formatBadge && <FormatBadge label={formatBadge} a2={child.blockType === 'nam'} />}
           </div>
-          {!isLocal && (
-            <CompactToneMetaRow
-              tone={tone}
-              favoritesCount={tone.favorites_count ?? 0}
-              favorited={tone.is_favorite === true}
-            />
-          )}
         </div>
-      </div>
 
-      <div style={{ cursor: isLocal || actions.authenticated ? 'default' : 'not-allowed' }}>
-        <ModelSelect
-          options={modelOptions.map((m) => ({ id: String(m.id), name: m.name }))}
-          value={String(child.activeModelId)}
-          onChange={handleModelSelect}
-          onOpen={handleModelsOpen}
-          height={28}
-          disabled={!isLocal && !actions.authenticated}
-          loading={modelsLoading}
-          totalCount={isLocal ? tone.models.length : modelsTotal}
-        />
-      </div>
+        <div style={{ cursor: isLocal || actions.authenticated ? 'default' : 'not-allowed' }}>
+          <ModelSelect
+            options={modelOptions.map((m) => ({ id: String(m.id), name: m.name }))}
+            value={String(child.activeModelId)}
+            onChange={handleModelSelect}
+            onOpen={handleModelsOpen}
+            height={28}
+            disabled={!isLocal && !actions.authenticated}
+            loading={modelsLoading}
+            totalCount={isLocal ? tone.models.length : modelsTotal}
+          />
+        </div>
 
-      <div
-        className={uiOffClass(channelLimited)}
-        style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '16rem' }}
-      >
-        <KnobControl
-          label="Pan"
-          value={panValue}
-          onChange={onPanChange}
-          onDragStateChange={onPanDragStateChange}
-          size={KNOB_SIZE_SECONDARY}
-          labelBottom={false}
-          thumb="secondary"
-          scale={dualPanScale}
-          defaultValue={isLeftSide ? 0.0 : 1.0}
-          help={panHelp}
-        />
-        <KnobControl
-          label="Mix"
-          value={mix}
-          onChange={(val) => {
-            setMix(val);
-            actions.setBlockParam(child.blockId, 'mix', val);
+        <div
+          className={uiOffClass(channelLimited)}
+          style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            gap: '16rem',
           }}
-          onDragStateChange={handleKnobDragState}
-          size={KNOB_SIZE_SECONDARY}
-          labelBottom={false}
-          thumb="secondary"
-          defaultValue={1.0}
-          help={HELP.blockMix}
-        />
-        <KnobControl
-          label="Vol"
-          value={vol}
-          onChange={(val) => {
-            setVol(val);
-            actions.setBlockParam(child.blockId, 'outputGain', val);
-          }}
-          onDragStateChange={handleKnobDragState}
-          size={KNOB_SIZE_SECONDARY}
-          labelBottom={false}
-          thumb="secondary"
-          scale={gainDbScale}
-          defaultValue={0.5}
-          help={HELP.blockOut}
-        />
+        >
+          <KnobControl
+            label="Pan"
+            value={panValue}
+            onChange={onPanChange}
+            onDragStateChange={onPanDragStateChange}
+            size={KNOB_SIZE_SECONDARY}
+            labelBottom={false}
+            thumb="secondary"
+            scale={dualPanScale}
+            defaultValue={isLeftSide ? 0.0 : 1.0}
+            help={panHelp}
+          />
+          <KnobControl
+            label="Mix"
+            value={mix}
+            onChange={onMixChange}
+            onDragStateChange={handleKnobDragState}
+            size={KNOB_SIZE_SECONDARY}
+            labelBottom={false}
+            thumb="secondary"
+            defaultValue={1.0}
+            help={HELP.blockMix}
+          />
+          <KnobControl
+            label="Vol"
+            value={vol}
+            onChange={onVolChange}
+            onDragStateChange={handleKnobDragState}
+            size={KNOB_SIZE_SECONDARY}
+            labelBottom={false}
+            thumb="secondary"
+            scale={gainDbScale}
+            defaultValue={0.5}
+            help={HELP.blockOut}
+          />
+        </div>
       </div>
     </div>
   );
@@ -901,6 +1040,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // this through the giant NAM/IR/CAB body would be worse than a clean
   // early return).
   const isDualMono = block.blockType === 'dualMono';
+  // Computed unconditionally (hooks below read off these) rather than only
+  // inside the isDualMono branch further down - see topDualLeftMix/Vol's own
+  // comment for why Mix/Vol state needs these before any early return.
+  const rawTopDualLeft = block.dualLeft?.[0];
+  const topDualLeftChild =
+    rawTopDualLeft && !isInsertSlot(rawTopDualLeft) ? rawTopDualLeft : undefined;
+  const rawTopDualRight = block.dualRight?.[0];
+  const topDualRightChild =
+    rawTopDualRight && !isInsertSlot(rawTopDualRight) ? rawTopDualRight : undefined;
 
   // Optional (=) normalization toggle, revealed by Per-Block Normalization
   // in Plugin Settings.
@@ -929,11 +1077,42 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // native's ChainBlock::widthNormalized default (see its own comment).
   const [irWidth, setIrWidth] = useState(params.width ?? 0.75);
   // DUAL_MONO only: recombine knobs. Defaults match native's own
-  // ChainBlock::dualLeftPanNormalized/dualRightPanNormalized/
-  // dualWidthNormalized (hard-left/hard-right/full-width).
+  // ChainBlock::dualLeftPanNormalized/dualRightPanNormalized (hard-left/
+  // hard-right). Width no longer has a UI knob - see handleDualLeftPanChange's
+  // own comment - so there's no local width state to mirror.
   const [dualLeftPan, setDualLeftPan] = useState(params.dualLeftPan ?? 0.0);
   const [dualRightPan, setDualRightPan] = useState(params.dualRightPan ?? 1.0);
-  const [dualWidth, setDualWidth] = useState(params.dualWidth ?? 1.0);
+  const [dualLinked, setDualLinked] = useState(params.dualLinked ?? false);
+  // DUAL_MONO only: each child's own Mix/Vol, tracked here rather than
+  // inside DualSideCard - Link's delta-preserving mirror (see
+  // handleDualChildMixChange/handleDualChildVolChange) needs both sides'
+  // live values in one place to compute the offset-preserving delta from,
+  // the same reason Pan itself already lives up here rather than per-card.
+  const [dualLeftMix, setDualLeftMix] = useState(topDualLeftChild?.params.mix ?? 1.0);
+  const [dualRightMix, setDualRightMix] = useState(topDualRightChild?.params.mix ?? 1.0);
+  const [dualLeftVol, setDualLeftVol] = useState(topDualLeftChild?.params.outputGain ?? 0.5);
+  const [dualRightVol, setDualRightVol] = useState(topDualRightChild?.params.outputGain ?? 0.5);
+  // DUAL_MONO only: Solo, tracked optimistically here (not read straight off
+  // params.dualSoloLeft/Right) so the button flips the instant it's clicked
+  // instead of waiting a full native round trip + next chain-state poll to
+  // show anything - the same "instant, not eventually-consistent" shape
+  // every other toggle in this card (Mute, Link) already gets from its own
+  // local state.
+  const [dualLeftSoloed, setDualLeftSoloed] = useState(params.dualSoloLeft ?? false);
+  const [dualRightSoloed, setDualRightSoloed] = useState(params.dualSoloRight ?? false);
+  // DUAL_MONO only: each loaded child's own Mute, tracked here (not inside
+  // DualSideCard) for the same "instant" reason Solo just above is, and
+  // because the "implied mute" display (leftImpliedMuted/rightImpliedMuted
+  // at each DualSideCard call site) needs both sides' Mute and Solo state
+  // in one place to compute from - see handleToggleDualSolo's own comment
+  // for why Mute/Solo stay independent flags rather than mutating each
+  // other.
+  const [dualLeftMuted, setDualLeftMuted] = useState(
+    topDualLeftChild ? !topDualLeftChild.params.enabled : false
+  );
+  const [dualRightMuted, setDualRightMuted] = useState(
+    topDualRightChild ? !topDualRightChild.params.enabled : false
+  );
   // DUAL_MONO only: which side (if any) is showing its own full editor -
   // see the isDualMono branch's own comment on why this stays local rather
   // than going through ChainView's detailBlockId.
@@ -1019,9 +1198,29 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => {
     if (!knobDragRef.current) setDualRightPan(params.dualRightPan ?? 1.0);
   }, [params.dualRightPan]);
+  useEffect(() => setDualLinked(params.dualLinked ?? false), [params.dualLinked]);
+  useEffect(() => setDualLeftSoloed(params.dualSoloLeft ?? false), [params.dualSoloLeft]);
+  useEffect(() => setDualRightSoloed(params.dualSoloRight ?? false), [params.dualSoloRight]);
+  useEffect(
+    () => setDualLeftMuted(topDualLeftChild ? !topDualLeftChild.params.enabled : false),
+    [topDualLeftChild?.params.enabled, topDualLeftChild]
+  );
+  useEffect(
+    () => setDualRightMuted(topDualRightChild ? !topDualRightChild.params.enabled : false),
+    [topDualRightChild?.params.enabled, topDualRightChild]
+  );
   useEffect(() => {
-    if (!knobDragRef.current) setDualWidth(params.dualWidth ?? 1.0);
-  }, [params.dualWidth]);
+    if (!knobDragRef.current) setDualLeftMix(topDualLeftChild?.params.mix ?? 1.0);
+  }, [topDualLeftChild?.params.mix]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualRightMix(topDualRightChild?.params.mix ?? 1.0);
+  }, [topDualRightChild?.params.mix]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualLeftVol(topDualLeftChild?.params.outputGain ?? 0.5);
+  }, [topDualLeftChild?.params.outputGain]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualRightVol(topDualRightChild?.params.outputGain ?? 0.5);
+  }, [topDualRightChild?.params.outputGain]);
   useEffect(() => setTrimInit(params.trimInit ?? false), [params.trimInit]);
   useEffect(() => setTrimRelaxed(params.trimRelaxed ?? false), [params.trimRelaxed]);
   useEffect(() => setReverse(params.reverse ?? false), [params.reverse]);
@@ -1105,26 +1304,135 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // DUAL_MONO only: each knob sends the full current triple - setDualImage
   // takes all three together (native re-derives the recombine from them
   // every call), same shape as setBlockIrDecay's own multi-value commit.
+  // Width no longer has a UI knob (see dualLinked's own comment) - always
+  // sent as a fixed 1.0, full panned image.
+  // When Link is on, dragging either side's Pan mirrors the *delta* onto
+  // the other side (nextOther = other - delta) rather than snapping it to
+  // an exact 1-val mirror - an offset that already exists between the two
+  // sides (e.g. they weren't a perfect mirror when Link was turned on)
+  // stays exactly as wide as it was, it just glides along with the drag
+  // instead of jumping the moment Link engages. Every onChange tick (not
+  // just on release) sends both values through the same setDualImage call,
+  // same "live during the whole drag" shape setDualImage always had.
   const handleDualLeftPanChange = useCallback(
     (val: number) => {
+      const delta = val - dualLeftPan;
       setDualLeftPan(val);
-      actions.setDualImage(blockId, val, dualRightPan, dualWidth);
+      const nextRightPan = dualLinked ? clamp01(dualRightPan - delta) : dualRightPan;
+      if (dualLinked) setDualRightPan(nextRightPan);
+      actions.setDualImage(blockId, val, nextRightPan, 1.0);
     },
-    [actions, blockId, dualRightPan, dualWidth]
+    [actions, blockId, dualLeftPan, dualRightPan, dualLinked]
   );
   const handleDualRightPanChange = useCallback(
     (val: number) => {
+      const delta = val - dualRightPan;
       setDualRightPan(val);
-      actions.setDualImage(blockId, dualLeftPan, val, dualWidth);
+      const nextLeftPan = dualLinked ? clamp01(dualLeftPan - delta) : dualLeftPan;
+      if (dualLinked) setDualLeftPan(nextLeftPan);
+      actions.setDualImage(blockId, nextLeftPan, val, 1.0);
     },
-    [actions, blockId, dualLeftPan, dualWidth]
+    [actions, blockId, dualLeftPan, dualRightPan, dualLinked]
   );
-  const handleDualWidthChange = useCallback(
-    (val: number) => {
-      setDualWidth(val);
-      actions.setDualImage(blockId, dualLeftPan, dualRightPan, val);
+  // Same delta-preserving idea as Pan above, but not mirrored - Link keeps
+  // Mix/Vol moving together by the same amount, whatever offset already
+  // existed between the two sides' values stays exactly as wide.
+  const handleDualChildMixChange = useCallback(
+    (isLeftSide: boolean, val: number) => {
+      const prevThis = isLeftSide ? dualLeftMix : dualRightMix;
+      const delta = val - prevThis;
+      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
+      const otherChild = isLeftSide ? topDualRightChild : topDualLeftChild;
+      const prevOther = isLeftSide ? dualRightMix : dualLeftMix;
+      (isLeftSide ? setDualLeftMix : setDualRightMix)(val);
+      if (thisChild) actions.setBlockParam(thisChild.blockId, 'mix', val);
+      if (dualLinked && otherChild) {
+        const nextOther = clamp01(prevOther + delta);
+        (isLeftSide ? setDualRightMix : setDualLeftMix)(nextOther);
+        actions.setBlockParam(otherChild.blockId, 'mix', nextOther);
+      }
     },
-    [actions, blockId, dualLeftPan, dualRightPan]
+    [actions, dualLeftMix, dualRightMix, dualLinked, topDualLeftChild, topDualRightChild]
+  );
+  const handleDualChildVolChange = useCallback(
+    (isLeftSide: boolean, val: number) => {
+      const prevThis = isLeftSide ? dualLeftVol : dualRightVol;
+      const delta = val - prevThis;
+      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
+      const otherChild = isLeftSide ? topDualRightChild : topDualLeftChild;
+      const prevOther = isLeftSide ? dualRightVol : dualLeftVol;
+      (isLeftSide ? setDualLeftVol : setDualRightVol)(val);
+      if (thisChild) actions.setBlockParam(thisChild.blockId, 'outputGain', val);
+      if (dualLinked && otherChild) {
+        const nextOther = clamp01(prevOther + delta);
+        (isLeftSide ? setDualRightVol : setDualLeftVol)(nextOther);
+        actions.setBlockParam(otherChild.blockId, 'outputGain', nextOther);
+      }
+    },
+    [actions, dualLeftVol, dualRightVol, dualLinked, topDualLeftChild, topDualRightChild]
+  );
+  const handleToggleDualLinked = useCallback(() => {
+    setDualLinked((prev) => {
+      actions.setDualLinked(blockId, !prev);
+      return !prev;
+    });
+  }, [actions, blockId]);
+  // Optimistic, exclusive Solo toggle (see dualLeftSoloed's own comment) -
+  // flips both local flags immediately, mirroring native's own exclusivity
+  // (setDualSolo clears the other side there too) instead of waiting for
+  // that round trip to reflect back through params.
+  //
+  // Solo and Mute stay two genuinely independent native flags - an earlier
+  // version of this had Solo(X) also *set* the sibling's real Mute flag
+  // (and vice versa), which looked right for the simple case but broke down
+  // the moment a user drove both controls independently (e.g. muting each
+  // side by hand, one after the other): the second click's mirror step
+  // stomped the first side's already-real mute state, leaving one side
+  // showing both Muted *and* Soloed lit at once - a real, reachable,
+  // confusing state, not just a hypothetical.
+  //
+  // The fix (matching Logic's own convention: soloing a channel doesn't
+  // touch other channels' actual mute state, it just highlights their Mute
+  // buttons to show they're being cut by solo) is to keep Solo/Mute fully
+  // independent at the state level, and only *display* the implied
+  // silencing - see `leftImpliedMuted`/`rightImpliedMuted` at each
+  // DualSideCard call site below. The one real state coupling that remains
+  // is same-side: a side can't sensibly be both soloed and muted *itself*,
+  // so engaging one clears that side's own other flag.
+  const handleToggleDualSolo = useCallback(
+    (isLeftSide: boolean) => {
+      const next = isLeftSide ? !dualLeftSoloed : !dualRightSoloed;
+      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
+      if (isLeftSide) {
+        setDualLeftSoloed(next);
+        if (next) setDualRightSoloed(false);
+      } else {
+        setDualRightSoloed(next);
+        if (next) setDualLeftSoloed(false);
+      }
+      actions.setDualSolo(blockId, isLeftSide, next);
+      if (next && thisChild) {
+        (isLeftSide ? setDualLeftMuted : setDualRightMuted)(false);
+        actions.setBlockParam(thisChild.blockId, 'enabled', true);
+      }
+    },
+    [actions, blockId, dualLeftSoloed, dualRightSoloed, topDualLeftChild, topDualRightChild]
+  );
+  // Same-side-only pairing from the Mute side - see handleToggleDualSolo's
+  // own comment for why this no longer touches the sibling's real state.
+  const handleDualChildMuteToggle = useCallback(
+    (isLeftSide: boolean) => {
+      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
+      if (!thisChild) return;
+      const next = isLeftSide ? !dualLeftMuted : !dualRightMuted;
+      (isLeftSide ? setDualLeftMuted : setDualRightMuted)(next);
+      actions.setBlockParam(thisChild.blockId, 'enabled', !next);
+      if (next) {
+        (isLeftSide ? setDualLeftSoloed : setDualRightSoloed)(false);
+        actions.setDualSolo(blockId, isLeftSide, false);
+      }
+    },
+    [actions, blockId, dualLeftMuted, dualRightMuted, topDualLeftChild, topDualRightChild]
   );
 
   // Resets every IR shaping field to default in one native call (a single
@@ -1779,10 +2087,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   }
 
   if (isDualMono) {
-    const rawLeftChild = block.dualLeft?.[0];
-    const dualLeft = rawLeftChild && !isInsertSlot(rawLeftChild) ? rawLeftChild : undefined;
-    const rawRightChild = block.dualRight?.[0];
-    const dualRight = rawRightChild && !isInsertSlot(rawRightChild) ? rawRightChild : undefined;
+    const dualLeft = topDualLeftChild;
+    const dualRight = topDualRightChild;
 
     // Recurse into the exact same ChainBlock card every ordinary NAM/IR/CAB
     // block uses, for whichever side is open - "Navigate", not a second
@@ -1975,74 +2281,230 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   Dual Mono
                 </span>
               </div>
-              <ChromeIconButton help={HELP.removeBlock} onClick={() => actions.removeBlock(blockId)}>
-                <Trash2 />
-              </ChromeIconButton>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '24rem', flexShrink: 0 }}>
+                {/* Master EQ: shapes the recombined signal, after both
+                    sides' own Pan/Width/Solo/Mute - a third, separately-
+                    scoped EQ alongside each side's own (see DualSideCard's
+                    own EQ button). No PRE here (unlike an ordinary block,
+                    this wrapper has no model stage of its own to sit in
+                    front of) - reuses the exact same showEq/eqOn/eqView/
+                    eqActive state and handlers every other block's EQ
+                    pill already does, since params.eq here is this
+                    wrapper's own BlockEq (every ChainBlock carries one). */}
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: showEq ? '16rem' : 0,
+                    padding: showEq ? '4rem 12rem' : 0,
+                    marginRight: showEq ? -12 : 0,
+                    borderRadius: showEq ? '100rem' : 0,
+                    backgroundColor: showEq ? SEGMENTED_TRACK : 'transparent',
+                    flexShrink: 0,
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  {showEq && (
+                    <>
+                      <ChromeIconButton
+                        tone="power"
+                        on={eqOn}
+                        help={HELP.eqPower}
+                        onClick={handleToggleEqEnabled}
+                      >
+                        <Power />
+                      </ChromeIconButton>
+                      <div
+                        style={{
+                          ...segmentedGroupStyle(),
+                          backgroundColor: 'rgba(118, 118, 128, 0.24)',
+                        }}
+                      >
+                        <button
+                          onClick={() => setEqView('sliders')}
+                          {...helpProps(HELP.eqSlidersView)}
+                          style={{
+                            ...segmentedCellStyle(true),
+                            color: eqView === 'sliders' ? WHITE : GRAY,
+                          }}
+                        >
+                          <EqSlidersIcon />
+                        </button>
+                        <button
+                          onClick={() => setEqView('graph')}
+                          {...helpProps(HELP.eqCurveView)}
+                          style={{
+                            ...segmentedCellStyle(true),
+                            color: eqView === 'graph' ? WHITE : GRAY,
+                          }}
+                        >
+                          <EqCurveIcon />
+                        </button>
+                      </div>
+                      <span
+                        className={uiOffClass(!eqOn)}
+                        style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
+                      >
+                        <ChromeTextButton
+                          armed={false}
+                          help="Reset all EQ bands to default (flat)"
+                          onClick={handleResetEq}
+                        >
+                          FLAT
+                        </ChromeTextButton>
+                      </span>
+                    </>
+                  )}
+                  <ChromeTextButton
+                    armed={eqActive}
+                    open={showEq}
+                    help={HELP.eqToggle}
+                    onClick={() => setShowEq((prev) => !prev)}
+                  >
+                    EQ
+                  </ChromeTextButton>
+                </div>
+                <ChromeIconButton
+                  help={HELP.removeBlock}
+                  onClick={() => actions.removeBlock(blockId)}
+                >
+                  <Trash2 />
+                </ChromeIconButton>
+              </div>
             </div>
 
-            <div
-              className={uiOffClass(!enabled)}
-              style={{
-                flexShrink: 0,
-                display: 'flex',
-                flexDirection: 'row',
-                alignItems: 'flex-start',
-                justifyContent: 'center',
-                gap: '32rem',
-                padding: `${BODY_PADDING}rem`,
-                boxSizing: 'border-box',
-                transition: 'opacity 0.2s ease',
-              }}
-            >
-              <DualSideCard
-                dualBlockId={blockId}
-                isLeftSide
-                child={dualLeft}
-                channelLimited={block.dualChannelLimited ?? false}
-                panValue={dualLeftPan}
-                onPanChange={handleDualLeftPanChange}
-                onPanDragStateChange={handleKnobDragState}
-                panHelp={HELP.dualPanLeft}
-                onOpenChild={(initial) => openChild('left', initial)}
-              />
+            {showEq ? (
               <div
-                className={uiOffClass(block.dualChannelLimited ?? false)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  // Roughly centers the Width knob against the two side
-                  // cards' own header rows, not their full (much taller)
-                  // height.
-                  minHeight: `${80 + 12 + 96}rem`,
-                }}
+                className={uiOffClass(!enabled)}
+                style={{ height: `${BODY_HEIGHT}rem`, display: 'flex', flexShrink: 0 }}
               >
-                <KnobControl
-                  label="Width"
-                  value={dualWidth}
-                  onChange={handleDualWidthChange}
-                  onDragStateChange={handleKnobDragState}
-                  size={KNOB_SIZE_SECONDARY}
-                  labelBottom={false}
-                  thumb="secondary"
-                  scale={percentScale}
-                  defaultValue={1.0}
-                  help={HELP.dualWidth}
+                <BlockEqView
+                  blockId={blockId}
+                  bands={params.eq?.bands ?? []}
+                  eqEnabled={eqOn}
+                  sampleRate={sampleRate}
+                  view={eqView}
+                  onSetBand={actions.setBlockEqBand}
                 />
               </div>
-              <DualSideCard
-                dualBlockId={blockId}
-                isLeftSide={false}
-                child={dualRight}
-                channelLimited={block.dualChannelLimited ?? false}
-                panValue={dualRightPan}
-                onPanChange={handleDualRightPanChange}
-                onPanDragStateChange={handleKnobDragState}
-                panHelp={HELP.dualPanRight}
-                onOpenChild={(initial) => openChild('right', initial)}
-              />
-            </div>
+            ) : (
+              <div
+                className={uiOffClass(!enabled)}
+                style={{
+                  flexShrink: 0,
+                  display: 'flex',
+                  flexDirection: 'row',
+                  // Stretch (not flex-start): the center Link column reads its
+                  // own height off this row via height:100% (see the vertical
+                  // divider below), so it needs an actual row height to fill
+                  // rather than shrinking to its own single-button content.
+                  alignItems: 'stretch',
+                  justifyContent: 'center',
+                  gap: '32rem',
+                  padding: `${BODY_PADDING}rem`,
+                  boxSizing: 'border-box',
+                  transition: 'opacity 0.2s ease',
+                }}
+              >
+                <DualSideCard
+                  dualBlockId={blockId}
+                  isLeftSide
+                  child={dualLeft}
+                  channelLimited={block.dualChannelLimited ?? false}
+                  panValue={dualLeftPan}
+                  onPanChange={handleDualLeftPanChange}
+                  onPanDragStateChange={handleKnobDragState}
+                  panHelp={HELP.dualPanLeft}
+                  onOpenChild={(initial) => openChild('left', initial)}
+                  mix={dualLeftMix}
+                  onMixChange={(val) => handleDualChildMixChange(true, val)}
+                  vol={dualLeftVol}
+                  onVolChange={(val) => handleDualChildVolChange(true, val)}
+                  isSoloed={dualLeftSoloed}
+                  onSoloToggle={() => handleToggleDualSolo(true)}
+                  muted={dualLeftMuted}
+                  onMuteToggle={() => handleDualChildMuteToggle(true)}
+                  impliedMuted={!dualLeftMuted && dualRightSoloed}
+                  emptyMuted={params.dualLeftEmptyMuted ?? false}
+                  onEmptyMuteToggle={() =>
+                    actions.setDualEmptySideMuted(
+                      blockId,
+                      true,
+                      !(params.dualLeftEmptyMuted ?? false)
+                    )
+                  }
+                />
+                {/* Vertical divider between the two sides (same hairline
+                  treatment as the gallery tile's own split preview, see
+                  DualMonoTileImage) keeps the row reading as one balanced
+                  two-column block even when one side is a much bigger "+"
+                  placeholder than the other's filled card. The Link toggle
+                  itself only means anything once both sides actually have
+                  something to mirror/match - it's omitted otherwise rather
+                  than shown disabled. */}
+                <div
+                  style={{
+                    position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    width: `${ICON_BOX_SIZE}rem`,
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: '50%',
+                      width: '1rem',
+                      backgroundColor: 'rgba(235, 235, 245, 0.24)',
+                      transform: 'translateX(-50%)',
+                    }}
+                  />
+                  {dualLeft && dualRight && (
+                    <ChromeIconButton
+                      tone="link"
+                      on={dualLinked}
+                      help={HELP.dualLink}
+                      onClick={handleToggleDualLinked}
+                      style={{ position: 'relative' }}
+                    >
+                      <Link size={ICON_SIZE} />
+                    </ChromeIconButton>
+                  )}
+                </div>
+                <DualSideCard
+                  dualBlockId={blockId}
+                  isLeftSide={false}
+                  child={dualRight}
+                  channelLimited={block.dualChannelLimited ?? false}
+                  panValue={dualRightPan}
+                  onPanChange={handleDualRightPanChange}
+                  onPanDragStateChange={handleKnobDragState}
+                  panHelp={HELP.dualPanRight}
+                  onOpenChild={(initial) => openChild('right', initial)}
+                  mix={dualRightMix}
+                  onMixChange={(val) => handleDualChildMixChange(false, val)}
+                  vol={dualRightVol}
+                  onVolChange={(val) => handleDualChildVolChange(false, val)}
+                  isSoloed={dualRightSoloed}
+                  onSoloToggle={() => handleToggleDualSolo(false)}
+                  muted={dualRightMuted}
+                  onMuteToggle={() => handleDualChildMuteToggle(false)}
+                  impliedMuted={!dualRightMuted && dualLeftSoloed}
+                  emptyMuted={params.dualRightEmptyMuted ?? false}
+                  onEmptyMuteToggle={() =>
+                    actions.setDualEmptySideMuted(
+                      blockId,
+                      false,
+                      !(params.dualRightEmptyMuted ?? false)
+                    )
+                  }
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2106,6 +2568,12 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             }}
           >
             <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
+            {/* A Dual Mono side's own full editor reads "DUAL > LEFT/RIGHT"
+                instead of the generic "BLOCK" - onBack still lands on the
+                wrapper's compact view either way (see dualParent's own
+                comment), this is purely which breadcrumb the button shows.
+                The invisible mirror below repeats the same markup so the
+                centering math (its own comment) stays correct. */}
             <span
               style={{
                 fontFamily: FONT_MONO,
@@ -2115,8 +2583,25 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 lineHeight: 1.4,
               }}
             >
-              Block
+              {dualParent ? 'Dual' : 'Block'}
             </span>
+            {dualParent && (
+              <>
+                <ChevronRight size={12} style={{ display: 'block', flexShrink: 0, color: MUTED }} />
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: '16rem',
+                    fontWeight: 400,
+                    textTransform: 'uppercase',
+                    lineHeight: 1.4,
+                    color: MUTED,
+                  }}
+                >
+                  {dualParent.isLeftSide ? 'Left' : 'Right'}
+                </span>
+              </>
+            )}
           </button>
 
           {/* Every item in this block's lane, insert slots included, in
@@ -2184,8 +2669,24 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 lineHeight: 1.4,
               }}
             >
-              Block
+              {dualParent ? 'Dual' : 'Block'}
             </span>
+            {dualParent && (
+              <>
+                <ChevronRight size={12} style={{ display: 'block', flexShrink: 0 }} />
+                <span
+                  style={{
+                    fontFamily: FONT_MONO,
+                    fontSize: '16rem',
+                    fontWeight: 400,
+                    textTransform: 'uppercase',
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {dualParent.isLeftSide ? 'Left' : 'Right'}
+                </span>
+              </>
+            )}
           </div>
         </div>
 

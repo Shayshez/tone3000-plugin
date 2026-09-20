@@ -74,9 +74,17 @@ void TONE3000Processor::queueActiveModelLoad(ChainBlock& block) {
     block.dualLeftPanSmoother.reset(chainSampleRate(), 0.05f);
     block.dualRightPanSmoother.reset(chainSampleRate(), 0.05f);
     block.dualWidthSmoother.reset(chainSampleRate(), 0.05f);
+    block.dualLeftSoloGainSmoother.reset(chainSampleRate(), 0.05f);
+    block.dualRightSoloGainSmoother.reset(chainSampleRate(), 0.05f);
     block.dualLeftPanSmoother.setCurrentAndTargetValue(block.dualLeftPanNormalized);
     block.dualRightPanSmoother.setCurrentAndTargetValue(block.dualRightPanNormalized);
     block.dualWidthSmoother.setCurrentAndTargetValue(block.dualWidthNormalized);
+    const bool leftForcedSilent = block.dualLeft.empty() && block.dualLeftEmptyMuted;
+    const bool rightForcedSilent = block.dualRight.empty() && block.dualRightEmptyMuted;
+    block.dualLeftSoloGainSmoother.setCurrentAndTargetValue(
+        leftForcedSilent || (block.dualSoloRight && !block.dualSoloLeft) ? 0.0f : 1.0f);
+    block.dualRightSoloGainSmoother.setCurrentAndTargetValue(
+        rightForcedSilent || (block.dualSoloLeft && !block.dualSoloRight) ? 0.0f : 1.0f);
     for (auto& child : block.dualLeft)
       if (child)
         queueActiveModelLoad(*child);

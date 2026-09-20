@@ -227,6 +227,28 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 coerceDouble(args[3])));
           }))
       .withNativeFunction(
+          // (blockId, linked): persists a Dual Mono block's Link toggle.
+          "setDualLinked", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualLinked(
+                args[0].toString().toStdString(), coerceBool(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, isLeftSide, soloed): exclusive per-side solo for a
+          // Dual Mono block - soloing one side clears the other's.
+          "setDualSolo", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualSolo(
+                args[0].toString().toStdString(), coerceBool(args[1]), coerceBool(args[2])));
+          }))
+      .withNativeFunction(
+          // (blockId, isLeftSide, muted): mutes a Dual Mono side's
+          // pass-through while it has nothing loaded (see
+          // ChainBlock::dualLeftEmptyMuted's own comment).
+          "setDualEmptySideMuted",
+          guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualEmptySideMuted(
+                args[0].toString().toStdString(), coerceBool(args[1]), coerceBool(args[2])));
+          }))
+      .withNativeFunction(
           // (title, files, targetInsertId?, forceGear?): local .nam/.wav
           // file(s) dropped on an insert slot (one for a file, many for a
           // folder). The webview can't hand over file paths, so the bytes

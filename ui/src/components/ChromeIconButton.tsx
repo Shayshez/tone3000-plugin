@@ -3,6 +3,7 @@ import { helpProps } from './helpText';
 import {
   BLACK,
   BORDER,
+  BRAND_RED,
   BRAND_YELLOW,
   DISABLED_OPACITY,
   GRAY,
@@ -21,7 +22,7 @@ import {
  * forced to ICON_SIZE and grid-centered in the box (no nested flex/span
  * that WebKit can baseline-shift).
  */
-export type ChromeTone = 'plain' | 'power' | 'armed' | 'link';
+export type ChromeTone = 'plain' | 'power' | 'armed' | 'danger' | 'link';
 
 interface ChromeIconButtonProps {
   onClick: (e: React.MouseEvent) => void;
@@ -32,6 +33,10 @@ interface ChromeIconButtonProps {
    * plain: white icon (optional HIGHLIGHT via `filled`).
    * power: on = white/clear; off = GRAY + HIGHLIGHT (section power, block normalize).
    * armed: on = BRAND_YELLOW + BLACK (listening / engaged); off = BORDER + GRAY.
+   * danger: on = BRAND_RED + WHITE (actively silencing something, e.g. Mute
+   *   engaged); off = BORDER + GRAY. Same shape as armed, red instead of
+   *   yellow - reserved for "this is actively cutting audio", never plain
+   *   "engaged" (that's armed's job).
    * link:  on = white; off = GRAY, never a fill (pan link).
    */
   tone?: ChromeTone;
@@ -70,6 +75,12 @@ const toneChrome = (
         color: on ? BLACK : GRAY,
         backgroundColor: on ? BRAND_YELLOW : 'transparent',
         border: on ? `1rem solid ${BRAND_YELLOW}` : BORDER,
+      };
+    case 'danger':
+      return {
+        color: on ? WHITE : GRAY,
+        backgroundColor: on ? BRAND_RED : 'transparent',
+        border: on ? `1rem solid ${BRAND_RED}` : BORDER,
       };
     case 'link':
       return {

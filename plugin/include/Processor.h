@@ -114,6 +114,19 @@ public:
   // DUAL_MONO block.
   bool setDualImage(const std::string& blockId, double leftPanNormalized,
                     double rightPanNormalized, double widthNormalized);
+  // Persists the Link toggle's on/off state (ChainBlock::dualLinked) - the
+  // mirror/sync behavior itself is UI-side, re-sending both sides' values
+  // through setDualImage/setBlockParam; see that field's own comment.
+  bool setDualLinked(const std::string& blockId, bool linked);
+  // Exclusive per-side solo (ChainBlock::dualSoloLeft/dualSoloRight) -
+  // soloing one side always clears the other's. Applied in runDualMono as
+  // a smoothed gain on that side's contribution to the recombine.
+  bool setDualSolo(const std::string& blockId, bool isLeftSide, bool soloed);
+  // Persists a Dual Mono side's "mute while empty" flag (ChainBlock::
+  // dualLeftEmptyMuted/dualRightEmptyMuted) - only gates anything in
+  // runDualMono while that side actually has nothing loaded; see the
+  // fields' own comment.
+  bool setDualEmptySideMuted(const std::string& blockId, bool isLeftSide, bool muted);
   // Load dropped local files (`files` = [{ name, data }], base64 bytes; one
   // entry for a single file, many for a folder) as one tone block, one model
   // per file. `targetInsertId` is either an insert slot (adds, consuming

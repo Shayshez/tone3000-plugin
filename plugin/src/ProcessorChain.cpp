@@ -517,9 +517,14 @@ std::string TONE3000Processor::addDualMonoBlock(const std::string& targetInsertI
   block->dualLeftPanSmoother.reset(chainSampleRate(), 0.05f);
   block->dualRightPanSmoother.reset(chainSampleRate(), 0.05f);
   block->dualWidthSmoother.reset(chainSampleRate(), 0.05f);
+  block->dualLeftSoloGainSmoother.reset(chainSampleRate(), 0.05f);
+  block->dualRightSoloGainSmoother.reset(chainSampleRate(), 0.05f);
   block->dualLeftPanSmoother.setCurrentAndTargetValue(block->dualLeftPanNormalized);
   block->dualRightPanSmoother.setCurrentAndTargetValue(block->dualRightPanNormalized);
   block->dualWidthSmoother.setCurrentAndTargetValue(block->dualWidthNormalized);
+  // Neither side soloed at creation - both start at full gain.
+  block->dualLeftSoloGainSmoother.setCurrentAndTargetValue(1.0f);
+  block->dualRightSoloGainSmoother.setCurrentAndTargetValue(1.0f);
 
   // Same slot-resolution as addEqBlock.
   Lane* targetLane = nullptr;
@@ -952,6 +957,76 @@ bool TONE3000Processor::setDualImage(const std::string& blockId, double leftPanN
   block->dualRightPanSmoother.setTargetValue(block->dualRightPanNormalized);
   block->dualWidthSmoother.setTargetValue(block->dualWidthNormalized);
 
+  deferredRevisionBump();
+  return true;
+}
+
+// UI-only toggle at heart (see the field's own comment in ChainBlock.h) -
+// native's whole job here is remembering the on/off state across undo/
+// redo, state restore, and a second open editor window, same as any other
+// per-block bool (trimInitEnabled, reverseEnabled, ...). The actual
+// mirror/sync behavior lives in the UI, re-sending both sides' Pan/Mix/Vol
+// through the existing setDualImage/setBlockParam setters whenever linked.
+bool TONE3000Processor::setDualLinked(const std::string& blockId, bool linked) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualLinked: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  if (block->dualLinked == linked)
+    return true;
+
+  pushChainHistory();
+  block->dualLinked = linked;
+  deferredRevisionBump();
+  return true;
+}
+
+// Exclusive per-side solo (see the fields' own comment in ChainBlock.h) -
+// setting one side's solo on always clears the other's, mirroring the
+// chain-level stereo pan rail's own soloLeft/soloRight toggle behavior
+// (GalleryLane.tsx). runDualMono reads dualSoloLeft/dualSoloRight live
+// every call (same as the pan/width fields), gliding the actual gain
+// change through dualLeftSoloGainSmoother/dualRightSoloGainSmoother so a
+// live toggle mid-signal never clicks.
+bool TONE3000Processor::setDualSolo(const std::string& blockId, bool isLeftSide, bool soloed) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualSolo: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  bool& thisSide = isLeftSide ? block->dualSoloLeft : block->dualSoloRight;
+  bool& otherSide = isLeftSide ? block->dualSoloRight : block->dualSoloLeft;
+  if (thisSide == soloed && (!soloed || !otherSide))
+    return true;
+
+  pushChainHistory();
+  thisSide = soloed;
+  if (soloed) otherSide = false;
+  deferredRevisionBump();
+  return true;
+}
+
+// "Mute while empty" per side (see the fields' own comment in ChainBlock.h)
+// - a plain persisted bool exactly like setDualLinked, no exclusivity to
+// enforce (independent per side). Setting it doesn't require the side to
+// actually be empty right now; runDualMono is what gates on that.
+bool TONE3000Processor::setDualEmptySideMuted(const std::string& blockId, bool isLeftSide,
+                                              bool muted) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualEmptySideMuted: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  bool& target = isLeftSide ? block->dualLeftEmptyMuted : block->dualRightEmptyMuted;
+  if (target == muted)
+    return true;
+
+  pushChainHistory();
+  target = muted;
   deferredRevisionBump();
   return true;
 }
@@ -1530,6 +1605,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     std::vector<BlockRow> dualLeft, dualRight;
     float dualLeftPan = 0.0f, dualRightPan = 1.0f, dualWidth = 1.0f;
     bool dualChannelLimited = false;
+    bool dualLinked = false, dualSoloLeft = false, dualSoloRight = false;
+    bool dualLeftEmptyMuted = false, dualRightEmptyMuted = false;
   };
 
   juce::uint32 revision = 0;
@@ -1661,6 +1738,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
           row.dualRightPan = block->dualRightPanNormalized;
           row.dualWidth = block->dualWidthNormalized;
           row.dualChannelLimited = stereo;
+          row.dualLinked = block->dualLinked;
+          row.dualSoloLeft = block->dualSoloLeft;
+          row.dualSoloRight = block->dualSoloRight;
+          row.dualLeftEmptyMuted = block->dualLeftEmptyMuted;
+          row.dualRightEmptyMuted = block->dualRightEmptyMuted;
         }
 
         out.push_back(std::move(row));
@@ -1788,6 +1870,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("dualLeftPan", row.dualLeftPan);
       params->setProperty("dualRightPan", row.dualRightPan);
       params->setProperty("dualWidth", row.dualWidth);
+      params->setProperty("dualLinked", row.dualLinked);
+      params->setProperty("dualSoloLeft", row.dualSoloLeft);
+      params->setProperty("dualSoloRight", row.dualSoloRight);
+      params->setProperty("dualLeftEmptyMuted", row.dualLeftEmptyMuted);
+      params->setProperty("dualRightEmptyMuted", row.dualRightEmptyMuted);
       item->setProperty("params", juce::var(params.get()));
 
       // DUAL_MONO only: the two fixed child slots, nested the same shape as

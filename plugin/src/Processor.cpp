@@ -485,9 +485,17 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       block->dualLeftPanSmoother.reset(chainRate, 0.05f);
       block->dualRightPanSmoother.reset(chainRate, 0.05f);
       block->dualWidthSmoother.reset(chainRate, 0.05f);
+      block->dualLeftSoloGainSmoother.reset(chainRate, 0.05f);
+      block->dualRightSoloGainSmoother.reset(chainRate, 0.05f);
       block->dualLeftPanSmoother.setCurrentAndTargetValue(block->dualLeftPanNormalized);
       block->dualRightPanSmoother.setCurrentAndTargetValue(block->dualRightPanNormalized);
       block->dualWidthSmoother.setCurrentAndTargetValue(block->dualWidthNormalized);
+      const bool leftForcedSilent = block->dualLeft.empty() && block->dualLeftEmptyMuted;
+      const bool rightForcedSilent = block->dualRight.empty() && block->dualRightEmptyMuted;
+      block->dualLeftSoloGainSmoother.setCurrentAndTargetValue(
+          leftForcedSilent || (block->dualSoloRight && !block->dualSoloLeft) ? 0.0f : 1.0f);
+      block->dualRightSoloGainSmoother.setCurrentAndTargetValue(
+          rightForcedSilent || (block->dualSoloLeft && !block->dualSoloRight) ? 0.0f : 1.0f);
       // Recurses at most one level deep: a dual child is never itself a
       // DUAL_MONO block (nothing on the creation path can produce one -
       // loadToneIntoDualSlot only ever loads an ordinary tone), so this
@@ -1057,11 +1065,24 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   const float* drData = dr.getReadPointer(0);
   float peak = 0.0f;
 
+  // Re-arm every smoother's target from the raw fields every call, same
+  // idiom every other per-block smoother uses: the live setters only ever
+  // target them, so this is what a fresh block's fields reach even before
+  // the UI calls one for the first time. Solo (and the empty-side mute
+  // flags, forced-silent below - see their own comment in ChainBlock.h)
+  // apply in both the widen and fold branches below (muting a side is
+  // muting a side regardless of the physical channel count), so it's armed
+  // here rather than duplicated in each branch. dualLeft/dualRight.empty()
+  // is the exact same test the seed/process step above already relies on
+  // for "this side is a bare pass-through".
+  const bool leftForcedSilent = dualBlock.dualLeft.empty() && dualBlock.dualLeftEmptyMuted;
+  const bool rightForcedSilent = dualBlock.dualRight.empty() && dualBlock.dualRightEmptyMuted;
+  dualBlock.dualLeftSoloGainSmoother.setTargetValue(
+      leftForcedSilent || (dualBlock.dualSoloRight && !dualBlock.dualSoloLeft) ? 0.0f : 1.0f);
+  dualBlock.dualRightSoloGainSmoother.setTargetValue(
+      rightForcedSilent || (dualBlock.dualSoloLeft && !dualBlock.dualSoloRight) ? 0.0f : 1.0f);
+
   if (numChannels >= 2) {
-    // Re-arm the smoothers' targets from the raw fields every call, same
-    // idiom every other per-block smoother uses: setDualImage only ever
-    // targets them live, so this is what a fresh block's fields reach even
-    // before the UI calls it for the first time.
     dualBlock.dualLeftPanSmoother.setTargetValue(dualBlock.dualLeftPanNormalized);
     dualBlock.dualRightPanSmoother.setTargetValue(dualBlock.dualRightPanNormalized);
     dualBlock.dualWidthSmoother.setTargetValue(dualBlock.dualWidthNormalized);
@@ -1074,10 +1095,12 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
       const float leftPan = dualBlock.dualLeftPanSmoother.getNextValue();
       const float rightPan = dualBlock.dualRightPanSmoother.getNextValue();
       const float width = dualBlock.dualWidthSmoother.getNextValue();
+      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue();
+      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue();
       const auto gL = constantPowerPanGains(leftPan);
       const auto gR = constantPowerPanGains(rightPan);
-      const float l = dlData[i];
-      const float r = drData[i];
+      const float l = dlData[i] * leftGain;
+      const float r = drData[i] * rightGain;
       const float mono = 0.5f * (l + r);
       const float panL = l * gL.first + r * gR.first;
       const float panR = l * gL.second + r * gR.second;
@@ -1090,8 +1113,26 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
     // as imageMatrixGains's own foldToMono, ½(l + r).
     float* outMono = buffer.getWritePointer(0);
     for (int i = 0; i < numSamples; ++i) {
-      outMono[i] = 0.5f * (dlData[i] + drData[i]);
+      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue();
+      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue();
+      outMono[i] = 0.5f * (dlData[i] * leftGain + drData[i] * rightGain);
       peak = std::max(peak, std::abs(outMono[i]));
+    }
+  }
+
+  // Master EQ: the wrapper's own BlockEq (every ChainBlock carries one,
+  // already prepared in prepareChain), applied once to the recombined
+  // signal - no PRE concept here (unlike an ordinary block, this wrapper
+  // has no model stage of its own to sit in front of), so isPre() is
+  // deliberately never consulted. Re-measure peak afterward so the meter
+  // reflects what actually leaves the block, same as an ordinary block's
+  // own meter already does post-EQ.
+  if (dualBlock.eq.isActive()) {
+    dualBlock.eq.process(buffer);
+    peak = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+      const float* data = buffer.getReadPointer(ch);
+      for (int i = 0; i < numSamples; ++i) peak = std::max(peak, std::abs(data[i]));
     }
   }
 

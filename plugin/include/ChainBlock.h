@@ -590,6 +590,42 @@ struct ChainBlock {
   juce::LinearSmoothedValue<float> dualLeftPanSmoother;
   juce::LinearSmoothedValue<float> dualRightPanSmoother;
   juce::LinearSmoothedValue<float> dualWidthSmoother;
+  // DUAL_MONO only: Link - UI convenience, not applied natively beyond
+  // persisting the flag itself (see setDualLinked's own comment). The
+  // actual mirror/sync math (Pan reflected around center, Mix/Vol matched)
+  // runs in the UI, which re-sends both sides' values through the existing
+  // setDualImage/setBlockParam setters - this field exists purely so the
+  // toggle's own on/off state survives undo/redo, state restore, and a
+  // second open editor window, same as every other per-block bool here.
+  bool dualLinked{false};
+  // DUAL_MONO only: exclusive per-side solo, mirroring the *math* (not the
+  // storage - see setDualSolo's own comment) of the chain-level stereo pan
+  // rail's own soloLeft/soloRight (GalleryLane.tsx / chainSoloLeft APVTS
+  // param, Processor.cpp). At most one is ever true - the setter enforces
+  // exclusivity.
+  bool dualSoloLeft{false};
+  bool dualSoloRight{false};
+  // DUAL_MONO only: an empty side is still a live pass-through (see
+  // runDualMono's own seed comment - its half of the input feeds dl/dr
+  // unchanged with nothing loaded to process it), so users asked for a way
+  // to silence that pass-through independent of Solo/Link. Only takes
+  // effect while the corresponding side actually has nothing loaded
+  // (runDualMono checks dualLeft/dualRight.empty() itself); once a real
+  // tone lands there, the flag is inert and the ordinary per-child `enabled`
+  // mute takes over instead. Persists unconditionally either way - same
+  // "doesn't require the state it gates to be true right now" shape as
+  // dualLinked above.
+  bool dualLeftEmptyMuted{false};
+  bool dualRightEmptyMuted{false};
+  // Smoothed 0/1 gain view of Solo (above) *and* the empty-side mute fields
+  // - a raw instant 0<->1 multiply on dl/dr would click (same reasoning the
+  // chain-level solo's own gain rides a smoother for, imageGainLtoL et al.,
+  // 20ms ramps). Reset/seeded alongside the pan/width smoothers above (same
+  // call sites, ChainBlock.h's own convention); the recombine step sets
+  // each one's *target* every call (never a hard reset) so a live solo or
+  // empty-mute toggle glides.
+  juce::LinearSmoothedValue<float> dualLeftSoloGainSmoother;
+  juce::LinearSmoothedValue<float> dualRightSoloGainSmoother;
 
   ChainBlock(const std::string& blockId, ChainBlockType blockType)
       : id(blockId), type(blockType), toneId(0), activeModelId(0), loaded(false),
