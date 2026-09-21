@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowLeftRight,
-  Ban,
   Bookmark,
   ChevronRight,
   Combine,
@@ -2948,13 +2947,30 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       >
                         <Equal size={ICON_SIZE} />
                       </ChromeIconButton>
+                      {/* The literal Ø character, same as the Info Bar's
+                          own hint line and the global Pan rail's [S|Ø]
+                          chip - not a drawn icon (that was the wrong fix:
+                          it never matched this exact glyph, only
+                          approximated it). The real bug was
+                          iconButtonStyle's `lineHeight: 0` (needed to kill
+                          baseline gaps under an inline SVG icon) squashing
+                          this character's own line box - overriding it
+                          back to normal here restores the same circular Ø
+                          the Info Bar renders, without touching any other
+                          ChromeIconButton. */}
                       <ChromeIconButton
                         tone="armed"
                         on={dualLeftInvert}
                         help={HELP.dualInvertLeft}
                         onClick={() => handleToggleDualInvert(true)}
+                        style={{
+                          fontFamily: FONT_MONO,
+                          fontSize: '14rem',
+                          fontWeight: 400,
+                          lineHeight: 'normal',
+                        }}
                       >
-                        <Ban size={ICON_SIZE} />
+                        Ø
                       </ChromeIconButton>
                       <KnobControl
                         label="Offset"
@@ -2974,8 +2990,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         on={dualRightInvert}
                         help={HELP.dualInvertRight}
                         onClick={() => handleToggleDualInvert(false)}
+                        style={{
+                          fontFamily: FONT_MONO,
+                          fontSize: '14rem',
+                          fontWeight: 400,
+                          lineHeight: 'normal',
+                        }}
                       >
-                        <Ban size={ICON_SIZE} />
+                        Ø
                       </ChromeIconButton>
                     </div>
                     {/* Wobble/Crossover/Diffuse: fixed-width columns (same

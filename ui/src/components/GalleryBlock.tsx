@@ -410,16 +410,24 @@ const DualMonoTileHalf: React.FC<{ child: ChainItem | undefined; halfSize: numbe
 /** Universal circle glyphs for TileChannelBadge, not text: one ring (Mono),
     two separate rings (Dual - independent, unrelated channels), two
     overlapping rings (Stereo - a genuine linked pair). Plain stroked
-    circles, no fill, matching every other small chrome icon's weight. */
+    circles, no fill, matching every other small chrome icon's weight.
+    `stroke="currentColor"` (not a hardcoded WHITE), same as every Lucide
+    icon in this app - StereoGlyph also renders inside an armed
+    ChromeIconButton (the gallery tile's own Stereo shortcut), whose
+    "armed" tone flips its CSS `color` between GRAY/BLACK/WHITE depending
+    on state (ChromeIconButton.tsx's own toneChrome); a fixed WHITE stroke
+    doesn't follow that and reads as missing against the armed yellow fill.
+    The badge pill itself sets `color: WHITE` so these keep their original
+    look there. */
 const MonoGlyph: React.FC = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-    <circle cx="8" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+    <circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
   </svg>
 );
 const DualGlyph: React.FC = () => (
   <svg width="20" height="14" viewBox="0 0 24 16" fill="none">
-    <circle cx="6" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
-    <circle cx="18" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+    <circle cx="6" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
+    <circle cx="18" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
   </svg>
 );
 /** `size` optional (defaults to the badge's own 14px) so this same glyph
@@ -428,8 +436,8 @@ const DualGlyph: React.FC = () => (
     same as every Lucide icon in this app. */
 const StereoGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
   <svg width={(size * 20) / 16} height={size} viewBox="0 0 20 16" fill="none">
-    <circle cx="7" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
-    <circle cx="13" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+    <circle cx="7" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
+    <circle cx="13" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
   </svg>
 );
 
@@ -460,6 +468,7 @@ const TileChannelBadge: React.FC<{ mode: 'dual' | 'stereo' | 'mono'; typeLabel?:
       display: 'flex',
       alignItems: 'center',
       gap: '5rem',
+      color: WHITE,
       pointerEvents: 'none',
     }}
   >
