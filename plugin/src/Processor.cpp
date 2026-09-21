@@ -1136,6 +1136,18 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
     }
   }
 
+  // Feed the master EQ editor's analyzer with the block's final (post-EQ)
+  // output, same as an ordinary block's own end-of-loop feed in
+  // processChainOnBuffer - only while the UI has that analyzer open
+  // (isEnabled(), toggled via setBlockSpectrumEnabled). BlockEqView/
+  // SpectrumBackdrop already call generically by blockId, so the wrapper's
+  // own id just needed this same push site runDualMono was missing.
+  if (dualBlock.spectrum.isEnabled())
+    dualBlock.spectrum.pushSamples(buffer.getReadPointer(0),
+                                   buffer.getNumChannels() > 1 ? buffer.getReadPointer(1)
+                                                                : nullptr,
+                                   numSamples);
+
   // No single well-defined "input" for a two-way split, unlike an ordinary
   // block's own input meter - both meters read the recombined output peak.
   const float peakDb = peak > 0.0f ? juce::Decibels::gainToDecibels(peak) : -60.0f;

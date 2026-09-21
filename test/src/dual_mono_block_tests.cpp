@@ -879,3 +879,69 @@ TEST(DualMonoBlockTest, MasterEqSurvivesStateRestore) {
       << "the master EQ's own band didn't survive a state round trip";
   EXPECT_TRUE(static_cast<bool>(block["params"]["eq"]["enabled"]));
 }
+
+// The master EQ's graph view backdrop (SpectrumBackdrop.tsx) reads
+// getBlockSpectrum(blockId) generically - already wired for any blockId,
+// wrapper included. The one piece that needed adding was runDualMono's own
+// pushSamples call (mirroring processChainOnBuffer's end-of-loop feed);
+// this proves it's actually happening now, not just that the plumbing
+// exists on paper.
+TEST(DualMonoBlockTest, MasterEqSpectrumAnalyzerReceivesSamplesWhenEnabled) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setBlockSpectrumEnabled("blk-dual", true));
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(4 * kBlock, 4242, 0.4f));
+
+  const juce::var spectrum = proc.getBlockSpectrum("blk-dual");
+  const auto* bins = spectrum.getArray();
+  ASSERT_NE(bins, nullptr);
+  EXPECT_EQ(bins->size(), 64);
+
+  float maxDb = -1000.0f;
+  for (const auto& bin : *bins) maxDb = std::max(maxDb, static_cast<float>(bin));
+  std::printf("[DualMonoBlockTest] master EQ spectrum max bin: %.1f dB\n",
+             static_cast<double>(maxDb));
+  EXPECT_GT(maxDb, -100.0f)
+      << "spectrum analyzer never rose above its silence floor - runDualMono isn't feeding it";
+}
+
+TEST(DualMonoBlockTest, MasterEqSpectrumAnalyzerStaysAtFloorWhenDisabled) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  // Never calls setBlockSpectrumEnabled - matches the UI's own default
+  // (only enabled while that EQ view is actually open).
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(4 * kBlock, 4242, 0.4f));
+
+  const juce::var spectrum = proc.getBlockSpectrum("blk-dual");
+  const auto* bins = spectrum.getArray();
+  ASSERT_NE(bins, nullptr);
+  for (const auto& bin : *bins)
+    EXPECT_LE(static_cast<float>(bin), -99.9f)
+        << "spectrum has real content despite never being enabled - pushSamples should be gated";
+}
