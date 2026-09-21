@@ -706,20 +706,20 @@ TEST(DualMonoBlockTest, SoloedSideSilencesTheOtherInWidenOutput) {
   EXPECT_LT(peakRight, 1e-4f) << "Left solo should silence the Right side's own output channel";
 }
 
-TEST(DualMonoBlockTest, EmptySideMutePersistsThroughStateRestore) {
+TEST(DualMonoBlockTest, DualMutePersistsThroughStateRestore) {
   ChainTestProcessor proc;
   proc.setPlayConfigDetails(2, 2, kFs, kBlock);
   proc.prepareToPlay(kFs, kBlock);
 
   const std::string blockId = proc.addDualMonoBlock();
   ASSERT_FALSE(blockId.empty());
-  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftEmptyMuted"]))
-      << "empty-side mute should default off";
+  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftMuted"]))
+      << "mute should default off";
 
-  ASSERT_TRUE(proc.setDualEmptySideMuted(blockId, /*isLeftSide=*/true, true));
-  EXPECT_TRUE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftEmptyMuted"]));
-  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualRightEmptyMuted"]))
-      << "empty-side mute is independent per side, unlike Solo's exclusivity";
+  ASSERT_TRUE(proc.setDualMuted(blockId, /*isLeftSide=*/true, true));
+  EXPECT_TRUE(static_cast<bool>(blockById(proc, blockId)["params"]["dualLeftMuted"]));
+  EXPECT_FALSE(static_cast<bool>(blockById(proc, blockId)["params"]["dualRightMuted"]))
+      << "mute is independent per side, unlike Solo's exclusivity";
 
   juce::MemoryBlock savedState;
   proc.getStateInformation(savedState);
@@ -730,10 +730,10 @@ TEST(DualMonoBlockTest, EmptySideMutePersistsThroughStateRestore) {
   restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
   ASSERT_TRUE(waitForDualMonoLoaded(restored));
 
-  EXPECT_TRUE(static_cast<bool>(blockById(restored, blockId)["params"]["dualLeftEmptyMuted"]))
-      << "empty-side mute didn't survive a state round trip";
+  EXPECT_TRUE(static_cast<bool>(blockById(restored, blockId)["params"]["dualLeftMuted"]))
+      << "mute didn't survive a state round trip";
 
-  EXPECT_FALSE(proc.setDualEmptySideMuted("not-a-real-id", true, true));
+  EXPECT_FALSE(proc.setDualMuted("not-a-real-id", true, true));
 }
 
 // An empty side is normally a live pass-through (EmptySidesPassThroughDistinct
@@ -746,7 +746,7 @@ TEST(DualMonoBlockTest, EmptySideMuteSilencesOnlyThatSidesPassThrough) {
 
   const std::string blockId = proc.addDualMonoBlock();
   ASSERT_FALSE(blockId.empty());
-  ASSERT_TRUE(proc.setDualEmptySideMuted(blockId, /*isLeftSide=*/true, true));
+  ASSERT_TRUE(proc.setDualMuted(blockId, /*isLeftSide=*/true, true));
 
   processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
 
@@ -944,4 +944,449 @@ TEST(DualMonoBlockTest, MasterEqSpectrumAnalyzerStaysAtFloorWhenDisabled) {
   for (const auto& bin : *bins)
     EXPECT_LE(static_cast<float>(bin), -99.9f)
         << "spectrum has real content despite never being enabled - pushSamples should be gated";
+}
+
+namespace {
+// Same shape as runDualWidenWithMasterEq - both sides loaded with distinct
+// content (widen case, mono mode), `configure` runs after load but before
+// the comparison window starts.
+std::pair<std::vector<float>, std::vector<float>> runDualWidenWithAlign(
+    const std::vector<float>& in, const std::function<void(ChainTestProcessor&)>& configure) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  EXPECT_TRUE(waitForDualMonoLoaded(proc));
+
+  configure(proc);
+
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  return processStereo(proc, in);
+}
+}  // namespace
+
+// Proves Align's power switch: calling setDualAlign with engaged=false must
+// be indistinguishable from never touching Align at all, even with the
+// knobs dialed far from center/default - StereoOffset::setTarget's own
+// "idle and staying idle" early-return (StereoOffset.cpp) should make this
+// exact, not approximate.
+TEST(DualMonoBlockTest, DualAlignDefaultsToOffAndIsInert) {
+  const auto in = makeNoise(20 * kBlock, 777, 0.25f);
+
+  const auto untouched = runDualWidenWithAlign(in, [](ChainTestProcessor&) {});
+  const auto explicitlyDisabled = runDualWidenWithAlign(in, [](ChainTestProcessor& proc) {
+    ASSERT_TRUE(proc.setDualAlign("blk-dual", false, 0.9, 0.5, true, 0.8, true, true));
+  });
+
+  const float diff = std::max(maxAbsDiff(untouched.first, explicitlyDisabled.first),
+                              maxAbsDiff(untouched.second, explicitlyDisabled.second));
+  std::printf(
+      "[DualMonoBlockTest] align untouched vs explicitly-disabled-but-dialed-in max |diff|: "
+      "%.9f\n",
+      static_cast<double>(diff));
+  EXPECT_LT(diff, 1e-4f) << "Align should be a no-op whenever engaged is false, regardless of "
+                            "the dialed-in knob values";
+}
+
+// Companion to the test above: proves a real offset actually does something,
+// so a bug that made Align a global no-op couldn't pass
+// DualAlignDefaultsToOffAndIsInert vacuously.
+TEST(DualMonoBlockTest, DualAlignDelaysOneSideWhenEnabled) {
+  const auto in = makeNoise(20 * kBlock, 777, 0.25f);
+
+  const auto off = runDualWidenWithAlign(in, [](ChainTestProcessor&) {});
+  const auto on = runDualWidenWithAlign(in, [](ChainTestProcessor& proc) {
+    // offsetNormalized 0.9 -> ~19.2 ms delay on one side (kMaxOffsetMs=24),
+    // deck (wobble/crossover/diffuse) left off - a pure corrective delay.
+    ASSERT_TRUE(proc.setDualAlign("blk-dual", true, 0.9, 0.0, false, 0.5, false, false));
+  });
+
+  const float diff = std::max(maxAbsDiff(off.first, on.first), maxAbsDiff(off.second, on.second));
+  std::printf("[DualMonoBlockTest] align off vs enabled (~19ms offset) max |diff|: %.6f\n",
+             static_cast<double>(diff));
+  EXPECT_GT(diff, 1e-3f) << "enabling Align with a real offset had no measurable effect on the "
+                            "recombined output";
+}
+
+TEST(DualMonoBlockTest, DualAlignSurvivesStateRestore) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  ASSERT_TRUE(proc.setDualAlign(blockId, true, 0.75, 0.4, true, 0.6, true, true));
+
+  juce::MemoryBlock savedState;
+  proc.getStateInformation(savedState);
+
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, kBlock);
+  restored.prepareToPlay(kFs, kBlock);
+  restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
+  ASSERT_TRUE(waitForDualMonoLoaded(restored));
+
+  const juce::var block = blockById(restored, blockId);
+  ASSERT_FALSE(block.isVoid());
+  const juce::var params = block["params"];
+  EXPECT_TRUE(static_cast<bool>(params["dualAlignEnabled"]))
+      << "Align's power switch didn't survive a state round trip";
+  EXPECT_NEAR(static_cast<double>(params["dualAlignOffset"]), 0.75, 1e-6);
+  EXPECT_NEAR(static_cast<double>(params["dualAlignWobble"]), 0.4, 1e-6);
+  EXPECT_TRUE(static_cast<bool>(params["dualAlignWobbleEnabled"]));
+  EXPECT_NEAR(static_cast<double>(params["dualAlignCrossover"]), 0.6, 1e-6);
+  EXPECT_TRUE(static_cast<bool>(params["dualAlignCrossoverEnabled"]));
+  EXPECT_TRUE(static_cast<bool>(params["dualAlignDiffuseEnabled"]));
+}
+
+// Reuses FoldWithIdenticalContentBothSidesEqualsPlainSingleBlock's own
+// "identical content on both sides" setup (same model both sides, stereo
+// chain mode, so the block folds to mono): with no invert, l == r and the
+// fold reduces to the plain block (already pinned by that test). Flipping
+// just the right side's polarity makes it l + (-l) = 0 - proves Ø is real
+// signal-domain inversion, not just a persisted flag, and (via the
+// existing test above) that it doesn't fire without being asked.
+TEST(DualMonoBlockTest, DualInvertOnIdenticalContentCancelsInFold) {
+  const auto in = makeNoise(20 * kBlock, 555, 0.25f);
+
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  state.setProperty("stereoEnabled", true, nullptr);
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam-l", 1, 100),
+                            makeNamBlockTree("blk-nam-r", 1, 100)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setDualInvert("blk-dual", false, true));  // invert the right side only
+
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  const auto out = processStereo(proc, in);
+
+  float peak = 0.0f;
+  for (float sample : out.first) peak = std::max(peak, std::abs(sample));
+  std::printf(
+      "[DualMonoBlockTest] fold, identical content, right side inverted, peak: %.6f\n",
+      static_cast<double>(peak));
+  EXPECT_LT(peak, 1e-3f)
+      << "identical content with one side inverted should nearly cancel in the fold";
+}
+
+TEST(DualMonoBlockTest, DualInvertSurvivesStateRestore) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string blockId = proc.addDualMonoBlock();
+  ASSERT_FALSE(blockId.empty());
+  ASSERT_TRUE(proc.setDualInvert(blockId, true, true));
+
+  juce::MemoryBlock savedState;
+  proc.getStateInformation(savedState);
+
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, kBlock);
+  restored.prepareToPlay(kFs, kBlock);
+  restored.setStateInformation(savedState.getData(), static_cast<int>(savedState.getSize()));
+  ASSERT_TRUE(waitForDualMonoLoaded(restored));
+
+  const juce::var block = blockById(restored, blockId);
+  ASSERT_FALSE(block.isVoid());
+  const juce::var params = block["params"];
+  EXPECT_TRUE(static_cast<bool>(params["dualLeftInvert"]))
+      << "Left invert didn't survive a state round trip";
+  EXPECT_FALSE(static_cast<bool>(params["dualRightInvert"]));
+}
+
+// The Stereo Processing screen's goniometer reads getDualGoniometer(blockId)
+// generically by blockId, gated the same way the EQ spectrum analyzer is
+// (setDualGoniometerEnabled, only while that view is actually open). Proves
+// runDualMono's own pushSamples call actually happens, not just that the
+// plumbing exists on paper - same shape as
+// MasterEqSpectrumAnalyzerReceivesSamplesWhenEnabled.
+TEST(DualMonoBlockTest, DualGoniometerReceivesPointsWhenEnabled) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setDualGoniometerEnabled("blk-dual", true));
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(4 * kBlock, 4242, 0.4f));
+
+  const juce::var points = proc.getDualGoniometer("blk-dual");
+  const auto* flat = points.getArray();
+  ASSERT_NE(flat, nullptr);
+  ASSERT_GT(flat->size(), 0);
+  EXPECT_EQ(flat->size() % 2, 0) << "points should come back as flat [l, r] pairs";
+
+  float peak = 0.0f;
+  for (const auto& v : *flat) peak = std::max(peak, std::abs(static_cast<float>(v)));
+  std::printf("[DualMonoBlockTest] goniometer point count: %d, peak |value|: %.4f\n",
+             flat->size(), static_cast<double>(peak));
+  EXPECT_GT(peak, 0.0f) << "goniometer never received any real signal - pushSamples isn't happening";
+}
+
+TEST(DualMonoBlockTest, DualGoniometerStaysEmptyWhenDisabled) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                            makeIrBlockTree("blk-ir", 2, 200)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  // Never calls setDualGoniometerEnabled - matches the UI's own default
+  // (only enabled while the Stereo Processing view is actually open).
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(4 * kBlock, 4242, 0.4f));
+
+  const juce::var points = proc.getDualGoniometer("blk-dual");
+  const auto* flat = points.getArray();
+  ASSERT_NE(flat, nullptr);
+  EXPECT_EQ(flat->size(), 0)
+      << "goniometer has real content despite never being enabled - pushSamples should be gated";
+}
+
+// Regression for two real bugs: (1) the correlation readout used to be
+// dualAlign.correlation() (StereoOffset's own meter), which only updates
+// while Align's engine is actively processing - so leaving Offset centered
+// and Wobble/Crossover/Diffuse off (Align fully disengaged) froze the
+// reading at whatever it last was; (2) it used to capture pre-Pan/Width,
+// missing what the block's own knobs actually did to the output - now
+// captured post-everything (mono chain mode -> widen, so the block's own
+// default hard-left/hard-right Pan already gives the output two genuinely
+// distinct channels to correlate, same as a listener would hear). Proves
+// the goniometer's own correlation stays live with Align completely
+// untouched, and reflects a live Ø flip in the block's real output.
+TEST(DualMonoBlockTest, DualGoniometerCorrelationReflectsInvertEvenWithAlignOff) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  // No stereoEnabled: mono chain mode, so the Dual Mono block widens (two
+  // physical output channels) rather than folding to one.
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam-l", 1, 100),
+                            makeNamBlockTree("blk-nam-r", 1, 100)),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setDualGoniometerEnabled("blk-dual", true));
+  // Align never touched - stays fully disengaged (offset centered, deck off).
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(4 * kBlock, 4242, 0.4f));
+
+  auto readCorrelation = [&]() -> float {
+    const juce::var levels = proc.getMeterLevels();
+    return static_cast<float>(levels["blocks"]["blk-dual"]["alignCorrelation"]);
+  };
+
+  const float beforeInvert = readCorrelation();
+  std::printf("[DualMonoBlockTest] goniometer correlation, identical sides, Align off: %.3f\n",
+             static_cast<double>(beforeInvert));
+  EXPECT_GT(beforeInvert, 0.9f)
+      << "identical content on both sides should read as strongly correlated even with Align off";
+
+  ASSERT_TRUE(proc.setDualInvert("blk-dual", false, true));
+  // DeckCorrelation is a ~300 ms exponential running average (by design -
+  // an instantaneous meter would jitter distractingly), so settling all
+  // the way from +1 to near -1 genuinely takes real audio time, not just a
+  // few blocks - process well past 3 time constants' worth.
+  processStereo(proc, makeNoise(100 * kBlock, 9191, 0.4f));
+  const float afterInvert = readCorrelation();
+  std::printf("[DualMonoBlockTest] goniometer correlation, right side inverted, Align off: %.3f\n",
+             static_cast<double>(afterInvert));
+  EXPECT_LT(afterInvert, -0.9f)
+      << "inverting one side should flip the correlation reading toward -1, live, without ever "
+         "touching Align";
+}
+
+// Regression for a real, user-reported bug: Mute on a *loaded* side used to
+// toggle that child's own `enabled` (bypass), which crossfades the block's
+// output to its dry, unprocessed input - audible, not silent. A muted side
+// must be true silence, exactly like an empty muted side already was.
+TEST(DualMonoBlockTest, MutingALoadedSideIsTrueSilenceNotBypass) {
+  const auto in = makeNoise(20 * kBlock, 4242, 0.25f);
+
+  const auto runWithMuteState = [&](bool muted) {
+    ChainTestProcessor proc;
+    proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+    proc.prepareToPlay(kFs, kBlock);
+
+    juce::ValueTree state("ChainSnapshot");
+    juce::ValueTree left("ChainBlocks");
+    left.appendChild(makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100)),
+                     nullptr);
+    state.appendChild(left, nullptr);
+    proc.restoreFromTree(state);
+    EXPECT_TRUE(waitForDualMonoLoaded(proc));
+
+    if (muted) EXPECT_TRUE(proc.setDualMuted("blk-dual", /*isLeftSide=*/true, true));
+
+    processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+    return processStereo(proc, in);
+  };
+
+  const auto unmuted = runWithMuteState(false);
+  const auto muted = runWithMuteState(true);
+
+  float peakUnmuted = 0.0f;
+  for (float sample : unmuted.first) peakUnmuted = std::max(peakUnmuted, std::abs(sample));
+  float peakMuted = 0.0f;
+  for (float sample : muted.first) peakMuted = std::max(peakMuted, std::abs(sample));
+
+  std::printf("[DualMonoBlockTest] loaded Left side peak - unmuted: %.4f, muted: %.6f\n",
+             static_cast<double>(peakUnmuted), static_cast<double>(peakMuted));
+  EXPECT_GT(peakUnmuted, 0.01f)
+      << "sanity check: the unmuted run should have real signal to compare against";
+  EXPECT_LT(peakMuted, 1e-3f)
+      << "a muted loaded side must be true silence - it should not fall back to the dry, "
+         "unprocessed input the way an ordinary block's own bypass (enabled=false) does";
+}
+
+// setDualStereoProcessingEnabled(false) must force both Align and Ø
+// neutral WITHOUT clearing the stored dualLeftInvert/dualAlign* fields -
+// turning it back on should restore exactly what was dialed in.
+TEST(DualMonoBlockTest, StereoProcessingBypassOverridesWithoutClearingStoredSettings) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  // No stereoEnabled: mono chain mode, so the block widens.
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam-l", 1, 100),
+                                         makeNamBlockTree("blk-nam-r", 1, 100)),
+                   nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.setDualGoniometerEnabled("blk-dual", true));
+  ASSERT_TRUE(proc.setDualInvert("blk-dual", false, true));
+  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  processStereo(proc, makeNoise(100 * kBlock, 4242, 0.4f));
+
+  auto readCorrelation = [&]() -> float {
+    const juce::var levels = proc.getMeterLevels();
+    return static_cast<float>(levels["blocks"]["blk-dual"]["alignCorrelation"]);
+  };
+
+  const float invertedActive = readCorrelation();
+  ASSERT_TRUE(proc.setDualStereoProcessingEnabled("blk-dual", false));
+  processStereo(proc, makeNoise(100 * kBlock, 5151, 0.4f));
+  const float bypassed = readCorrelation();
+  ASSERT_TRUE(proc.setDualStereoProcessingEnabled("blk-dual", true));
+  processStereo(proc, makeNoise(100 * kBlock, 6161, 0.4f));
+  const float restored = readCorrelation();
+
+  std::printf(
+      "[DualMonoBlockTest] correlation - Ø active: %.3f, bypassed: %.3f, restored: %.3f\n",
+      static_cast<double>(invertedActive), static_cast<double>(bypassed),
+      static_cast<double>(restored));
+  EXPECT_LT(invertedActive, -0.9f);
+  EXPECT_GT(bypassed, 0.9f) << "bypass should force Ø neutral, reading as correlated again";
+  EXPECT_LT(restored, -0.9f)
+      << "re-enabling should restore the stored Ø flip, not have cleared it while bypassed";
+}
+
+namespace {
+// Same shape as auto_offset_tests.cpp's own runProbe, rescoped to a Dual
+// Mono block: drives the real audio-callback loop (probe injection, chain
+// rendering, capture tap, mute stage, message-thread poll) and returns the
+// terminal poll payload.
+juce::var runDualAutoAlign(TONE3000Processor& proc, const juce::String& blockId) {
+  if (!static_cast<bool>(proc.armDualAutoAlign(blockId.toStdString())))
+    return {};
+  juce::AudioBuffer<float> buffer(2, kBlock);
+  juce::MidiBuffer midi;
+  for (int block = 0; block < 400; ++block) {
+    buffer.clear();
+    proc.processBlock(buffer, midi);
+    const juce::var poll = proc.pollDualAutoAlign(blockId.toStdString());
+    const juce::String state = poll["state"].toString();
+    if (state == "done" || state == "timeout")
+      return poll;
+  }
+  return {};
+}
+}  // namespace
+
+// The point of this whole feature: the global startAutoOffset requires
+// stereo chain mode (two real lanes) - a Dual Mono block creates its own
+// "two chains" out of a single lane, so armDualAutoAlign must work in
+// ordinary mono chain mode, and must write the result to the block's own
+// params rather than the global chain-level ones.
+TEST(DualMonoBlockTest, AutoAlignMeasuresRealRigsInMonoChainModeAndWritesBlockParams) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  // No stereoEnabled: mono chain mode. Two genuinely different real
+  // captures (same fixture files auto_offset_tests.cpp's own
+  // ProbeAlignsRealNamAndIrChains uses for the global case), so there's a
+  // real, non-trivial lag/voicing difference to measure.
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(
+      makeDualMonoBlockTree("blk-dual", makeNamBlockTree("amp-l", 1, 100, "a2-amp-cab-test.nam"),
+                            makeNamBlockTree("amp-r", 2, 101, "a2-am-test-2.nam")),
+      nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForDualMonoLoaded(proc)) << "dual mono block never finished loading";
+
+  const juce::var result = runDualAutoAlign(proc, "blk-dual");
+  ASSERT_EQ(result["state"].toString(), "done")
+      << "probe did not complete: " << juce::JSON::toString(result).toStdString();
+  const double matchedMs = static_cast<double>(result["matchedMs"]);
+  std::printf("[DualMonoBlockTest] auto align matched %.3f ms\n", matchedMs);
+  EXPECT_LT(std::abs(matchedMs), 24.0);
+
+  const juce::var block = blockById(proc, "blk-dual");
+  ASSERT_FALSE(block.isVoid());
+  const juce::var params = block["params"];
+  // ms -> knob position, the same StereoOffsetParams::fromNormalized
+  // inverse the native side applies - confirms the result actually landed
+  // on the block's own offset field, not left untouched or misapplied.
+  const double expectedNorm =
+      juce::jlimit(0.0, 1.0, 0.5 + matchedMs / (2.0 * StereoOffsetParams::kMaxOffsetMs));
+  EXPECT_NEAR(static_cast<double>(params["dualAlignOffset"]), expectedNorm, 1e-4);
+  if (std::abs(matchedMs) >= 0.05)
+    EXPECT_TRUE(static_cast<bool>(params["dualAlignEnabled"]))
+        << "a real measured offset should power Align on";
 }

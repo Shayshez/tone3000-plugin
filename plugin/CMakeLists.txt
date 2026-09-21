@@ -322,6 +322,8 @@ target_sources(${PROJECT_NAME}
     PRIVATE
         include/BlockEq.h
         src/BlockEq.cpp
+        include/BlockGoniometer.h
+        src/BlockGoniometer.cpp
         include/BlockPredelay.h
         src/BlockPredelay.cpp
         include/BlockSpectrum.h

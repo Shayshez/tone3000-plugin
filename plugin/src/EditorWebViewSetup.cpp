@@ -240,13 +240,38 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 args[0].toString().toStdString(), coerceBool(args[1]), coerceBool(args[2])));
           }))
       .withNativeFunction(
-          // (blockId, isLeftSide, muted): mutes a Dual Mono side's
-          // pass-through while it has nothing loaded (see
-          // ChainBlock::dualLeftEmptyMuted's own comment).
-          "setDualEmptySideMuted",
-          guarded(3, false, [editor](const juce::Array<juce::var>& args) {
-            return juce::var(editor->processor.setDualEmptySideMuted(
+          // (blockId, isLeftSide, muted): true-silence Mute for a Dual Mono
+          // side (see ChainBlock::dualLeftMuted's own comment).
+          "setDualMuted", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualMuted(
                 args[0].toString().toStdString(), coerceBool(args[1]), coerceBool(args[2])));
+          }))
+      .withNativeFunction(
+          // (blockId, isLeftSide, inverted): per-side polarity flip (Ø) for
+          // a Dual Mono block - independent per side, unlike Solo.
+          "setDualInvert", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualInvert(
+                args[0].toString().toStdString(), coerceBool(args[1]), coerceBool(args[2])));
+          }))
+      .withNativeFunction(
+          // (blockId, enabled, offset, wobble, wobbleEnabled, crossover,
+          // crossoverEnabled, diffuseEnabled): Align for a Dual Mono block -
+          // one bundled call, same idiom as setDualImage (a whole knob/
+          // toggle surface lands together, called continuously while a knob
+          // drags).
+          "setDualAlign", guarded(8, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualAlign(
+                args[0].toString().toStdString(), coerceBool(args[1]), coerceDouble(args[2]),
+                coerceDouble(args[3]), coerceBool(args[4]), coerceDouble(args[5]),
+                coerceBool(args[6]), coerceBool(args[7])));
+          }))
+      .withNativeFunction(
+          // (blockId, enabled): master bypass for the whole Stereo
+          // Processing screen.
+          "setDualStereoProcessingEnabled",
+          guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualStereoProcessingEnabled(
+                args[0].toString().toStdString(), coerceBool(args[1])));
           }))
       .withNativeFunction(
           // (title, files, targetInsertId?, forceGear?): local .nam/.wav
@@ -572,6 +597,23 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return editor->processor.getBlockSpectrum(args[0].toString().toStdString());
           }))
       .withNativeFunction(
+          // The UI enables a Dual Mono block's goniometer only while its
+          // Stereo Processing view is open, same idiom as the EQ analyzer
+          // above.
+          "setDualGoniometerEnabled",
+          guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setDualGoniometerEnabled(
+                args[0].toString().toStdString(), coerceBool(args[1])));
+          }))
+      .withNativeFunction(
+          // Polled by an open Stereo Processing view; drains everything
+          // pushed since the last call (see BlockGoniometer::getPoints) as
+          // a flat [l0, r0, l1, r1, ...] array.
+          "getDualGoniometer",
+          guarded(1, juce::var(), [editor](const juce::Array<juce::var>& args) {
+            return editor->processor.getDualGoniometer(args[0].toString().toStdString());
+          }))
+      .withNativeFunction(
           // Fetched once when an IR block finishes loading (static per
           // load, not part of getChainState's polled payload). Returns
           // { mins: number[], maxs: number[] } or null.
@@ -835,6 +877,20 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
       .withNativeFunction(
           "pollAutoOffset", guarded(0, juce::var(), [editor](const juce::Array<juce::var>&) {
             return editor->processor.pollAutoOffset();
+          }))
+      .withNativeFunction(
+          // Same Align probe, rescoped to a single Dual Mono block's own
+          // two sides (works in mono chain mode, unlike startAutoOffset) -
+          // (blockId): arm; poll with pollDualAutoAlign; cancelAutoOffset
+          // above cancels either kind interchangeably.
+          "armDualAutoAlign", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.armDualAutoAlign(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
+          "pollDualAutoAlign",
+          guarded(1, juce::var(), [editor](const juce::Array<juce::var>& args) {
+            return editor->processor.pollDualAutoAlign(args[0].toString().toStdString());
           }))
       // --- Misc ---------------------------------------------------------------
       .withNativeFunction(

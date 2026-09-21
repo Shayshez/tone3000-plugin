@@ -35,6 +35,10 @@ export const meterId = {
   blockOut: (blockId: string): MeterId => `block:${blockId}:out`,
 };
 
+/** Store key prefix for a Dual Mono block's own Align mono-safety
+    correlation (see useBlockCorrelation). */
+const blockCorrelationId = (blockId: string): string => `block:${blockId}:alignCorrelation`;
+
 const FLOOR_DB = -60;
 /** Levels at/above this latch the meter's clip indicator until cleared. */
 const CLIP_DB = 0;
@@ -74,6 +78,9 @@ class MeterStore {
   private levels = new Map<string, number>();
   /** Spread output correlation (-1..1, 1 when idle), quantized (see below). */
   private correlation = 1;
+  /** Per-Dual-Mono-block Align correlation (-1..1, 1 when idle/not a Dual
+      Mono block), same quantizing as the global correlation above. */
+  private blockCorrelations = new Map<string, number>();
   /** Displayed CPU % (one decimal), published at CPU_UI_INTERVAL_MS after EMA smoothing. */
   private cpuPercent = 0;
   private cpuEma = 0;
@@ -114,6 +121,8 @@ class MeterStore {
 
   getCorrelation = (): number => this.correlation;
 
+  getBlockCorrelation = (blockId: string): number => this.blockCorrelations.get(blockId) ?? 1;
+
   getClip = (id: string): boolean => this.clips.has(id);
 
   clearClip = (id: string): void => {
@@ -153,6 +162,8 @@ class MeterStore {
     for (const [blockId, levels] of Object.entries(res.blocks ?? {})) {
       this.update(meterId.blockIn(blockId), levels.in);
       this.update(meterId.blockOut(blockId), levels.out);
+      if (levels.alignCorrelation !== undefined)
+        this.applyBlockCorrelation(blockId, levels.alignCorrelation);
     }
     this.applyCpu(res.cpu);
     this.applyCorrelation(res.correlation);
@@ -167,6 +178,16 @@ class MeterStore {
     if (this.correlation === value) return;
     this.correlation = value;
     this.listeners.get(CORRELATION_ID)?.forEach((callback) => callback());
+  }
+
+  /** Same quantizing as applyCorrelation above, keyed per block. */
+  private applyBlockCorrelation(blockId: string, raw: number) {
+    const finite = typeof raw === 'number' && Number.isFinite(raw);
+    const value = finite ? Math.round(Math.max(-1, Math.min(1, raw)) * 20) / 20 : 1;
+    const id = blockCorrelationId(blockId);
+    if (this.blockCorrelations.get(blockId) === value) return;
+    this.blockCorrelations.set(blockId, value);
+    this.listeners.get(id)?.forEach((callback) => callback());
   }
 
   /**
@@ -253,6 +274,22 @@ export function useCorrelation(): number {
     [store]
   );
   return useSyncExternalStore(subscribe, store.getCorrelation);
+}
+
+/** A Dual Mono block's own Align output correlation (-1..1, 1 when idle or
+    not a Dual Mono block), for that block's own mono-safety indicator.
+    Rides the shared meter poll, same as useCorrelation. */
+export function useBlockCorrelation(blockId: string): number {
+  const store = useContext(MeterStoreContext);
+  if (!store) throw new Error('useBlockCorrelation must be used within a MetersProvider');
+
+  const id = blockCorrelationId(blockId);
+  const subscribe = useCallback(
+    (callback: () => void) => store.subscribe(id, callback),
+    [store, id]
+  );
+  const getSnapshot = useCallback(() => store.getBlockCorrelation(blockId), [store, blockId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /** Audio-callback load as a percent (0-100+, one decimal), for the hint-bar readout. */

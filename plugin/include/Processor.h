@@ -122,11 +122,38 @@ public:
   // soloing one side always clears the other's. Applied in runDualMono as
   // a smoothed gain on that side's contribution to the recombine.
   bool setDualSolo(const std::string& blockId, bool isLeftSide, bool soloed);
-  // Persists a Dual Mono side's "mute while empty" flag (ChainBlock::
-  // dualLeftEmptyMuted/dualRightEmptyMuted) - only gates anything in
-  // runDualMono while that side actually has nothing loaded; see the
-  // fields' own comment.
-  bool setDualEmptySideMuted(const std::string& blockId, bool isLeftSide, bool muted);
+  // Per-side Mute (ChainBlock::dualLeftMuted/dualRightMuted) - true
+  // silence via the recombine's own smoothed gain, unconditional (empty or
+  // loaded). Deliberately NOT the child's own `enabled` bypass toggle: an
+  // ordinary block's Power button crossfades to its dry, unprocessed input
+  // on bypass, which is audible, not silent - the wrong tool for "mute
+  // this side" (a real bug this exact confusion caused once already).
+  bool setDualMuted(const std::string& blockId, bool isLeftSide, bool muted);
+  // Per-side polarity flip (ChainBlock::dualLeftInvert/dualRightInvert) -
+  // independent per side, unlike Solo's exclusivity. Applied in runDualMono
+  // as a smoothed +-1 gain on that side's contribution to the recombine.
+  bool setDualInvert(const std::string& blockId, bool isLeftSide, bool inverted);
+  // Align for a Dual Mono block (ChainBlock::dualAlign et al.) - one bundled
+  // call, mirroring setDualImage's own shape: a whole control surface's
+  // related knobs/toggles land together and are only ever consumed together
+  // (one StereoOffsetParams::fromNormalized + one StereoOffset::setTarget
+  // call in runDualMono). Coalesces a drag gesture into one undo step, same
+  // as setDualImage. False if blockId isn't a DUAL_MONO block.
+  bool setDualAlign(const std::string& blockId, bool enabled, double offsetNormalized,
+                    double wobbleNormalized, bool wobbleEnabled, double crossoverNormalized,
+                    bool crossoverEnabled, bool diffuseEnabled);
+  // Master bypass for the whole Stereo Processing screen (see
+  // ChainBlock::dualStereoProcessingEnabled's own comment) - a plain
+  // persisted bool exactly like setDualLinked.
+  bool setDualStereoProcessingEnabled(const std::string& blockId, bool enabled);
+  // Goniometer for a Dual Mono block's Stereo Processing screen - only
+  // captures while enabled (the UI has that view open). False if blockId
+  // isn't a DUAL_MONO block.
+  bool setDualGoniometerEnabled(const std::string& blockId, bool enabled);
+  // Drains everything pushed since the last call (see BlockGoniometer::
+  // getPoints) as a flat [l0, r0, l1, r1, ...] var array. Empty if blockId
+  // isn't a DUAL_MONO block.
+  juce::var getDualGoniometer(const std::string& blockId);
   // Load dropped local files (`files` = [{ name, data }], base64 bytes; one
   // entry for a single file, many for a folder) as one tone block, one model
   // per file. `targetInsertId` is either an insert slot (adds, consuming
@@ -607,6 +634,18 @@ public:
   void startAutoOffset();
   void cancelAutoOffset();
   juce::var pollAutoOffset();  // { state: "idle"|"listening"|"done"|"timeout", matchedMs?, polarityFlipped?, progress? }
+
+  // Auto align, rescoped to a single Dual Mono block's own two sides
+  // instead of the two top-level chains - same engine instance and probe/
+  // mute mechanics as above (see autoOffsetTargetBlockId's own comment),
+  // works in either mono or stereo chain mode (unlike startAutoOffset,
+  // which requires stereo chain mode - a Dual Mono block creates its own
+  // "two chains" regardless). cancelAutoOffset() above cancels either
+  // kind interchangeably (state-agnostic). Writes the result to the
+  // block's own dualAlignOffsetNormalized/dualAlignEnabled/dualLeftInvert/
+  // dualRightInvert instead of the global parameters.
+  bool armDualAutoAlign(const std::string& blockId);
+  juce::var pollDualAutoAlign(const std::string& blockId);
 
   // Location of the on-disk diagnostic log. Single source of truth shared by the
   // FileLogger setup and the UI's "copy/reveal logs" actions so they never drift.
@@ -1466,6 +1505,17 @@ private:
   // applies the mute stage, and writes the result to the parameters; see
   // the public startAutoOffset/pollAutoOffset above).
   AutoOffset autoOffset;
+  // Which target autoOffset is currently measuring: empty for the global,
+  // stereo-chain-mode two-lane measurement (startAutoOffset/pollAutoOffset);
+  // a Dual Mono block's id when armed for that block instead
+  // (armDualAutoAlign/pollDualAutoAlign) - the two share one engine
+  // instance (only one measurement can run at a time anyway), rescoped by
+  // this field. Only ever reassigned right before a successful arm() (see
+  // both arm functions' own "state() == Idle" guard) - never cleared
+  // mid-measurement, so a stray audio-thread read between Captured and
+  // Idle can't misfire the global cancel-on-mono-mode guard (see
+  // processBlock's own comment) against an in-flight per-block probe.
+  std::string autoOffsetTargetBlockId;
 
   // Post-chain image matrix gains (per-chain balance trim × constant-power
   // pan, or the mono fold; see imageMatrixGains in Processor.cpp), smoothed

@@ -79,12 +79,22 @@ void TONE3000Processor::queueActiveModelLoad(ChainBlock& block) {
     block.dualLeftPanSmoother.setCurrentAndTargetValue(block.dualLeftPanNormalized);
     block.dualRightPanSmoother.setCurrentAndTargetValue(block.dualRightPanNormalized);
     block.dualWidthSmoother.setCurrentAndTargetValue(block.dualWidthNormalized);
-    const bool leftForcedSilent = block.dualLeft.empty() && block.dualLeftEmptyMuted;
-    const bool rightForcedSilent = block.dualRight.empty() && block.dualRightEmptyMuted;
+    const bool leftForcedSilent = block.dualLeftMuted;
+    const bool rightForcedSilent = block.dualRightMuted;
     block.dualLeftSoloGainSmoother.setCurrentAndTargetValue(
         leftForcedSilent || (block.dualSoloRight && !block.dualSoloLeft) ? 0.0f : 1.0f);
     block.dualRightSoloGainSmoother.setCurrentAndTargetValue(
         rightForcedSilent || (block.dualSoloLeft && !block.dualSoloRight) ? 0.0f : 1.0f);
+    block.dualLeftPolaritySmoother.reset(chainSampleRate(), 0.05f);
+    block.dualRightPolaritySmoother.reset(chainSampleRate(), 0.05f);
+    block.dualLeftPolaritySmoother.setCurrentAndTargetValue(block.dualLeftInvert ? -1.0f : 1.0f);
+    block.dualRightPolaritySmoother.setCurrentAndTargetValue(block.dualRightInvert ? -1.0f
+                                                                                   : 1.0f);
+    // Same "never passes through prepareChain" reasoning applies to Align:
+    // its StereoOffset owns a JUCE DelayLine that is unusable (unsized,
+    // effectively garbage state) until prepare() actually runs once.
+    block.dualAlign.prepare(chainSampleRate(), chainDomainBlockSize());
+    block.dualGoniometer.prepare(chainSampleRate());
     for (auto& child : block.dualLeft)
       if (child)
         queueActiveModelLoad(*child);

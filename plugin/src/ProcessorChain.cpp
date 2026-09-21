@@ -525,6 +525,15 @@ std::string TONE3000Processor::addDualMonoBlock(const std::string& targetInsertI
   // Neither side soloed at creation - both start at full gain.
   block->dualLeftSoloGainSmoother.setCurrentAndTargetValue(1.0f);
   block->dualRightSoloGainSmoother.setCurrentAndTargetValue(1.0f);
+  block->dualLeftPolaritySmoother.reset(chainSampleRate(), 0.05f);
+  block->dualRightPolaritySmoother.reset(chainSampleRate(), 0.05f);
+  // Neither side inverted at creation - both start at normal (+1) polarity.
+  block->dualLeftPolaritySmoother.setCurrentAndTargetValue(1.0f);
+  block->dualRightPolaritySmoother.setCurrentAndTargetValue(1.0f);
+  // Same reasoning: dualAlign comes to life synchronously too, not through
+  // prepareChain's next pass.
+  block->dualAlign.prepare(chainSampleRate(), chainDomainBlockSize());
+  block->dualGoniometer.prepare(chainSampleRate());
 
   // Same slot-resolution as addEqBlock.
   Lane* targetLane = nullptr;
@@ -1009,24 +1018,92 @@ bool TONE3000Processor::setDualSolo(const std::string& blockId, bool isLeftSide,
   return true;
 }
 
-// "Mute while empty" per side (see the fields' own comment in ChainBlock.h)
-// - a plain persisted bool exactly like setDualLinked, no exclusivity to
-// enforce (independent per side). Setting it doesn't require the side to
-// actually be empty right now; runDualMono is what gates on that.
-bool TONE3000Processor::setDualEmptySideMuted(const std::string& blockId, bool isLeftSide,
-                                              bool muted) {
+// Per-side Mute (see the fields' own comment in ChainBlock.h) - a plain
+// persisted bool exactly like setDualLinked, no exclusivity to enforce
+// (independent per side, unconditional whether the side is empty or
+// loaded).
+bool TONE3000Processor::setDualMuted(const std::string& blockId, bool isLeftSide, bool muted) {
   juce::ScopedLock lock(chainMutex);
   ChainBlock* block = findBlockById(blockId);
   if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
-    DBG("setDualEmptySideMuted: not a DUAL_MONO block: " << blockId);
+    DBG("setDualMuted: not a DUAL_MONO block: " << blockId);
     return false;
   }
-  bool& target = isLeftSide ? block->dualLeftEmptyMuted : block->dualRightEmptyMuted;
+  bool& target = isLeftSide ? block->dualLeftMuted : block->dualRightMuted;
   if (target == muted)
     return true;
 
   pushChainHistory();
   target = muted;
+  deferredRevisionBump();
+  return true;
+}
+
+// Independent per side (unlike Solo's exclusivity) - see the fields' own
+// comment in ChainBlock.h.
+bool TONE3000Processor::setDualInvert(const std::string& blockId, bool isLeftSide,
+                                      bool inverted) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualInvert: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  bool& target = isLeftSide ? block->dualLeftInvert : block->dualRightInvert;
+  if (target == inverted)
+    return true;
+
+  pushChainHistory();
+  target = inverted;
+  deferredRevisionBump();
+  return true;
+}
+
+// See the field's own comment (ChainBlock.h) - continuous (called on every
+// drag tick, same as setDualImage), one call for the whole Align control
+// surface since runDualMono only ever consumes these seven values together.
+bool TONE3000Processor::setDualAlign(const std::string& blockId, bool enabled,
+                                     double offsetNormalized, double wobbleNormalized,
+                                     bool wobbleEnabled, double crossoverNormalized,
+                                     bool crossoverEnabled, bool diffuseEnabled) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualAlign: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+
+  pushChainHistory("param:" + juce::String(blockId) + ":dualAlign");
+
+  block->dualAlignEnabled = enabled;
+  block->dualAlignOffsetNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(offsetNormalized));
+  block->dualAlignWobbleNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(wobbleNormalized));
+  block->dualAlignWobbleEnabled = wobbleEnabled;
+  block->dualAlignCrossoverNormalized =
+      juce::jlimit(0.0f, 1.0f, static_cast<float>(crossoverNormalized));
+  block->dualAlignCrossoverEnabled = crossoverEnabled;
+  block->dualAlignDiffuseEnabled = diffuseEnabled;
+
+  deferredRevisionBump();
+  return true;
+}
+
+// See the field's own comment (ChainBlock.h) - a plain persisted bool
+// exactly like setDualLinked.
+bool TONE3000Processor::setDualStereoProcessingEnabled(const std::string& blockId, bool enabled) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualStereoProcessingEnabled: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  if (block->dualStereoProcessingEnabled == enabled)
+    return true;
+
+  pushChainHistory();
+  block->dualStereoProcessingEnabled = enabled;
   deferredRevisionBump();
   return true;
 }
@@ -1606,7 +1683,13 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     float dualLeftPan = 0.0f, dualRightPan = 1.0f, dualWidth = 1.0f;
     bool dualChannelLimited = false;
     bool dualLinked = false, dualSoloLeft = false, dualSoloRight = false;
-    bool dualLeftEmptyMuted = false, dualRightEmptyMuted = false;
+    bool dualLeftMuted = false, dualRightMuted = false;
+    bool dualLeftInvert = false, dualRightInvert = false;
+    bool dualAlignEnabled = false;
+    float dualAlignOffset = 0.5f, dualAlignWobble = 0.25f, dualAlignCrossover = 0.5f;
+    bool dualAlignWobbleEnabled = false, dualAlignCrossoverEnabled = false;
+    bool dualAlignDiffuseEnabled = false;
+    bool dualStereoProcessingEnabled = true;
   };
 
   juce::uint32 revision = 0;
@@ -1741,8 +1824,18 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
           row.dualLinked = block->dualLinked;
           row.dualSoloLeft = block->dualSoloLeft;
           row.dualSoloRight = block->dualSoloRight;
-          row.dualLeftEmptyMuted = block->dualLeftEmptyMuted;
-          row.dualRightEmptyMuted = block->dualRightEmptyMuted;
+          row.dualLeftMuted = block->dualLeftMuted;
+          row.dualRightMuted = block->dualRightMuted;
+          row.dualLeftInvert = block->dualLeftInvert;
+          row.dualRightInvert = block->dualRightInvert;
+          row.dualAlignEnabled = block->dualAlignEnabled;
+          row.dualAlignOffset = block->dualAlignOffsetNormalized;
+          row.dualAlignWobble = block->dualAlignWobbleNormalized;
+          row.dualAlignWobbleEnabled = block->dualAlignWobbleEnabled;
+          row.dualAlignCrossover = block->dualAlignCrossoverNormalized;
+          row.dualAlignCrossoverEnabled = block->dualAlignCrossoverEnabled;
+          row.dualAlignDiffuseEnabled = block->dualAlignDiffuseEnabled;
+          row.dualStereoProcessingEnabled = block->dualStereoProcessingEnabled;
         }
 
         out.push_back(std::move(row));
@@ -1873,8 +1966,18 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("dualLinked", row.dualLinked);
       params->setProperty("dualSoloLeft", row.dualSoloLeft);
       params->setProperty("dualSoloRight", row.dualSoloRight);
-      params->setProperty("dualLeftEmptyMuted", row.dualLeftEmptyMuted);
-      params->setProperty("dualRightEmptyMuted", row.dualRightEmptyMuted);
+      params->setProperty("dualLeftMuted", row.dualLeftMuted);
+      params->setProperty("dualRightMuted", row.dualRightMuted);
+      params->setProperty("dualLeftInvert", row.dualLeftInvert);
+      params->setProperty("dualRightInvert", row.dualRightInvert);
+      params->setProperty("dualAlignEnabled", row.dualAlignEnabled);
+      params->setProperty("dualStereoProcessingEnabled", row.dualStereoProcessingEnabled);
+      params->setProperty("dualAlignOffset", row.dualAlignOffset);
+      params->setProperty("dualAlignWobble", row.dualAlignWobble);
+      params->setProperty("dualAlignWobbleEnabled", row.dualAlignWobbleEnabled);
+      params->setProperty("dualAlignCrossover", row.dualAlignCrossover);
+      params->setProperty("dualAlignCrossoverEnabled", row.dualAlignCrossoverEnabled);
+      params->setProperty("dualAlignDiffuseEnabled", row.dualAlignDiffuseEnabled);
       item->setProperty("params", juce::var(params.get()));
 
       // DUAL_MONO only: the two fixed child slots, nested the same shape as
@@ -1983,6 +2086,12 @@ juce::var TONE3000Processor::getMeterLevels() const {
         juce::DynamicObject::Ptr levels = new juce::DynamicObject();
         levels->setProperty("in", block->inputMeterDb.load());
         levels->setProperty("out", block->outputMeterDb.load());
+        // Mono-safety readout for the block's own Stereo Processing screen -
+        // the goniometer's own continuous correlation (see BlockGoniometer's
+        // own comment for why this is NOT dualAlign.correlation(), which
+        // freezes whenever Align itself isn't actively running).
+        if (block->type == ChainBlockType::DUAL_MONO)
+          levels->setProperty("alignCorrelation", block->dualGoniometer.correlation());
         blocks->setProperty(juce::String(block->id), juce::var(levels.get()));
       }
     }
@@ -2786,6 +2895,29 @@ juce::var TONE3000Processor::getBlockSpectrum(const std::string& blockId) {
     return {};
 
   return block->spectrum.getSpectrum();
+}
+
+bool TONE3000Processor::setDualGoniometerEnabled(const std::string& blockId, bool enabled) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("setDualGoniometerEnabled: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+
+  block->dualGoniometer.setEnabled(enabled);
+  return true;
+}
+
+juce::var TONE3000Processor::getDualGoniometer(const std::string& blockId) {
+  // getPoints drains the ring on this (message) thread, so the chain lock
+  // is only held for the block lookup, same as getBlockSpectrum above.
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO)
+    return {};
+
+  return block->dualGoniometer.getPoints();
 }
 
 juce::var TONE3000Processor::getIrWaveform(const std::string& blockId) {

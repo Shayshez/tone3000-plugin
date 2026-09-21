@@ -276,6 +276,26 @@ const HELP_DESKTOP = {
   dualLink: 'Link: mirror Pan, match Mix and Vol between both sides.',
   dualMute: 'Mute: silence this side.',
   dualSolo: 'Solo: silence the other side.',
+  dualInvertLeft: 'Ø Left: flip this side’s polarity.',
+  dualInvertRight: 'Ø Right: flip this side’s polarity.',
+  dualAutoAlign:
+    'Auto Align: a ½ s internal sweep time-aligns this block’s two sides and fixes inverted polarity. Click again: cancel.',
+  dualAlignToggle:
+    'Stereo: Align/phase controls between the two sides. Outline: Align shaping the sound.',
+  dualStereoProcessingPower:
+    'Stereo Power: bypasses Align and Ø without clearing the dialed-in values.',
+  dualAlignOffset: knobHelp(
+    'Offset',
+    'delays one side to correct timing/phase drift against the other, up to ±24 ms.'
+  ),
+  dualAlignReset: 'Reset all Align controls to default (off, centered).',
+  dualAlignCorrelation:
+    'Mono safety: dim: safe · yellow: caution · red: cancellation when the two sides sum to mono.',
+  dualAlignWobble: knobHelp('Wobble', 'humanizing drift of the align delay, up to ±1.2 ms.'),
+  dualAlignWobblePower: 'Wobble Power: drifts the delayed side like an ADT double-track.',
+  dualAlignCrossover: knobHelp('Crossover', 'lows below the cutoff skip the deck, 33-520 Hz.'),
+  dualAlignCrossoverPower: 'Crossover Power: on keeps lows out of the delay and diffusion.',
+  dualAlignDiffuse: 'Diffuse Power: phase-decorrelates the delayed side for width.',
   panLeft: knobHelp('Pan L', 'Left chain, hard left ↔ center.'),
   panRight: knobHelp('Pan R', 'Right chain, center ↔ hard right.'),
   panLink: 'Link Pans: mirror both pan knobs.',

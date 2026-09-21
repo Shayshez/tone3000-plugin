@@ -207,13 +207,38 @@ export interface BlockParams {
       one is ever true. */
   dualSoloLeft: boolean;
   dualSoloRight: boolean;
-  /** DUAL_MONO only: mutes a side's own pass-through while it has nothing
-      loaded (see `setDualEmptySideMuted`) - an empty side otherwise still
-      passes its half of the input straight through. Inert once a real tone
-      occupies the side; that side's Mute goes through the ordinary
-      `enabled` param on its own child block instead. */
-  dualLeftEmptyMuted: boolean;
-  dualRightEmptyMuted: boolean;
+  /** DUAL_MONO only: per-side Mute (see `setDualMuted`) - true silence via
+      a recombine-level gain, unconditional whether the side is empty or
+      loaded. Deliberately NOT the child's own `enabled` (that's bypass,
+      which crossfades to the dry unprocessed input - audible, not
+      silent). */
+  dualLeftMuted: boolean;
+  dualRightMuted: boolean;
+  /** DUAL_MONO only: per-side polarity flip (Ø) - two amp captures don't
+      share a polarity convention, so one side can arrive 180 degrees out
+      against the other. Independent per side (unlike Solo). Set via
+      `setDualInvert`. */
+  dualLeftInvert: boolean;
+  dualRightInvert: boolean;
+  /** DUAL_MONO only: Align - corrective delay + advanced deck (Wobble/
+      Crossover/Diffuse) between the two sides' raw output, before the Pan/
+      Width recombine above (see native StereoOffset.h / `setDualAlign`).
+      offset/wobble/crossover are normalized 0..1 (offset is bipolar, 0.5 =
+      center = 0 ms), same encoding as the global chain-level Align. Off and
+      centered by default, same no-op-until-asked-for reasoning as the
+      global one. */
+  dualAlignEnabled: boolean;
+  dualAlignOffset: number;
+  dualAlignWobble: number;
+  dualAlignWobbleEnabled: boolean;
+  dualAlignCrossover: number;
+  dualAlignCrossoverEnabled: boolean;
+  dualAlignDiffuseEnabled: boolean;
+  /** Master bypass for the whole Stereo Processing screen (Align + Ø) -
+      forces both neutral without touching any of the dialed-in values
+      above (see `setDualStereoProcessingEnabled`). Default true (not
+      bypassed). */
+  dualStereoProcessingEnabled: boolean;
 }
 
 /**
@@ -477,7 +502,7 @@ export type BlockParamName =
 export interface MeterLevels {
   input: [number, number];
   output: [number, number];
-  blocks: Record<string, { in: number; out: number }>;
+  blocks: Record<string, { in: number; out: number; alignCorrelation?: number }>;
   /** Audio-callback load, 0..1 proportion of the real-time budget. */
   cpu: number;
   /** Spread output correlation, -1..1 (1 when spread is idle). */

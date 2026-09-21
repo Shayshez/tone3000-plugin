@@ -490,12 +490,22 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       block->dualLeftPanSmoother.setCurrentAndTargetValue(block->dualLeftPanNormalized);
       block->dualRightPanSmoother.setCurrentAndTargetValue(block->dualRightPanNormalized);
       block->dualWidthSmoother.setCurrentAndTargetValue(block->dualWidthNormalized);
-      const bool leftForcedSilent = block->dualLeft.empty() && block->dualLeftEmptyMuted;
-      const bool rightForcedSilent = block->dualRight.empty() && block->dualRightEmptyMuted;
+      const bool leftForcedSilent = block->dualLeftMuted;
+      const bool rightForcedSilent = block->dualRightMuted;
       block->dualLeftSoloGainSmoother.setCurrentAndTargetValue(
           leftForcedSilent || (block->dualSoloRight && !block->dualSoloLeft) ? 0.0f : 1.0f);
       block->dualRightSoloGainSmoother.setCurrentAndTargetValue(
           rightForcedSilent || (block->dualSoloLeft && !block->dualSoloRight) ? 0.0f : 1.0f);
+      block->dualLeftPolaritySmoother.reset(chainRate, 0.05f);
+      block->dualRightPolaritySmoother.reset(chainRate, 0.05f);
+      block->dualLeftPolaritySmoother.setCurrentAndTargetValue(block->dualLeftInvert ? -1.0f
+                                                                                     : 1.0f);
+      block->dualRightPolaritySmoother.setCurrentAndTargetValue(block->dualRightInvert ? -1.0f
+                                                                                       : 1.0f);
+      // Re-prepare has no live signal continuity to protect (same as every
+      // engine above); StereoOffset::prepare is itself a hard reset.
+      block->dualAlign.prepare(chainRate, domainBlockSize);
+      block->dualGoniometer.prepare(chainRate);
       // Recurses at most one level deep: a dual child is never itself a
       // DUAL_MONO block (nothing on the creation path can produce one -
       // loadToneIntoDualSlot only ever loads an ordinary tone), so this
@@ -1045,8 +1055,22 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   // Seed: 2 channels present -> channel 0 feeds left, channel 1 feeds
   // right, distinctly. Only 1 channel present -> duplicated into both (a
   // genuine mono signal diverging into two independent paths).
-  dl.copyFrom(0, 0, buffer, 0, 0, numSamples);
-  dr.copyFrom(0, 0, buffer, numChannels > 1 ? 1 : 0, 0, numSamples);
+  //
+  // Auto Align probe: while armed for THIS block (see armDualAutoAlign),
+  // both sides eat the identical sweep instead of the instrument - the
+  // per-block analogue of the global mechanism's own top-of-processBlock
+  // injection (see AutoOffset.h, and the guarded global call site this
+  // reuses the same engine instance with, so only one of the two ever
+  // actually renders per block). renderProbeInput is a no-op outside its
+  // own Probing/Tail sub-states (returns false, dest untouched), so this
+  // only overrides the normal seed while a sweep is actually playing.
+  if (dualBlock.id == autoOffsetTargetBlockId &&
+      autoOffset.renderProbeInput(dl.getWritePointer(0), numSamples)) {
+    dr.copyFrom(0, 0, dl, 0, 0, numSamples);
+  } else {
+    dl.copyFrom(0, 0, buffer, 0, 0, numSamples);
+    dr.copyFrom(0, 0, buffer, numChannels > 1 ? 1 : 0, 0, numSamples);
+  }
 
   // Run each present child (0 or 1 element - see ChainBlock::dualLeft/
   // dualRight) through the ordinary per-block path. An empty side is a
@@ -1055,6 +1079,38 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   // same as adding any other still-empty block.
   processChainOnBuffer(dualBlock.dualLeft, dl, dualLeftDryScratch[slot], 0);
   processChainOnBuffer(dualBlock.dualRight, dr, dualRightDryScratch[slot], 0);
+
+  // Auto Align probe capture: the raw chain outputs BEFORE Align's own
+  // delay/polarity - the absolute misalignment, matching the global
+  // mechanism's own capture point (processImageStage, before
+  // stereoOffset.process - see its own comment there).
+  if (dualBlock.id == autoOffsetTargetBlockId)
+    autoOffset.captureChainOutputs(dl.getReadPointer(0), dr.getReadPointer(0), numSamples);
+
+  // Align: corrective delay + advanced deck (Wobble/Crossover/Diffuse) on
+  // the sides' raw output, before the Pan/Width recombine below - the
+  // direct per-block analogue of processImageStage running the global
+  // StereoOffset on chL/chR before Balance+Pan. Runs regardless of
+  // numChannels/widen-vs-fold: dl/dr are always two independent chain
+  // outputs about to be combined (panned+summed, or folded straight to
+  // mono), and a timing/phase mismatch between them causes the same comb-
+  // filtering/cancellation either way - if anything it matters MORE in the
+  // fold case, where the two sides sum directly into one channel.
+  {
+    float* alignChannels[2] = {dl.getWritePointer(0), dr.getWritePointer(0)};
+    juce::AudioBuffer<float> alignImage(alignChannels, 2, numSamples);
+    // dualStereoProcessingEnabled is the whole Stereo Processing screen's
+    // master bypass - forces disengaged here without touching the stored
+    // dualAlignEnabled, so re-enabling restores exactly what was dialed in.
+    dualBlock.dualAlign.setTarget(
+        StereoOffsetParams::fromNormalized(
+            dualBlock.dualAlignOffsetNormalized, dualBlock.dualAlignWobbleNormalized,
+            dualBlock.dualAlignCrossoverNormalized, dualBlock.dualAlignWobbleEnabled,
+            dualBlock.dualAlignCrossoverEnabled, dualBlock.dualAlignDiffuseEnabled),
+        dualBlock.dualStereoProcessingEnabled && dualBlock.dualAlignEnabled);
+    if (dualBlock.dualAlign.isRunning())
+      dualBlock.dualAlign.process(alignImage);
+  }
 
   // Recombine: constant-power pan per side, summed, then blended against
   // the mono sum by width. Widen-vs-fold is decided purely by
@@ -1068,19 +1124,31 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   // Re-arm every smoother's target from the raw fields every call, same
   // idiom every other per-block smoother uses: the live setters only ever
   // target them, so this is what a fresh block's fields reach even before
-  // the UI calls one for the first time. Solo (and the empty-side mute
-  // flags, forced-silent below - see their own comment in ChainBlock.h)
-  // apply in both the widen and fold branches below (muting a side is
-  // muting a side regardless of the physical channel count), so it's armed
-  // here rather than duplicated in each branch. dualLeft/dualRight.empty()
-  // is the exact same test the seed/process step above already relies on
-  // for "this side is a bare pass-through".
-  const bool leftForcedSilent = dualBlock.dualLeft.empty() && dualBlock.dualLeftEmptyMuted;
-  const bool rightForcedSilent = dualBlock.dualRight.empty() && dualBlock.dualRightEmptyMuted;
+  // the UI calls one for the first time. Solo (and Mute, forced-silent
+  // below - see their own comment in ChainBlock.h) apply in both the widen
+  // and fold branches below (muting a side is muting a side regardless of
+  // the physical channel count), so it's armed here rather than duplicated
+  // in each branch. Mute is unconditional (empty or loaded) - true
+  // silence via this same gain, not the child's own `enabled` bypass
+  // (bypass crossfades to the dry, unprocessed input - audible, not
+  // silent, a real confusion this exact split used to cause).
+  const bool leftForcedSilent = dualBlock.dualLeftMuted;
+  const bool rightForcedSilent = dualBlock.dualRightMuted;
   dualBlock.dualLeftSoloGainSmoother.setTargetValue(
       leftForcedSilent || (dualBlock.dualSoloRight && !dualBlock.dualSoloLeft) ? 0.0f : 1.0f);
   dualBlock.dualRightSoloGainSmoother.setTargetValue(
       rightForcedSilent || (dualBlock.dualSoloLeft && !dualBlock.dualSoloRight) ? 0.0f : 1.0f);
+  // Ø: same "re-arm every call" idiom as Solo above - folded into the same
+  // per-sample gain multiply in both branches below (a +-1 sign is just
+  // another gain), so a live Ø toggle glides through the same smoother
+  // rather than needing a separate pass. Same master-bypass override as
+  // Align above: forced neutral (+1) without touching the stored
+  // dualLeftInvert/dualRightInvert.
+  const bool stereoProcessingBypassed = !dualBlock.dualStereoProcessingEnabled;
+  dualBlock.dualLeftPolaritySmoother.setTargetValue(
+      !stereoProcessingBypassed && dualBlock.dualLeftInvert ? -1.0f : 1.0f);
+  dualBlock.dualRightPolaritySmoother.setTargetValue(
+      !stereoProcessingBypassed && dualBlock.dualRightInvert ? -1.0f : 1.0f);
 
   if (numChannels >= 2) {
     dualBlock.dualLeftPanSmoother.setTargetValue(dualBlock.dualLeftPanNormalized);
@@ -1095,8 +1163,10 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
       const float leftPan = dualBlock.dualLeftPanSmoother.getNextValue();
       const float rightPan = dualBlock.dualRightPanSmoother.getNextValue();
       const float width = dualBlock.dualWidthSmoother.getNextValue();
-      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue();
-      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue();
+      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue() *
+                             dualBlock.dualLeftPolaritySmoother.getNextValue();
+      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue() *
+                              dualBlock.dualRightPolaritySmoother.getNextValue();
       const auto gL = constantPowerPanGains(leftPan);
       const auto gR = constantPowerPanGains(rightPan);
       const float l = dlData[i] * leftGain;
@@ -1113,8 +1183,10 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
     // as imageMatrixGains's own foldToMono, ½(l + r).
     float* outMono = buffer.getWritePointer(0);
     for (int i = 0; i < numSamples; ++i) {
-      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue();
-      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue();
+      const float leftGain = dualBlock.dualLeftSoloGainSmoother.getNextValue() *
+                             dualBlock.dualLeftPolaritySmoother.getNextValue();
+      const float rightGain = dualBlock.dualRightSoloGainSmoother.getNextValue() *
+                              dualBlock.dualRightPolaritySmoother.getNextValue();
       outMono[i] = 0.5f * (dlData[i] * leftGain + drData[i] * rightGain);
       peak = std::max(peak, std::abs(outMono[i]));
     }
@@ -1147,6 +1219,20 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
                                    buffer.getNumChannels() > 1 ? buffer.getReadPointer(1)
                                                                 : nullptr,
                                    numSamples);
+
+  // Stereo Processing screen's goniometer/correlation: the block's true
+  // final output (post Pan/Width AND post Master EQ) - the whole point is
+  // to show what this block actually hands downstream, so it must reflect
+  // Pan/Width/Vol exactly like the ear does (an earlier version captured
+  // before the recombine and missed all of that - a real bug, not a design
+  // choice). A fold-mode block (one physical channel) has no L/R to speak
+  // of; feeding the same mono signal to both sides is honest about that -
+  // it reads as a vertical line / +1 correlation, which is exactly true.
+  if (dualBlock.dualGoniometer.isEnabled())
+    dualBlock.dualGoniometer.pushSamples(
+        buffer.getReadPointer(0),
+        buffer.getNumChannels() > 1 ? buffer.getReadPointer(1) : buffer.getReadPointer(0),
+        numSamples);
 
   // No single well-defined "input" for a two-way split, unlike an ordinary
   // block's own input meter - both meters read the recombined output peak.
@@ -1712,8 +1798,12 @@ void TONE3000Processor::processImageStage(float* chL, float* chR, int numFrames,
     // delay and the image matrix's polarity flips, so the measurement is
     // the chains' absolute misalignment and relative polarity, independent
     // of the current corrections (a second run measures the total, not the
-    // residual). Zero work unless a probe is running.
-    autoOffset.captureChainOutputs(chL, chR, numFrames);
+    // residual). Zero work unless a probe is running. Skipped while a
+    // per-block probe owns the engine instead (see runDualMono's own
+    // capture site) - both feeding the same AutoOffset in one block would
+    // double-consume its capture cursor.
+    if (autoOffsetTargetBlockId.empty())
+      autoOffset.captureChainOutputs(chL, chR, numFrames);
 
     stereoOffset.setTarget(
         StereoOffsetParams::fromNormalized(cacheAlignOffset, cacheAlignWobble,
@@ -1892,10 +1982,18 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   // below). Stereo chain mode only (any rig: on a mono buffer the scratch
   // mirror in the chain-stage loop feeds the probe to the Right lane);
   // losing the mode mid-run cancels (the atomic flip is audio-thread safe).
+  // Both guarded by autoOffsetTargetBlockId.empty(): a Dual Mono block's
+  // own probe (armDualAutoAlign) injects/captures at its own site inside
+  // runDualMono instead - global chain mode doesn't apply to it (it works
+  // in mono chain mode, the normal case for a Dual Mono block), and
+  // letting both sites touch the same engine instance in one block would
+  // double-consume its cursors.
   // #########################
-  if (autoOffset.state() != AutoOffset::State::Idle && !stereoEnabled.load())
+  if (autoOffset.state() != AutoOffset::State::Idle && autoOffsetTargetBlockId.empty() &&
+      !stereoEnabled.load())
     autoOffset.cancel();
-  if (autoOffset.renderProbeInput(buffer.getWritePointer(0), numSamples) && numChannels > 1)
+  if (autoOffsetTargetBlockId.empty() &&
+      autoOffset.renderProbeInput(buffer.getWritePointer(0), numSamples) && numChannels > 1)
     buffer.copyFrom(1, 0, buffer, 0, 0, numSamples);
 
   // ####################
@@ -2263,6 +2361,13 @@ void TONE3000Processor::startAutoOffset() {
   // and the measurement needs two live chains.
   if (isNonRealtime() || !stereoEnabled.load())
     return;
+  // Only claim the engine (and reset its target to "global") if it's
+  // actually free - arm() itself already no-ops while busy, but without
+  // this check a click here while a Dual Mono block's own probe is running
+  // would still clear autoOffsetTargetBlockId out from under it.
+  if (autoOffset.state() != AutoOffset::State::Idle)
+    return;
+  autoOffsetTargetBlockId.clear();
   autoOffset.arm();
 }
 
@@ -2343,6 +2448,123 @@ juce::var TONE3000Processor::pollAutoOffset() {
                                juce::String(result.confidence, 3) + ", sharpness " +
                                juce::String(result.peakSharpness, 1) +
                                (polarityFlipped ? ", polarity flipped)" : ")"));
+      break;
+    }
+    case AutoOffset::State::RampBack:
+    case AutoOffset::State::Idle:
+      obj->setProperty("state", "idle");
+      break;
+  }
+  return juce::var(obj.get());
+}
+
+bool TONE3000Processor::armDualAutoAlign(const std::string& blockId) {
+  // Offline renders must never print the probe's silence into the bounce -
+  // same guard as startAutoOffset, minus the stereo-chain-mode requirement
+  // (a Dual Mono block creates its own "two chains" regardless of that).
+  if (isNonRealtime())
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
+    DBG("armDualAutoAlign: not a DUAL_MONO block: " << blockId);
+    return false;
+  }
+  // Same "only claim the engine if it's actually free" reasoning as
+  // startAutoOffset - arm() itself also no-ops while busy, but this keeps
+  // autoOffsetTargetBlockId from being stolen out from under whichever
+  // measurement (global or another block) is already running.
+  if (autoOffset.state() != AutoOffset::State::Idle)
+    return false;
+  autoOffsetTargetBlockId = blockId;
+  autoOffset.arm();
+  return true;
+}
+
+// Message thread (UI poll) - same shape as pollAutoOffset above, but
+// applies the result to the target block's own fields (ChainBlock.h)
+// instead of the global chain-level parameters.
+juce::var TONE3000Processor::pollDualAutoAlign(const std::string& blockId) {
+  juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+
+  // Not the block this poller is asking about (a stale poll after another
+  // measurement claimed the engine, or this one was never armed) - nothing
+  // to report.
+  if (blockId != autoOffsetTargetBlockId) {
+    obj->setProperty("state", "idle");
+    return juce::var(obj.get());
+  }
+
+  switch (autoOffset.state()) {
+    case AutoOffset::State::FadeOut:
+    case AutoOffset::State::Probing:
+    case AutoOffset::State::Tail:
+    case AutoOffset::State::Analyzing:
+      obj->setProperty("state", "listening");
+      obj->setProperty("progress", static_cast<double>(autoOffset.progress()));
+      break;
+    case AutoOffset::State::Captured: {
+      juce::ScopedLock lock(chainMutex);
+      ChainBlock* block = findBlockById(blockId);
+      if (block == nullptr) {
+        // The target vanished mid-measurement (removed, undo) - drop the
+        // result and let the output ramp back rather than leaving the
+        // whole plugin stuck muted forever waiting for a poll that can
+        // never apply anywhere.
+        autoOffset.analyze();
+        autoOffset.resume();
+        obj->setProperty("state", "timeout");
+        break;
+      }
+
+      const auto result = autoOffset.analyze();
+      if (result.peakSharpness < kAutoOffsetMinSharpness) {
+        autoOffset.resume();
+        obj->setProperty("state", "timeout");
+        obj->setProperty("confidence", result.confidence);
+        obj->setProperty("peakSharpness", result.peakSharpness);
+        juce::Logger::writeToLog("[AutoOffset] Rejected (block " + juce::String(blockId) +
+                                 "): confidence " + juce::String(result.confidence, 3) +
+                                 ", sharpness " + juce::String(result.peakSharpness, 2));
+        break;
+      }
+
+      pushChainHistory("param:" + juce::String(blockId) + ":dualAlign");
+
+      // ms -> knob position, the StereoOffsetParams::fromNormalized inverse
+      // - same conversion pollAutoOffset uses above.
+      const float norm = juce::jlimit(
+          0.0f, 1.0f, 0.5f + result.offsetMs / (2.0f * StereoOffsetParams::kMaxOffsetMs));
+      block->dualAlignOffsetNormalized = norm;
+      // Power Align on when there's a real correction to hear - an
+      // effectively-zero result still rewrites the offset (clearing a
+      // stale knob value) but leaves the power switch alone.
+      if (std::abs(result.offsetMs) >= kAutoOffsetSilentMs)
+        block->dualAlignEnabled = true;
+
+      // Polarity: capture happens pre-Align/pre-Ø (see runDualMono's own
+      // capture site), so result.inverted is the two sides' absolute
+      // relative polarity and the Ø flags must end up XOR-matching it.
+      // Toggling only the right side preserves an absolute both-sides flip
+      // the user may already have set, same reasoning pollAutoOffset uses
+      // for chainInvertRight.
+      bool polarityFlipped = false;
+      const bool invertedNow = block->dualLeftInvert != block->dualRightInvert;
+      if (result.inverted != invertedNow) {
+        block->dualRightInvert = !block->dualRightInvert;
+        polarityFlipped = true;
+      }
+
+      deferredRevisionBump();
+      autoOffset.resume();
+      obj->setProperty("state", "done");
+      obj->setProperty("matchedMs", result.offsetMs);
+      obj->setProperty("polarityFlipped", polarityFlipped);
+      juce::Logger::writeToLog(
+          "[AutoOffset] Aligned Dual Mono block " + juce::String(blockId) + " (offset " +
+          juce::String(result.offsetMs, 3) + " ms, confidence " +
+          juce::String(result.confidence, 3) + ", sharpness " +
+          juce::String(result.peakSharpness, 1) + (polarityFlipped ? ", polarity flipped)" : ")"));
       break;
     }
     case AutoOffset::State::RampBack:

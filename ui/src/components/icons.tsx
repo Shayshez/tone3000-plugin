@@ -5,6 +5,7 @@ import {
   ArrowLeftRight as LArrowLeftRight,
   ArrowRight as LArrowRight,
   ArrowUpDown as LArrowUpDown,
+  Ban as LBan,
   Bluetooth as LBluetooth,
   Bookmark as LBookmark,
   Check as LCheck,
@@ -80,6 +81,7 @@ export const ChevronDown = scaled(LChevronDown, 'ChevronDown');
 export const ChevronLeft = scaled(LChevronLeft, 'ChevronLeft');
 export const ChevronRight = scaled(LChevronRight, 'ChevronRight');
 export const ChevronUp = scaled(LChevronUp, 'ChevronUp');
+export const Ban = scaled(LBan, 'Ban');
 export const Circle = scaled(LCircle, 'Circle');
 export const ClipboardPaste = scaled(LClipboardPaste, 'ClipboardPaste');
 export const Copy = scaled(LCopy, 'Copy');

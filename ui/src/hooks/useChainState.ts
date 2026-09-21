@@ -61,7 +61,10 @@ export function useChainState() {
       setDualImage: backend.getPluginFunction('setDualImage'),
       setDualLinked: backend.getPluginFunction('setDualLinked'),
       setDualSolo: backend.getPluginFunction('setDualSolo'),
-      setDualEmptySideMuted: backend.getPluginFunction('setDualEmptySideMuted'),
+      setDualMuted: backend.getPluginFunction('setDualMuted'),
+      setDualAlign: backend.getPluginFunction('setDualAlign'),
+      setDualStereoProcessingEnabled: backend.getPluginFunction('setDualStereoProcessingEnabled'),
+      setDualInvert: backend.getPluginFunction('setDualInvert'),
       loadLocalTone: backend.getPluginFunction('loadLocalTone'),
       swapTone: backend.getPluginFunction('swapTone'),
       refreshToneMetadata: backend.getPluginFunction('refreshToneMetadata'),
@@ -221,9 +224,39 @@ export function useChainState() {
         run('setDualLinked', () => native.setDualLinked(blockId, linked)),
       setDualSolo: (blockId: string, isLeftSide: boolean, soloed: boolean) =>
         run('setDualSolo', () => native.setDualSolo(blockId, isLeftSide, soloed)),
-      setDualEmptySideMuted: (blockId: string, isLeftSide: boolean, muted: boolean) =>
-        run('setDualEmptySideMuted', () =>
-          native.setDualEmptySideMuted(blockId, isLeftSide, muted)
+      setDualMuted: (blockId: string, isLeftSide: boolean, muted: boolean) =>
+        run('setDualMuted', () => native.setDualMuted(blockId, isLeftSide, muted)),
+      setDualInvert: (blockId: string, isLeftSide: boolean, inverted: boolean) =>
+        run('setDualInvert', () => native.setDualInvert(blockId, isLeftSide, inverted)),
+      /** Fire-and-forget, same shape as setDualImage above - Align's whole
+          knob/toggle surface lands together, called continuously while a
+          knob drags. */
+      setDualAlign: (
+        blockId: string,
+        enabled: boolean,
+        offset: number,
+        wobble: number,
+        wobbleEnabled: boolean,
+        crossover: number,
+        crossoverEnabled: boolean,
+        diffuseEnabled: boolean
+      ) => {
+        Promise.resolve(
+          native.setDualAlign(
+            blockId,
+            enabled,
+            offset,
+            wobble,
+            wobbleEnabled,
+            crossover,
+            crossoverEnabled,
+            diffuseEnabled
+          )
+        ).catch((error) => console.error('setDualAlign failed:', error));
+      },
+      setDualStereoProcessingEnabled: (blockId: string, enabled: boolean) =>
+        run('setDualStereoProcessingEnabled', () =>
+          native.setDualStereoProcessingEnabled(blockId, enabled)
         ),
       removeBlock: (blockId: string) =>
         run('removeChainBlock', () => native.removeChainBlock(blockId)),

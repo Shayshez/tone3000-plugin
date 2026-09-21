@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowLeftRight,
+  Ban,
   Bookmark,
   ChevronRight,
   Download,
@@ -24,6 +25,7 @@ import { WaveformDisplay } from './WaveformDisplay';
 import { IrEnvelopeGraph } from './IrEnvelopeGraph';
 import type { EnvelopePatch } from './IrEnvelopeGraph';
 import { useIrWaveform } from '../hooks/useIrWaveform';
+import { useDualAutoAlign } from '../hooks/useDualAutoAlign';
 import { rem } from '../hooks/useUiScale';
 import { KnobControl } from './KnobControl';
 import { EditableChip, ToggleChip } from './EditableChip';
@@ -37,6 +39,8 @@ import {
   percentScale,
   sizePercentScale,
   widthPercentScale,
+  offsetMsScale,
+  crossoverHzScale,
 } from './knobScale';
 import type { KnobScale } from './knobScale';
 import { BusyOverlay, LoadingDots } from './LoadingDots';
@@ -44,9 +48,10 @@ import { ModelSelect } from './ModelSelect';
 import { RetryLoadBadge } from './RetryLoadBadge';
 import { BlockMeter } from './BlockMeter';
 import { BlockEqView } from './BlockEqView';
+import { DualGoniometerScope } from './DualGoniometerScope';
 import type { EqViewMode } from './BlockEqView';
 import { BlockInfoPanel } from './BlockInfoPanel';
-import { meterId } from '../hooks/useMeters';
+import { meterId, useBlockCorrelation } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { useParameter } from '../hooks/useParameter';
 import type { BlockParamName, ChainItem, ToneBlock, ToneSummary } from '../types/chain';
@@ -79,14 +84,17 @@ import { T3K_API } from '../t3k/config';
 import {
   BORDER,
   BRAND_RED,
+  BRAND_YELLOW,
   GRAY,
   ICON_BOX_RADIUS,
   ICON_BOX_SIZE,
   ICON_SIZE,
+  KNOB_LABEL_GAP,
   KNOB_SIZE_SECONDARY,
   FONT_MONO,
   MUTED,
   SEGMENTED_TRACK,
+  SUBTLE,
   TEXT_BOX_HEIGHT,
   WHITE,
   segmentedCellStyle,
@@ -100,6 +108,10 @@ const IMAGE_SIZE = 192;
 const IMAGE_SIZE_INFO = 160;
 /** Mini meter height in the side rails (meter sits centered above its knob). */
 const RAIL_METER_HEIGHT = 160;
+/** Stereo Processing screen's Wobble/Crossover/Diffuse columns - same idea
+    and value as ImageDeckPanel.tsx's own SECTION_WIDTH: sized for the
+    longest label ("Crossover"), so it doesn't collide with its neighbor. */
+const DECK_SECTION_WIDTH = 82;
 /** Centers the normalize (=) chrome box on the Out knob. */
 const NORMALIZE_BUTTON_OFFSET = -(KNOB_SIZE_SECONDARY - ICON_BOX_SIZE) / 2;
 // IR blocks (!isNam) add a Delay knob beside In in the Input rail, widening
@@ -525,8 +537,10 @@ const DualSideCard: React.FC<{
   isSoloed: boolean;
   onSoloToggle: () => void;
   /** Controlled from the parent, same reason mix/vol are - own explicit
-      Mute state, real and persisted. Only meaningful while `child` is set;
-      ignored otherwise (see `emptyMuted` below). */
+      Mute state, real and persisted, true silence via a recombine-level
+      gain (see setDualMuted's own comment). Unconditional whether `child`
+      is set or not - an empty side's own pass-through mutes the exact same
+      way a loaded side's output does. */
   muted: boolean;
   onMuteToggle: () => void;
   /** True when this side isn't itself muted but the *sibling* is soloed -
@@ -538,12 +552,6 @@ const DualSideCard: React.FC<{
       convention (soloing a channel highlights - doesn't set - every other
       channel's Mute button). */
   impliedMuted: boolean;
-  /** Only meaningful while `child` is undefined - mutes this side's own
-      pass-through (see BlockParams.dualLeftEmptyMuted's own comment).
-      Ignored once a side is loaded (that side's Mute goes through `muted`/
-      `onMuteToggle` above instead). */
-  emptyMuted: boolean;
-  onEmptyMuteToggle: () => void;
 }> = ({
   dualBlockId,
   isLeftSide,
@@ -563,8 +571,6 @@ const DualSideCard: React.FC<{
   muted,
   onMuteToggle,
   impliedMuted,
-  emptyMuted,
-  onEmptyMuteToggle,
 }) => {
   const actions = useChainActions();
   const toast = useToast();
@@ -588,14 +594,6 @@ const DualSideCard: React.FC<{
   const handleKnobDragState = useCallback((dragging: boolean) => {
     knobDragRef.current = dragging;
   }, []);
-  const [localEmptyMuted, setLocalEmptyMuted] = useState(emptyMuted);
-  useEffect(() => setLocalEmptyMuted(emptyMuted), [emptyMuted]);
-
-  const handleEmptyMuteToggle = () => {
-    setLocalEmptyMuted((prev) => !prev);
-    onEmptyMuteToggle();
-  };
-
   if (!child) {
     return (
       <div
@@ -618,7 +616,7 @@ const DualSideCard: React.FC<{
             power button uses) so muting stays reachable once the rest goes
             inert. */}
         <div
-          className={uiOffClass(localEmptyMuted)}
+          className={uiOffClass(muted)}
           style={{
             display: 'flex',
             flexDirection: 'column',
@@ -661,17 +659,13 @@ const DualSideCard: React.FC<{
           </span>
         </div>
         {/* An empty side is still a live pass-through (see
-            dualLeftEmptyMuted's own comment) - Mute silences that
+            BlockParams.dualLeftMuted's own comment) - Mute silences that
             pass-through, the only control that makes sense before
             anything's loaded here (no child block yet to hold Pan/Mix/Vol/
-            Solo). */}
-        <ChromeIconButton
-          tone="danger"
-          on={localEmptyMuted}
-          help={HELP.dualMute}
-          onClick={handleEmptyMuteToggle}
-        >
-          {localEmptyMuted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
+            Solo). Same `muted`/`onMuteToggle` a loaded side's own Mute
+            button below uses - one real per-side flag, unconditional. */}
+        <ChromeIconButton tone="danger" on={muted} help={HELP.dualMute} onClick={onMuteToggle}>
+          {muted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
         </ChromeIconButton>
       </div>
     );
@@ -1100,24 +1094,63 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // local state.
   const [dualLeftSoloed, setDualLeftSoloed] = useState(params.dualSoloLeft ?? false);
   const [dualRightSoloed, setDualRightSoloed] = useState(params.dualSoloRight ?? false);
-  // DUAL_MONO only: each loaded child's own Mute, tracked here (not inside
-  // DualSideCard) for the same "instant" reason Solo just above is, and
-  // because the "implied mute" display (leftImpliedMuted/rightImpliedMuted
-  // at each DualSideCard call site) needs both sides' Mute and Solo state
-  // in one place to compute from - see handleToggleDualSolo's own comment
-  // for why Mute/Solo stay independent flags rather than mutating each
-  // other.
-  const [dualLeftMuted, setDualLeftMuted] = useState(
-    topDualLeftChild ? !topDualLeftChild.params.enabled : false
+  // DUAL_MONO only: per-side polarity flip (Ø), same "instant, optimistic"
+  // shape as Solo/Mute above.
+  const [dualLeftInvert, setDualLeftInvert] = useState(params.dualLeftInvert ?? false);
+  const [dualRightInvert, setDualRightInvert] = useState(params.dualRightInvert ?? false);
+  // DUAL_MONO only: per-side Mute, tracked here (not inside DualSideCard)
+  // for the same "instant" reason Solo just above is, and because the
+  // "implied mute" display (leftImpliedMuted/rightImpliedMuted at each
+  // DualSideCard call site) needs both sides' Mute and Solo state in one
+  // place to compute from - see handleToggleDualSolo's own comment for why
+  // Mute/Solo stay independent flags rather than mutating each other.
+  // Sourced from params.dualLeftMuted/dualRightMuted (true silence via a
+  // recombine gain, unconditional whether the side is empty or loaded) -
+  // deliberately NOT the child's own `enabled` (that's bypass, which
+  // crossfades to the dry unprocessed input, not silence; a real bug this
+  // exact confusion caused once already).
+  const [dualLeftMuted, setDualLeftMuted] = useState(params.dualLeftMuted ?? false);
+  const [dualRightMuted, setDualRightMuted] = useState(params.dualRightMuted ?? false);
+  // DUAL_MONO only: Align - corrective delay + advanced deck between the
+  // two sides' raw output (see setDualAlign's own comment). Off/centered
+  // defaults mirror ChainBlock::dualAlign*'s own native defaults. No local
+  // "enabled" state: unlike the global faceplate group (which collapses to
+  // an advert pill until powered on), the Offset knob and Ø buttons sit
+  // permanently in the divider column like Pan/Mix/Vol - `enabled` is
+  // derived from whether anything is actually dialed in (see
+  // commitDualAlign), the same "no separate power click" shape every other
+  // knob on this card already has.
+  const [dualAlignOffset, setDualAlignOffset] = useState(params.dualAlignOffset ?? 0.5);
+  const [dualAlignWobble, setDualAlignWobble] = useState(params.dualAlignWobble ?? 0.25);
+  const [dualAlignWobbleEnabled, setDualAlignWobbleEnabled] = useState(
+    params.dualAlignWobbleEnabled ?? false
   );
-  const [dualRightMuted, setDualRightMuted] = useState(
-    topDualRightChild ? !topDualRightChild.params.enabled : false
+  const [dualAlignCrossover, setDualAlignCrossover] = useState(params.dualAlignCrossover ?? 0.5);
+  const [dualAlignCrossoverEnabled, setDualAlignCrossoverEnabled] = useState(
+    params.dualAlignCrossoverEnabled ?? false
   );
+  const [dualAlignDiffuseEnabled, setDualAlignDiffuseEnabled] = useState(
+    params.dualAlignDiffuseEnabled ?? false
+  );
+  // Mono-safety readout, shown small next to the goniometer on the Stereo
+  // Processing screen (harmless no-op for every other block type - the
+  // store just has nothing under this id).
+  const dualAlignCorrelation = useBlockCorrelation(blockId);
   // DUAL_MONO only: which side (if any) is showing its own full editor -
   // see the isDualMono branch's own comment on why this stays local rather
   // than going through ChainView's detailBlockId.
   const [openChildSide, setOpenChildSide] = useState<'left' | 'right' | null>(null);
   const [openChildInitial, setOpenChildInitial] = useState<'eq' | 'info' | null>(null);
+  // DUAL_MONO only: Stereo Processing (Offset/Ø/Wobble/Crossover/Diffuse/
+  // goniometer) - an inline body swap toggled from the header, exactly the
+  // same "STEREO button always visible, click to open/close in place"
+  // shape the EQ pill already has (an earlier separate-screen version read
+  // as an unnecessary extra navigation hop once EQ's own pattern was right
+  // there to match).
+  const [showStereo, setShowStereo] = useState(false);
+  const [dualStereoProcessingEnabled, setDualStereoProcessingEnabled] = useState(
+    params.dualStereoProcessingEnabled ?? true
+  );
   const [trimInit, setTrimInit] = useState(params.trimInit ?? false);
   const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
   const [reverse, setReverse] = useState(params.reverse ?? false);
@@ -1201,14 +1234,35 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   useEffect(() => setDualLinked(params.dualLinked ?? false), [params.dualLinked]);
   useEffect(() => setDualLeftSoloed(params.dualSoloLeft ?? false), [params.dualSoloLeft]);
   useEffect(() => setDualRightSoloed(params.dualSoloRight ?? false), [params.dualSoloRight]);
+  useEffect(() => setDualLeftInvert(params.dualLeftInvert ?? false), [params.dualLeftInvert]);
+  useEffect(() => setDualRightInvert(params.dualRightInvert ?? false), [params.dualRightInvert]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualAlignOffset(params.dualAlignOffset ?? 0.5);
+  }, [params.dualAlignOffset]);
+  useEffect(() => {
+    if (!knobDragRef.current) setDualAlignWobble(params.dualAlignWobble ?? 0.25);
+  }, [params.dualAlignWobble]);
   useEffect(
-    () => setDualLeftMuted(topDualLeftChild ? !topDualLeftChild.params.enabled : false),
-    [topDualLeftChild?.params.enabled, topDualLeftChild]
+    () => setDualAlignWobbleEnabled(params.dualAlignWobbleEnabled ?? false),
+    [params.dualAlignWobbleEnabled]
+  );
+  useEffect(() => {
+    if (!knobDragRef.current) setDualAlignCrossover(params.dualAlignCrossover ?? 0.5);
+  }, [params.dualAlignCrossover]);
+  useEffect(
+    () => setDualAlignCrossoverEnabled(params.dualAlignCrossoverEnabled ?? false),
+    [params.dualAlignCrossoverEnabled]
   );
   useEffect(
-    () => setDualRightMuted(topDualRightChild ? !topDualRightChild.params.enabled : false),
-    [topDualRightChild?.params.enabled, topDualRightChild]
+    () => setDualAlignDiffuseEnabled(params.dualAlignDiffuseEnabled ?? false),
+    [params.dualAlignDiffuseEnabled]
   );
+  useEffect(
+    () => setDualStereoProcessingEnabled(params.dualStereoProcessingEnabled ?? true),
+    [params.dualStereoProcessingEnabled]
+  );
+  useEffect(() => setDualLeftMuted(params.dualLeftMuted ?? false), [params.dualLeftMuted]);
+  useEffect(() => setDualRightMuted(params.dualRightMuted ?? false), [params.dualRightMuted]);
   useEffect(() => {
     if (!knobDragRef.current) setDualLeftMix(topDualLeftChild?.params.mix ?? 1.0);
   }, [topDualLeftChild?.params.mix]);
@@ -1377,6 +1431,131 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       return !prev;
     });
   }, [actions, blockId]);
+  const handleToggleDualInvert = useCallback(
+    (isLeftSide: boolean) => {
+      (isLeftSide ? setDualLeftInvert : setDualRightInvert)((prev) => {
+        actions.setDualInvert(blockId, isLeftSide, !prev);
+        return !prev;
+      });
+    },
+    [actions, blockId]
+  );
+  // DUAL_MONO only: Align sends its whole knob/toggle surface in one bundled
+  // setDualAlign call (native only ever consumes these seven together - see
+  // that setter's own comment), so every individual handler below goes
+  // through this one committer with just its own field overridden. Same
+  // "send the full current state every tick" shape setDualImage's own
+  // handlers already use for Pan/Width. `enabled` has no UI control of its
+  // own (see the state block's own comment) - derived here from whether
+  // anything is actually dialed away from silent-default, every commit.
+  const commitDualAlign = useCallback(
+    (overrides: {
+      offset?: number;
+      wobble?: number;
+      wobbleEnabled?: boolean;
+      crossover?: number;
+      crossoverEnabled?: boolean;
+      diffuseEnabled?: boolean;
+    }) => {
+      const next = {
+        offset: overrides.offset ?? dualAlignOffset,
+        wobble: overrides.wobble ?? dualAlignWobble,
+        wobbleEnabled: overrides.wobbleEnabled ?? dualAlignWobbleEnabled,
+        crossover: overrides.crossover ?? dualAlignCrossover,
+        crossoverEnabled: overrides.crossoverEnabled ?? dualAlignCrossoverEnabled,
+        diffuseEnabled: overrides.diffuseEnabled ?? dualAlignDiffuseEnabled,
+      };
+      const enabled =
+        next.offset !== 0.5 || next.wobbleEnabled || next.crossoverEnabled || next.diffuseEnabled;
+      setDualAlignOffset(next.offset);
+      setDualAlignWobble(next.wobble);
+      setDualAlignWobbleEnabled(next.wobbleEnabled);
+      setDualAlignCrossover(next.crossover);
+      setDualAlignCrossoverEnabled(next.crossoverEnabled);
+      setDualAlignDiffuseEnabled(next.diffuseEnabled);
+      actions.setDualAlign(
+        blockId,
+        enabled,
+        next.offset,
+        next.wobble,
+        next.wobbleEnabled,
+        next.crossover,
+        next.crossoverEnabled,
+        next.diffuseEnabled
+      );
+    },
+    [
+      actions,
+      blockId,
+      dualAlignOffset,
+      dualAlignWobble,
+      dualAlignWobbleEnabled,
+      dualAlignCrossover,
+      dualAlignCrossoverEnabled,
+      dualAlignDiffuseEnabled,
+    ]
+  );
+  const handleDualAlignOffsetChange = useCallback(
+    (val: number) => commitDualAlign({ offset: val }),
+    [commitDualAlign]
+  );
+  const handleToggleDualAlignWobble = useCallback(
+    () => commitDualAlign({ wobbleEnabled: !dualAlignWobbleEnabled }),
+    [commitDualAlign, dualAlignWobbleEnabled]
+  );
+  const handleDualAlignWobbleChange = useCallback(
+    (val: number) => commitDualAlign({ wobble: val }),
+    [commitDualAlign]
+  );
+  const handleToggleDualAlignCrossover = useCallback(
+    () => commitDualAlign({ crossoverEnabled: !dualAlignCrossoverEnabled }),
+    [commitDualAlign, dualAlignCrossoverEnabled]
+  );
+  const handleDualAlignCrossoverChange = useCallback(
+    (val: number) => commitDualAlign({ crossover: val }),
+    [commitDualAlign]
+  );
+  const handleToggleDualAlignDiffuse = useCallback(
+    () => commitDualAlign({ diffuseEnabled: !dualAlignDiffuseEnabled }),
+    [commitDualAlign, dualAlignDiffuseEnabled]
+  );
+  // Resets the whole Align surface to its native defaults in one call, same
+  // "one undo step" shape as handleResetEq's FLAT button. Ø isn't part of
+  // commitDualAlign's bundle (setDualInvert is its own native setter, one
+  // side at a time), so it's reset here separately alongside it.
+  const handleResetDualAlign = useCallback(() => {
+    commitDualAlign({
+      offset: 0.5,
+      wobble: 0.25,
+      wobbleEnabled: false,
+      crossover: 0.5,
+      crossoverEnabled: false,
+      diffuseEnabled: false,
+    });
+    setDualLeftInvert((prev) => {
+      if (prev) actions.setDualInvert(blockId, true, false);
+      return false;
+    });
+    setDualRightInvert((prev) => {
+      if (prev) actions.setDualInvert(blockId, false, false);
+      return false;
+    });
+  }, [commitDualAlign, actions, blockId]);
+  // One-click probe measurement scoped to this block's own two sides - see
+  // useDualAutoAlign's own doc comment for why it's a separate hook from
+  // the global AlignControls.tsx's useAutoMeasure.
+  const { listening: dualAutoAlignListening, toggle: toggleDualAutoAlign } =
+    useDualAutoAlign(blockId);
+  // Master bypass for the whole Stereo Processing screen (Align + Ø) -
+  // does NOT touch any of the dialed-in values (offset, deck, Ø), just
+  // forces them neutral at the native level and back - same "Power
+  // bypasses without clearing" shape the EQ pill's own Power button has.
+  const handleToggleDualStereoProcessing = useCallback(() => {
+    setDualStereoProcessingEnabled((prev) => {
+      actions.setDualStereoProcessingEnabled(blockId, !prev);
+      return !prev;
+    });
+  }, [actions, blockId]);
   // Optimistic, exclusive Solo toggle (see dualLeftSoloed's own comment) -
   // flips both local flags immediately, mirroring native's own exclusivity
   // (setDualSolo clears the other side there too) instead of waiting for
@@ -1402,7 +1581,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   const handleToggleDualSolo = useCallback(
     (isLeftSide: boolean) => {
       const next = isLeftSide ? !dualLeftSoloed : !dualRightSoloed;
-      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
       if (isLeftSide) {
         setDualLeftSoloed(next);
         if (next) setDualRightSoloed(false);
@@ -1411,28 +1589,30 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
         if (next) setDualLeftSoloed(false);
       }
       actions.setDualSolo(blockId, isLeftSide, next);
-      if (next && thisChild) {
+      if (next) {
         (isLeftSide ? setDualLeftMuted : setDualRightMuted)(false);
-        actions.setBlockParam(thisChild.blockId, 'enabled', true);
+        actions.setDualMuted(blockId, isLeftSide, false);
       }
     },
-    [actions, blockId, dualLeftSoloed, dualRightSoloed, topDualLeftChild, topDualRightChild]
+    [actions, blockId, dualLeftSoloed, dualRightSoloed]
   );
   // Same-side-only pairing from the Mute side - see handleToggleDualSolo's
   // own comment for why this no longer touches the sibling's real state.
+  // Unconditional (empty or loaded side - see setDualMuted's own comment):
+  // true silence via the recombine's own gain, never the child's `enabled`
+  // (that's bypass, which crossfades to the dry unprocessed input - a real
+  // bug this exact split used to cause).
   const handleDualChildMuteToggle = useCallback(
     (isLeftSide: boolean) => {
-      const thisChild = isLeftSide ? topDualLeftChild : topDualRightChild;
-      if (!thisChild) return;
       const next = isLeftSide ? !dualLeftMuted : !dualRightMuted;
       (isLeftSide ? setDualLeftMuted : setDualRightMuted)(next);
-      actions.setBlockParam(thisChild.blockId, 'enabled', !next);
+      actions.setDualMuted(blockId, isLeftSide, next);
       if (next) {
         (isLeftSide ? setDualLeftSoloed : setDualRightSoloed)(false);
         actions.setDualSolo(blockId, isLeftSide, false);
       }
     },
-    [actions, blockId, dualLeftMuted, dualRightMuted, topDualLeftChild, topDualRightChild]
+    [actions, blockId, dualLeftMuted, dualRightMuted]
   );
 
   // Resets every IR shaping field to default in one native call (a single
@@ -2359,11 +2539,72 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     armed={eqActive}
                     open={showEq}
                     help={HELP.eqToggle}
-                    onClick={() => setShowEq((prev) => !prev)}
+                    onClick={() => {
+                      setShowEq((prev) => !prev);
+                      setShowStereo(false);
+                    }}
                   >
                     EQ
                   </ChromeTextButton>
                 </div>
+                {dualLeft && dualRight && (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: showStereo ? '16rem' : 0,
+                      padding: showStereo ? '4rem 12rem' : 0,
+                      marginRight: showStereo ? -12 : 0,
+                      borderRadius: showStereo ? '100rem' : 0,
+                      backgroundColor: showStereo ? SEGMENTED_TRACK : 'transparent',
+                      flexShrink: 0,
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {showStereo && (
+                      <>
+                        <ChromeIconButton
+                          tone="power"
+                          on={dualStereoProcessingEnabled}
+                          help={HELP.dualStereoProcessingPower}
+                          onClick={handleToggleDualStereoProcessing}
+                        >
+                          <Power />
+                        </ChromeIconButton>
+                        <span
+                          className={uiOffClass(!dualStereoProcessingEnabled)}
+                          style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
+                        >
+                          <ChromeTextButton
+                            armed={false}
+                            help={HELP.dualAlignReset}
+                            onClick={handleResetDualAlign}
+                          >
+                            RESET
+                          </ChromeTextButton>
+                        </span>
+                      </>
+                    )}
+                    <ChromeTextButton
+                      armed={
+                        dualAlignOffset !== 0.5 ||
+                        dualLeftInvert ||
+                        dualRightInvert ||
+                        dualAlignWobbleEnabled ||
+                        dualAlignCrossoverEnabled ||
+                        dualAlignDiffuseEnabled
+                      }
+                      open={showStereo}
+                      help={HELP.dualAlignToggle}
+                      onClick={() => {
+                        setShowStereo((prev) => !prev);
+                        setShowEq(false);
+                      }}
+                    >
+                      STEREO
+                    </ChromeTextButton>
+                  </div>
+                )}
                 <ChromeIconButton
                   help={HELP.removeBlock}
                   onClick={() => actions.removeBlock(blockId)}
@@ -2386,6 +2627,436 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   view={eqView}
                   onSetBand={actions.setBlockEqBand}
                 />
+              </div>
+            ) : showStereo ? (
+              <div
+                className={uiOffClass(!enabled)}
+                style={{
+                  flexShrink: 0,
+                  display: 'flex',
+                  flexDirection: 'row',
+                  alignItems: 'stretch',
+                  padding: `${BODY_PADDING}rem`,
+                  boxSizing: 'border-box',
+                  transition: 'opacity 0.2s ease',
+                }}
+              >
+                {/* Two equal-width halves (not one row centered as a whole
+                    group) so the divider sits at the card's true center and
+                    each side centers independently. */}
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '12rem',
+                  }}
+                >
+                  <DualGoniometerScope blockId={blockId} size={210} />
+                  {/* Correlation bar: same -1..+1 axis DigiCheck showed the
+                      user externally, now live in-plugin - a colored track
+                      (red/yellow/safe zones matching the dot indicator every
+                      other correlation readout in this app already uses) +
+                      a moving marker + the exact numeric value. Stays live
+                      even while Stereo Power is off (below) - it's a
+                      monitor, not a setting, useful for A/B either way. */}
+                  <div
+                    {...helpProps(HELP.dualAlignCorrelation)}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '4rem',
+                      width: '210rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        height: '6rem',
+                        borderRadius: '3rem',
+                        background:
+                          'linear-gradient(to right, ' +
+                          BRAND_RED +
+                          ' 0%, ' +
+                          BRAND_YELLOW +
+                          ' 50%, ' +
+                          SUBTLE +
+                          ' 65%, ' +
+                          SUBTLE +
+                          ' 100%)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '-3rem',
+                          left: `calc(${((dualAlignCorrelation + 1) / 2) * 100}% - 1rem)`,
+                          width: '2rem',
+                          height: '12rem',
+                          borderRadius: '1rem',
+                          backgroundColor: WHITE,
+                        }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        fontFamily: FONT_MONO,
+                        fontSize: '10rem',
+                        color: GRAY,
+                      }}
+                    >
+                      <span>-1</span>
+                      <span style={{ color: WHITE }}>{dualAlignCorrelation.toFixed(2)}</span>
+                      <span>+1</span>
+                    </div>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    width: '1rem',
+                    alignSelf: 'stretch',
+                    backgroundColor: 'rgba(235, 235, 245, 0.24)',
+                  }}
+                />
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '14rem',
+                  }}
+                >
+                  {/* Pan/Vol (+ Link) duplicates - the same controls each
+                      DualSideCard already has, copied here since they're
+                      stereo-image parameters the user kept leaving this
+                      screen to reach (same handlers/state as the compact
+                      card's own row, so dragging either copy stays in sync
+                      with the other). Left/Right labels above each pair -
+                      unlike the compact card (where side is obvious from
+                      which physical card the knobs sit in), a bare knob row
+                      here needs its own explicit "which side is this"
+                      marker. */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'row',
+                      alignItems: 'flex-end',
+                      gap: '16rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '6rem',
+                      }}
+                    >
+                      <span style={{ fontFamily: FONT_MONO, fontSize: '12rem', color: WHITE }}>
+                        Left
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'row', gap: '16rem' }}>
+                        <KnobControl
+                          label="Pan"
+                          value={dualLeftPan}
+                          onChange={handleDualLeftPanChange}
+                          onDragStateChange={handleKnobDragState}
+                          size={KNOB_SIZE_SECONDARY}
+                          labelBottom={false}
+                          thumb="secondary"
+                          scale={dualPanScale}
+                          defaultValue={0.0}
+                          help={HELP.dualPanLeft}
+                        />
+                        <KnobControl
+                          label="Vol"
+                          value={dualLeftVol}
+                          onChange={(val) => handleDualChildVolChange(true, val)}
+                          onDragStateChange={handleKnobDragState}
+                          size={KNOB_SIZE_SECONDARY}
+                          labelBottom={false}
+                          thumb="secondary"
+                          scale={gainDbScale}
+                          defaultValue={0.5}
+                          help={HELP.blockOut}
+                        />
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        position: 'relative',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        alignSelf: 'stretch',
+                        width: `${ICON_BOX_SIZE}rem`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          left: '50%',
+                          width: '1rem',
+                          backgroundColor: 'rgba(235, 235, 245, 0.24)',
+                          transform: 'translateX(-50%)',
+                        }}
+                      />
+                      {dualLeft && dualRight && (
+                        <ChromeIconButton
+                          tone="link"
+                          on={dualLinked}
+                          help={HELP.dualLink}
+                          onClick={handleToggleDualLinked}
+                        >
+                          <Link size={ICON_SIZE} />
+                        </ChromeIconButton>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '6rem',
+                      }}
+                    >
+                      <span style={{ fontFamily: FONT_MONO, fontSize: '12rem', color: WHITE }}>
+                        Right
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'row', gap: '16rem' }}>
+                        <KnobControl
+                          label="Pan"
+                          value={dualRightPan}
+                          onChange={handleDualRightPanChange}
+                          onDragStateChange={handleKnobDragState}
+                          size={KNOB_SIZE_SECONDARY}
+                          labelBottom={false}
+                          thumb="secondary"
+                          scale={dualPanScale}
+                          defaultValue={1.0}
+                          help={HELP.dualPanRight}
+                        />
+                        <KnobControl
+                          label="Vol"
+                          value={dualRightVol}
+                          onChange={(val) => handleDualChildVolChange(false, val)}
+                          onDragStateChange={handleKnobDragState}
+                          size={KNOB_SIZE_SECONDARY}
+                          labelBottom={false}
+                          thumb="secondary"
+                          scale={gainDbScale}
+                          defaultValue={0.5}
+                          help={HELP.blockOut}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  {/* Everything below is what Stereo Power (header) bypasses -
+                      dimmed while off, same "still there, just inert" look
+                      the EQ pill's own Power button already gives its view. */}
+                  <div
+                    className={uiOffClass(!dualStereoProcessingEnabled)}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '20rem',
+                      transition: 'opacity 0.2s ease',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: '16rem',
+                      }}
+                    >
+                      <ChromeIconButton
+                        tone="armed"
+                        on={dualAutoAlignListening}
+                        help={HELP.dualAutoAlign}
+                        onClick={toggleDualAutoAlign}
+                      >
+                        <Equal size={ICON_SIZE} />
+                      </ChromeIconButton>
+                      <ChromeIconButton
+                        tone="armed"
+                        on={dualLeftInvert}
+                        help={HELP.dualInvertLeft}
+                        onClick={() => handleToggleDualInvert(true)}
+                      >
+                        <Ban size={ICON_SIZE} />
+                      </ChromeIconButton>
+                      <KnobControl
+                        label="Offset"
+                        value={dualAlignOffset}
+                        onChange={handleDualAlignOffsetChange}
+                        onDragStateChange={handleKnobDragState}
+                        variant="bipolar"
+                        size={KNOB_SIZE_SECONDARY}
+                        thumb="secondary"
+                        scale={offsetMsScale}
+                        defaultValue={0.5}
+                        onReset={handleResetDualAlign}
+                        help={HELP.dualAlignOffset}
+                      />
+                      <ChromeIconButton
+                        tone="armed"
+                        on={dualRightInvert}
+                        help={HELP.dualInvertRight}
+                        onClick={() => handleToggleDualInvert(false)}
+                      >
+                        <Ban size={ICON_SIZE} />
+                      </ChromeIconButton>
+                    </div>
+                    {/* Wobble/Crossover/Diffuse: fixed-width columns (same
+                        SECTION_WIDTH idea as the global ImageDeckPanel's own
+                        SectionKnob - a label wider than its knob, like
+                        "Crossover", needs real room or it collides with its
+                        neighbor) with the power button floated beside the
+                        knob, not above it - same layout ImageDeckPanel
+                        already uses for this exact control shape. */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'row',
+                        alignItems: 'flex-start',
+                        gap: '18rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${DECK_SECTION_WIDTH}rem`,
+                          position: 'relative',
+                          display: 'flex',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <div
+                          className={uiOffClass(!dualAlignWobbleEnabled)}
+                          style={{ transition: 'opacity 0.2s ease' }}
+                        >
+                          <KnobControl
+                            label="Wobble"
+                            value={dualAlignWobble}
+                            onChange={handleDualAlignWobbleChange}
+                            onDragStateChange={handleKnobDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            thumb="secondary"
+                            scale={percentScale}
+                            defaultValue={0.25}
+                            help={HELP.dualAlignWobble}
+                          />
+                        </div>
+                        <ChromeIconButton
+                          tone="power"
+                          on={dualAlignWobbleEnabled}
+                          help={HELP.dualAlignWobblePower}
+                          onClick={handleToggleDualAlignWobble}
+                          style={{
+                            position: 'absolute',
+                            top: `${(KNOB_SIZE_SECONDARY - ICON_BOX_SIZE) / 2}rem`,
+                            left: `calc(50% + ${KNOB_SIZE_SECONDARY / 2 + 6}rem)`,
+                          }}
+                        >
+                          <Power size={ICON_SIZE} />
+                        </ChromeIconButton>
+                      </div>
+                      <div
+                        style={{
+                          width: `${DECK_SECTION_WIDTH}rem`,
+                          position: 'relative',
+                          display: 'flex',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <div
+                          className={uiOffClass(!dualAlignCrossoverEnabled)}
+                          style={{ transition: 'opacity 0.2s ease' }}
+                        >
+                          <KnobControl
+                            label="Crossover"
+                            value={dualAlignCrossover}
+                            onChange={handleDualAlignCrossoverChange}
+                            onDragStateChange={handleKnobDragState}
+                            size={KNOB_SIZE_SECONDARY}
+                            thumb="secondary"
+                            scale={crossoverHzScale}
+                            defaultValue={0.5}
+                            help={HELP.dualAlignCrossover}
+                          />
+                        </div>
+                        <ChromeIconButton
+                          tone="power"
+                          on={dualAlignCrossoverEnabled}
+                          help={HELP.dualAlignCrossoverPower}
+                          onClick={handleToggleDualAlignCrossover}
+                          style={{
+                            position: 'absolute',
+                            top: `${(KNOB_SIZE_SECONDARY - ICON_BOX_SIZE) / 2}rem`,
+                            left: `calc(50% + ${KNOB_SIZE_SECONDARY / 2 + 6}rem)`,
+                          }}
+                        >
+                          <Power size={ICON_SIZE} />
+                        </ChromeIconButton>
+                      </div>
+                      {/* No continuous control, just a power toggle - the
+                          same fixed-height slot (matching KNOB_SIZE_SECONDARY,
+                          the knob columns' own height) keeps its button and
+                          label lined up with Wobble/Crossover's, same
+                          technique as ImageDeckPanel's own Diffuse column. */}
+                      <div
+                        style={{
+                          width: `${DECK_SECTION_WIDTH}rem`,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: `${KNOB_LABEL_GAP}rem`,
+                        }}
+                      >
+                        <div
+                          style={{
+                            height: `${KNOB_SIZE_SECONDARY}rem`,
+                            display: 'grid',
+                            placeItems: 'center',
+                          }}
+                        >
+                          <ChromeIconButton
+                            tone="power"
+                            on={dualAlignDiffuseEnabled}
+                            help={HELP.dualAlignDiffuse}
+                            onClick={handleToggleDualAlignDiffuse}
+                          >
+                            <Power size={ICON_SIZE} />
+                          </ChromeIconButton>
+                        </div>
+                        <span
+                          style={{
+                            fontFamily: FONT_MONO,
+                            fontSize: '12rem',
+                            letterSpacing: '0.5px',
+                            textTransform: 'uppercase',
+                            color: GRAY,
+                          }}
+                        >
+                          Diffuse
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : (
               <div
@@ -2425,14 +3096,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   muted={dualLeftMuted}
                   onMuteToggle={() => handleDualChildMuteToggle(true)}
                   impliedMuted={!dualLeftMuted && dualRightSoloed}
-                  emptyMuted={params.dualLeftEmptyMuted ?? false}
-                  onEmptyMuteToggle={() =>
-                    actions.setDualEmptySideMuted(
-                      blockId,
-                      true,
-                      !(params.dualLeftEmptyMuted ?? false)
-                    )
-                  }
                 />
                 {/* Vertical divider between the two sides (same hairline
                   treatment as the gallery tile's own split preview, see
@@ -2449,7 +3112,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
-                    width: `${ICON_BOX_SIZE}rem`,
                   }}
                 >
                   <div
@@ -2464,15 +3126,24 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     }}
                   />
                   {dualLeft && dualRight && (
-                    <ChromeIconButton
-                      tone="link"
-                      on={dualLinked}
-                      help={HELP.dualLink}
-                      onClick={handleToggleDualLinked}
-                      style={{ position: 'relative' }}
+                    <div
+                      style={{
+                        position: 'relative',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '8rem',
+                      }}
                     >
-                      <Link size={ICON_SIZE} />
-                    </ChromeIconButton>
+                      <ChromeIconButton
+                        tone="link"
+                        on={dualLinked}
+                        help={HELP.dualLink}
+                        onClick={handleToggleDualLinked}
+                      >
+                        <Link size={ICON_SIZE} />
+                      </ChromeIconButton>
+                    </div>
                   )}
                 </div>
                 <DualSideCard
@@ -2494,14 +3165,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   muted={dualRightMuted}
                   onMuteToggle={() => handleDualChildMuteToggle(false)}
                   impliedMuted={!dualRightMuted && dualLeftSoloed}
-                  emptyMuted={params.dualRightEmptyMuted ?? false}
-                  onEmptyMuteToggle={() =>
-                    actions.setDualEmptySideMuted(
-                      blockId,
-                      false,
-                      !(params.dualRightEmptyMuted ?? false)
-                    )
-                  }
                 />
               </div>
             )}

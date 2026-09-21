@@ -77,10 +77,29 @@ export interface ChainActions {
   /** Exclusive per-side solo for a Dual Mono block - soloing one side
       clears the other's. */
   setDualSolo: (blockId: string, isLeftSide: boolean, soloed: boolean) => void;
-  /** Mutes a Dual Mono side's pass-through while it has nothing loaded (see
-      BlockParams.dualLeftEmptyMuted's own comment) - inert once a real
-      tone occupies the side. */
-  setDualEmptySideMuted: (blockId: string, isLeftSide: boolean, muted: boolean) => void;
+  /** Per-side Mute for a Dual Mono block - true silence, unconditional
+      whether the side is empty or loaded (see BlockParams.dualLeftMuted's
+      own comment). */
+  setDualMuted: (blockId: string, isLeftSide: boolean, muted: boolean) => void;
+  /** Per-side polarity flip (Ø) for a Dual Mono block - independent per
+      side, unlike Solo's exclusivity. */
+  setDualInvert: (blockId: string, isLeftSide: boolean, inverted: boolean) => void;
+  /** Align for a Dual Mono block - one bundled call, same idiom as
+      setDualImage (a whole knob/toggle surface lands together, called
+      continuously while a knob drags). */
+  setDualAlign: (
+    blockId: string,
+    enabled: boolean,
+    offset: number,
+    wobble: number,
+    wobbleEnabled: boolean,
+    crossover: number,
+    crossoverEnabled: boolean,
+    diffuseEnabled: boolean
+  ) => void;
+  /** Master bypass for the whole Stereo Processing screen (Align + Ø),
+      without touching any of the dialed-in values. */
+  setDualStereoProcessingEnabled: (blockId: string, enabled: boolean) => void;
   removeBlock: (blockId: string) => void;
   /** Launch the Select flow to replace this block's tone in place.
       `navigateToDetail` (default false, the gallery tile's own swap action):

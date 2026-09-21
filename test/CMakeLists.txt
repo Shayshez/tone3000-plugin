@@ -53,6 +53,7 @@ target_sources(DspTests PRIVATE
     # compiles the processor exactly like the headless plugin build.
     ../plugin/src/AutoOffset.cpp
     ../plugin/src/BlockEq.cpp
+    ../plugin/src/BlockGoniometer.cpp
     ../plugin/src/BlockPredelay.cpp
     ../plugin/src/BlockSpectrum.cpp
     ../plugin/src/MidiMapper.cpp

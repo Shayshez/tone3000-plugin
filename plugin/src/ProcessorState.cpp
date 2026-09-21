@@ -153,8 +153,19 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
   blockState.setProperty("dualLinked", block.dualLinked, nullptr);
   blockState.setProperty("dualSoloLeft", block.dualSoloLeft, nullptr);
   blockState.setProperty("dualSoloRight", block.dualSoloRight, nullptr);
-  blockState.setProperty("dualLeftEmptyMuted", block.dualLeftEmptyMuted, nullptr);
-  blockState.setProperty("dualRightEmptyMuted", block.dualRightEmptyMuted, nullptr);
+  blockState.setProperty("dualLeftMuted", block.dualLeftMuted, nullptr);
+  blockState.setProperty("dualRightMuted", block.dualRightMuted, nullptr);
+  blockState.setProperty("dualLeftInvert", block.dualLeftInvert, nullptr);
+  blockState.setProperty("dualRightInvert", block.dualRightInvert, nullptr);
+  blockState.setProperty("dualAlignEnabled", block.dualAlignEnabled, nullptr);
+  blockState.setProperty("dualStereoProcessingEnabled", block.dualStereoProcessingEnabled,
+                         nullptr);
+  blockState.setProperty("dualAlignOffset", block.dualAlignOffsetNormalized, nullptr);
+  blockState.setProperty("dualAlignWobble", block.dualAlignWobbleNormalized, nullptr);
+  blockState.setProperty("dualAlignWobbleEnabled", block.dualAlignWobbleEnabled, nullptr);
+  blockState.setProperty("dualAlignCrossover", block.dualAlignCrossoverNormalized, nullptr);
+  blockState.setProperty("dualAlignCrossoverEnabled", block.dualAlignCrossoverEnabled, nullptr);
+  blockState.setProperty("dualAlignDiffuseEnabled", block.dualAlignDiffuseEnabled, nullptr);
 
   if (block.type != ChainBlockType::INSERT) {
     blockState.setProperty("toneId", block.toneId, nullptr);
@@ -233,10 +244,28 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
   block.dualLinked = static_cast<bool>(blockState.getProperty("dualLinked", false));
   block.dualSoloLeft = static_cast<bool>(blockState.getProperty("dualSoloLeft", false));
   block.dualSoloRight = static_cast<bool>(blockState.getProperty("dualSoloRight", false));
-  block.dualLeftEmptyMuted =
-      static_cast<bool>(blockState.getProperty("dualLeftEmptyMuted", false));
-  block.dualRightEmptyMuted =
-      static_cast<bool>(blockState.getProperty("dualRightEmptyMuted", false));
+  block.dualLeftMuted = static_cast<bool>(blockState.getProperty("dualLeftMuted", false));
+  block.dualRightMuted = static_cast<bool>(blockState.getProperty("dualRightMuted", false));
+  // Fallbacks match the struct's own defaults (off, centered) - a state
+  // saved before Align existed restores to the same no-op values a fresh
+  // Dual Mono block starts with.
+  block.dualLeftInvert = static_cast<bool>(blockState.getProperty("dualLeftInvert", false));
+  block.dualRightInvert = static_cast<bool>(blockState.getProperty("dualRightInvert", false));
+  block.dualAlignEnabled = static_cast<bool>(blockState.getProperty("dualAlignEnabled", false));
+  block.dualStereoProcessingEnabled =
+      static_cast<bool>(blockState.getProperty("dualStereoProcessingEnabled", true));
+  block.dualAlignOffsetNormalized = juce::jlimit(
+      0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualAlignOffset", 0.5f)));
+  block.dualAlignWobbleNormalized = juce::jlimit(
+      0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualAlignWobble", 0.25f)));
+  block.dualAlignWobbleEnabled =
+      static_cast<bool>(blockState.getProperty("dualAlignWobbleEnabled", false));
+  block.dualAlignCrossoverNormalized = juce::jlimit(
+      0.0f, 1.0f, static_cast<float>(blockState.getProperty("dualAlignCrossover", 0.5f)));
+  block.dualAlignCrossoverEnabled =
+      static_cast<bool>(blockState.getProperty("dualAlignCrossoverEnabled", false));
+  block.dualAlignDiffuseEnabled =
+      static_cast<bool>(blockState.getProperty("dualAlignDiffuseEnabled", false));
 
   // States from before per-block sizes restore as lite (0.0). An engine the
   // restore keeps loaded (see reconcileChainFromTree) retiers in place: the

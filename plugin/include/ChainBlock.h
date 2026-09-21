@@ -12,7 +12,9 @@
 #include "BlockPredelay.h"
 #include "BlockSpectrum.h"
 #include "ChainOversampler.h"
+#include "BlockGoniometer.h"
 #include "NamEngine.h"
+#include "StereoOffset.h"
 
 // IR Size: vari-speed duration/pitch ratio from the normalized 0..1 knob
 // value (see ChainBlock::sizeNormalized). Exponential/log taper, not linear,
@@ -605,27 +607,78 @@ struct ChainBlock {
   // exclusivity.
   bool dualSoloLeft{false};
   bool dualSoloRight{false};
-  // DUAL_MONO only: an empty side is still a live pass-through (see
-  // runDualMono's own seed comment - its half of the input feeds dl/dr
-  // unchanged with nothing loaded to process it), so users asked for a way
-  // to silence that pass-through independent of Solo/Link. Only takes
-  // effect while the corresponding side actually has nothing loaded
-  // (runDualMono checks dualLeft/dualRight.empty() itself); once a real
-  // tone lands there, the flag is inert and the ordinary per-child `enabled`
-  // mute takes over instead. Persists unconditionally either way - same
-  // "doesn't require the state it gates to be true right now" shape as
-  // dualLinked above.
-  bool dualLeftEmptyMuted{false};
-  bool dualRightEmptyMuted{false};
-  // Smoothed 0/1 gain view of Solo (above) *and* the empty-side mute fields
-  // - a raw instant 0<->1 multiply on dl/dr would click (same reasoning the
+  // DUAL_MONO only: per-side Mute, unconditional (empty or loaded - see
+  // setDualMuted's own comment for why this is NOT the child's own
+  // `enabled` bypass toggle: bypass crossfades to the dry, unprocessed
+  // input, which is not silence, so an ordinary block's Power button is the
+  // wrong tool for "mute this side"). Applied as a smoothed 0/1 gain on
+  // that side's contribution to the recombine (see dualLeftSoloGainSmoother
+  // below), the same true-silence mechanism Solo already uses. Persists
+  // unconditionally, same "doesn't require the state it gates to be true
+  // right now" shape as dualLinked above.
+  bool dualLeftMuted{false};
+  bool dualRightMuted{false};
+  // Smoothed 0/1 gain view of Solo (above) *and* the Mute fields - a raw
+  // instant 0<->1 multiply on dl/dr would click (same reasoning the
   // chain-level solo's own gain rides a smoother for, imageGainLtoL et al.,
   // 20ms ramps). Reset/seeded alongside the pan/width smoothers above (same
   // call sites, ChainBlock.h's own convention); the recombine step sets
   // each one's *target* every call (never a hard reset) so a live solo or
-  // empty-mute toggle glides.
+  // mute toggle glides.
   juce::LinearSmoothedValue<float> dualLeftSoloGainSmoother;
   juce::LinearSmoothedValue<float> dualRightSoloGainSmoother;
+  // DUAL_MONO only: per-side polarity flip (Ø) - two amp captures don't
+  // share a polarity convention, so one side can arrive 180 degrees out
+  // against the other; genuinely inverted, not fixable by Align's delay
+  // alone (Align corrects timing, this corrects sign). Mirrors the
+  // chain-level pan rail's own Ø chip (chainInvertLeft/Right APVTS
+  // params), but plain per-block fields like every other DUAL_MONO-only
+  // control here - see setDualInvert. Applied as a smoothed +-1 gain
+  // multiplied into the same per-sample recombine loop that already reads
+  // dualLeft/RightSoloGainSmoother (runDualMono), same "glide, never step"
+  // reasoning; reset/seeded alongside the smoothers above.
+  bool dualLeftInvert{false};
+  bool dualRightInvert{false};
+  juce::LinearSmoothedValue<float> dualLeftPolaritySmoother;
+  juce::LinearSmoothedValue<float> dualRightPolaritySmoother;
+
+  // DUAL_MONO only: Align - the same corrective-delay + advanced-deck
+  // (Wobble/Crossover/Diffuse) engine the global stereo-chain-mode Align
+  // uses (see StereoOffset.h), scoped to this block's own dl/dr pair
+  // instead of the two top-level lanes. runDualMono runs it on the sides'
+  // raw output, right before the Pan/Width recombine - the direct analogue
+  // of processImageStage running the global engine on chL/chR before
+  // Balance+Pan (Processor.cpp). Plain per-block fields, not APVTS
+  // parameters, same reasoning as dualLeftPanNormalized above: these
+  // blocks are created/destroyed dynamically. Defaults mirror the global
+  // Align's own defaults (off, centered, same wobble/crossover spans) so a
+  // fresh Dual Mono block starts as a no-op, identical to today.
+  StereoOffset dualAlign;
+  bool dualAlignEnabled{false};
+  float dualAlignOffsetNormalized{0.5f};  // bipolar, 0.5 = center = 0 ms
+  float dualAlignWobbleNormalized{0.25f};
+  bool dualAlignWobbleEnabled{false};
+  float dualAlignCrossoverNormalized{0.5f};  // log map 32.5..520 Hz; 0.5 = 130 Hz
+  bool dualAlignCrossoverEnabled{false};
+  bool dualAlignDiffuseEnabled{false};
+  // Master bypass for the whole Stereo Processing screen (Align's Offset/
+  // Wobble/Crossover/Diffuse AND Ø), same "Power bypasses everything on
+  // this page, without touching any of the dialed-in values" shape the EQ
+  // pill's own Power button already has (BlockEq's `enabled`). Overrides
+  // at the point of use in runDualMono (forces Align disengaged, Ø
+  // neutral) rather than mutating dualAlignEnabled/dualLeftInvert/
+  // dualRightInvert themselves, so turning it back on restores exactly
+  // what was dialed in. Default true (not bypassed) - purely an
+  // additional override, so existing states/tests are unaffected.
+  bool dualStereoProcessingEnabled{true};
+
+  // DUAL_MONO only: X-Y scope (goniometer) of the two sides' post-Align
+  // output, for the Stereo Processing screen's live phase/mono-safety
+  // visualization - see BlockGoniometer.h. Same "only capture while its UI
+  // view is open" gating as `spectrum` above; fed in runDualMono right
+  // after the Align block processes dl/dr, before the Pan/Width recombine,
+  // same point dualAlign's own correlation() LED reads from.
+  BlockGoniometer dualGoniometer;
 
   ChainBlock(const std::string& blockId, ChainBlockType blockType)
       : id(blockId), type(blockType), toneId(0), activeModelId(0), loaded(false),
