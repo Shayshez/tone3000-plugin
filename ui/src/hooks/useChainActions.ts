@@ -66,6 +66,18 @@ export interface ChainActions {
   addToDualSlot: (dualBlockId: string, isLeftSide: boolean) => void;
   /** Clears one side of a Dual Mono block back to empty. */
   removeDualSlotContent: (dualBlockId: string, isLeftSide: boolean) => void;
+  /** An empty side's own "copy from sibling" button: fills it with a clone
+      of the loaded sibling's own content. Only valid when this side is
+      empty and the sibling is loaded. */
+  copyDualSlotFromSibling: (dualBlockId: string, toLeftSide: boolean) => void;
+  /** The occupied tile's own right-click "Convert to Dual Mono" row:
+      replaces this block in place with a fresh Dual Mono wrapper, Left
+      seeded from its own content, Right left empty. */
+  convertBlockToDualMono: (blockId: string) => void;
+  /** Mirror image - a Dual Mono block's own "collapse to single" button:
+      replaces the wrapper in place with an ordinary block seeded from
+      whichever side is loaded. Only valid with exactly one side loaded. */
+  collapseDualMonoToSingle: (blockId: string) => void;
   /** Live Pan L/Pan R/Width for a Dual Mono block's recombine - called
       continuously while a knob drags (native-side smoothing handles
       click-avoidance), same idiom as every other continuous param. */

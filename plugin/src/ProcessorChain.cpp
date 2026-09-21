@@ -636,6 +636,213 @@ bool TONE3000Processor::removeDualSlotContent(const std::string& dualBlockId, bo
   return true;
 }
 
+std::string TONE3000Processor::copyDualSlotFromSibling(const std::string& dualBlockId,
+                                                        bool toLeftSide) {
+  // Structural like loadToneIntoDualSlot (a fresh child engine lands in the
+  // empty slot) - same mute-splice shape.
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  ChainBlock* dualBlock = findBlockById(dualBlockId);
+  if (dualBlock == nullptr || dualBlock->type != ChainBlockType::DUAL_MONO)
+    return "";
+
+  auto& target = toLeftSide ? dualBlock->dualLeft : dualBlock->dualRight;
+  auto& sibling = toLeftSide ? dualBlock->dualRight : dualBlock->dualLeft;
+  // Only the "one side empty, the other loaded" shape makes sense here -
+  // an already-loaded target has real content of its own to lose, and an
+  // empty sibling has nothing to copy.
+  if (!target.empty() || sibling.empty())
+    return "";
+
+  const ChainBlock& source = *sibling[0];
+
+  pushChainHistory();
+
+  // Same clone shape convertBlockToDualMono/duplicateChainBlock use -
+  // reloads cache-first, no network round trip - so the copy sounds
+  // identical to the source the moment its engine lands, the quick start
+  // for dialing in width from a single mono source (Align/Pan/Ø diverge
+  // it from there).
+  const std::string newId = juce::Uuid().toString().toStdString();
+  auto clone = std::make_unique<ChainBlock>(newId, source.type);
+  applyBlockSettings(*clone, serializeBlockSettings(source));
+  setToneOnBlock(*clone, source.toneId, source.toneJson, source.toneVar);
+  clone->activeModelId = source.activeModelId;
+  clone->modelCache = source.modelCache;
+  clone->loaded = false;
+  clone->modelLoading = true;
+  clone->applyDefaultMixOnLoad = false;
+
+  if (source.type == ChainBlockType::IR) {
+    clone->irCategory = source.irCategory;
+    clone->irCategoryNeedsDurationGuess = source.irCategoryNeedsDurationGuess;
+  }
+
+  target.push_back(std::move(clone));
+
+  bumpChainRevision();
+  queueActiveModelLoad(*target[0]);
+
+  DBG("Copied Dual Mono sibling into " << (toLeftSide ? "left" : "right") << " side of "
+                                       << dualBlockId << " -> " << newId);
+  return newId;
+}
+
+std::string TONE3000Processor::convertBlockToDualMono(const std::string& blockId) {
+  // An entirely different block object (DUAL_MONO, a different processing
+  // path - runDualMono, not the ordinary per-block loop) replaces this
+  // slot, and its fresh Left child needs a beat to reload before it's
+  // actually audible - the same "brand new engine, needs a moment to sound
+  // right" shape duplicateChainBlock/addDualMonoBlock mute-splice for, not
+  // a single block's own wet-fade (removeChainBlock's approach), since
+  // nothing here is "the same engine, just going away."
+  std::unique_ptr<ChainBlock> oldBlock;  // destroyed after lock/fade release
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  Lane* targetLane = nullptr;
+  Lane::iterator slot;
+  for (auto& l : lanes) {
+    auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+      return b->id == blockId;
+    });
+    if (it != l.end()) {
+      targetLane = &l;
+      slot = it;
+      break;
+    }
+  }
+  if (targetLane == nullptr)
+    return "";
+
+  const ChainBlock* source = slot->get();
+  if (isInsertBlock(*slot) || source->type == ChainBlockType::DUAL_MONO) {
+    DBG("convertBlockToDualMono: source not convertible: " << blockId);
+    return "";
+  }
+
+  pushChainHistory();
+
+  // The new Left child: a full clone of the source's settings/tone/model
+  // cache, same pattern duplicateChainBlock uses - reloads cache-first, no
+  // network round trip, sounds identical the moment its engine lands.
+  const std::string childId = juce::Uuid().toString().toStdString();
+  auto child = std::make_unique<ChainBlock>(childId, source->type);
+  applyBlockSettings(*child, serializeBlockSettings(*source));
+  setToneOnBlock(*child, source->toneId, source->toneJson, source->toneVar);
+  child->activeModelId = source->activeModelId;
+  child->modelCache = source->modelCache;
+  child->loaded = false;
+  child->modelLoading = true;
+  child->applyDefaultMixOnLoad = false;  // the copied mix is a setting, not a default
+
+  if (source->type == ChainBlockType::IR) {
+    child->irCategory = source->irCategory;
+    child->irCategoryNeedsDurationGuess = source->irCategoryNeedsDurationGuess;
+  }
+
+  // The wrapper itself: same synthetic tone addDualMonoBlock uses (no model
+  // of its own - only its children have one).
+  const std::string wrapperId = juce::Uuid().toString().toStdString();
+  auto wrapper = std::make_unique<ChainBlock>(wrapperId, ChainBlockType::DUAL_MONO);
+  juce::DynamicObject::Ptr tone = new juce::DynamicObject();
+  tone->setProperty("id", 0);
+  tone->setProperty("local", true);
+  tone->setProperty("title", "Dual Mono");
+  tone->setProperty("format", "dualMono");
+  const juce::var toneVar(tone.get());
+  setToneOnBlock(*wrapper, 0, juce::JSON::toString(toneVar, true), toneVar);
+  wrapper->dualLeft.push_back(std::move(child));
+  // dualRight starts empty, same as a freshly added Dual Mono block - the
+  // user fills it in from the wrapper's own detail view.
+
+  oldBlock = std::move(*slot);
+  *slot = std::move(wrapper);
+  refreshIrTailLength();  // the old slot's IR (if any) just left the chain
+
+  bumpChainRevision();
+  // Marks the wrapper loaded and resets its Pan/Width/Solo/Ø/Align
+  // smoothers (it comes to life synchronously, not through prepareChain's
+  // next pass - same reasoning addDualMonoBlock's own construction
+  // documents), and recurses into the Left child to queue its own
+  // cache-first reload.
+  queueActiveModelLoad(*findBlockById(wrapperId));
+
+  DBG("Converted block " << blockId << " -> Dual Mono " << wrapperId << " (left = " << childId
+                         << ")");
+  return wrapperId;
+}
+
+std::string TONE3000Processor::collapseDualMonoToSingle(const std::string& blockId) {
+  // Mirror image of convertBlockToDualMono: an entirely different block
+  // object (an ordinary block, not DUAL_MONO) replaces this slot, so the
+  // same mute-splice shape applies.
+  std::unique_ptr<ChainBlock> oldWrapper;  // destroyed after lock/fade release
+  ChainEditFade editFade(*this);
+  juce::ScopedLock lock(chainMutex);
+
+  Lane* targetLane = nullptr;
+  Lane::iterator slot;
+  for (auto& l : lanes) {
+    auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+      return b->id == blockId;
+    });
+    if (it != l.end()) {
+      targetLane = &l;
+      slot = it;
+      break;
+    }
+  }
+  if (targetLane == nullptr)
+    return "";
+
+  ChainBlock* wrapper = slot->get();
+  if (wrapper->type != ChainBlockType::DUAL_MONO)
+    return "";
+
+  // Only a genuine "one side active, the other has no block" shape
+  // collapses cleanly - both empty has no content to keep, both loaded
+  // would silently discard one side's tone with no way back.
+  const bool leftLoaded = !wrapper->dualLeft.empty();
+  const bool rightLoaded = !wrapper->dualRight.empty();
+  if (leftLoaded == rightLoaded) {
+    DBG("collapseDualMonoToSingle: needs exactly one loaded side: " << blockId);
+    return "";
+  }
+
+  const ChainBlock& source = *(leftLoaded ? wrapper->dualLeft : wrapper->dualRight)[0];
+
+  pushChainHistory();
+
+  // Same clone shape convertBlockToDualMono/duplicateChainBlock use -
+  // reloads cache-first, no network round trip.
+  const std::string newId = juce::Uuid().toString().toStdString();
+  auto single = std::make_unique<ChainBlock>(newId, source.type);
+  applyBlockSettings(*single, serializeBlockSettings(source));
+  setToneOnBlock(*single, source.toneId, source.toneJson, source.toneVar);
+  single->activeModelId = source.activeModelId;
+  single->modelCache = source.modelCache;
+  single->loaded = false;
+  single->modelLoading = true;
+  single->applyDefaultMixOnLoad = false;
+
+  if (source.type == ChainBlockType::IR) {
+    single->irCategory = source.irCategory;
+    single->irCategoryNeedsDurationGuess = source.irCategoryNeedsDurationGuess;
+  }
+
+  oldWrapper = std::move(*slot);
+  *slot = std::move(single);
+  refreshIrTailLength();  // the wrapper's own tail (if any) just left the chain
+
+  bumpChainRevision();
+  queueActiveModelLoad(*findBlockById(newId));
+
+  DBG("Collapsed Dual Mono " << blockId << " -> " << newId);
+  return newId;
+}
+
 std::string TONE3000Processor::landToneBlock(std::unique_ptr<ChainBlock> block,
                                              const juce::String& side, int index) {
   const std::string newId = block->id;

@@ -15,6 +15,7 @@ import {
   ChevronUp as LChevronUp,
   Circle as LCircle,
   ClipboardPaste as LClipboardPaste,
+  Combine as LCombine,
   Copy as LCopy,
   Download as LDownload,
   Equal as LEqual,
@@ -84,6 +85,7 @@ export const ChevronUp = scaled(LChevronUp, 'ChevronUp');
 export const Ban = scaled(LBan, 'Ban');
 export const Circle = scaled(LCircle, 'Circle');
 export const ClipboardPaste = scaled(LClipboardPaste, 'ClipboardPaste');
+export const Combine = scaled(LCombine, 'Combine');
 export const Copy = scaled(LCopy, 'Copy');
 export const Download = scaled(LDownload, 'Download');
 export const Equal = scaled(LEqual, 'Equal');

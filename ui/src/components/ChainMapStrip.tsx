@@ -23,18 +23,7 @@ import {
   MUTED,
 } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
-import { isEqFlat, isInsertSlot } from '../types/chain';
-
-/** Abbreviated strip label per native block type (ToneBlock.blockType):
-    mirrors the header's own NAM/IR split, plus the newer CAB, EQ, and
-    Dual Mono types. */
-const BLOCK_TYPE_LABEL: Record<ToneBlock['blockType'], string> = {
-  nam: 'NAM',
-  ir: 'IR',
-  cab: 'CAB',
-  eq: 'EQ',
-  dualMono: 'DUAL',
-};
+import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
 
 /** Every chip (tone label or "+") is this exact box, regardless of label
     length, so the strip reads as a uniform row rather than ragged pill

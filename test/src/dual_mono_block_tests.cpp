@@ -207,6 +207,287 @@ TEST(DualMonoBlockTest, DefaultsToFirstInsertWhenNoTargetGiven) {
   EXPECT_EQ(layout.front().first, juce::String("tone"));
 }
 
+TEST(DualMonoBlockTest, ConvertBlockToDualMonoWrapsSourceAsLeftChild) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  auto ir = makeIrBlockTree("blk-ir", 1, 100);
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(ir, nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const auto before = laneLayout(proc.getChainState(-1), "chain");
+  size_t sourceIndex = before.size();
+  for (size_t i = 0; i < before.size(); ++i)
+    if (before[i].second == juce::String("blk-ir")) sourceIndex = i;
+  ASSERT_LT(sourceIndex, before.size()) << "fixture setup didn't land the source block";
+
+  const std::string wrapperId = proc.convertBlockToDualMono("blk-ir");
+  ASSERT_FALSE(wrapperId.empty());
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  const auto after = laneLayout(proc.getChainState(-1), "chain");
+  EXPECT_EQ(after.size(), before.size())
+      << "converting in place should not change the lane's slot count";
+  EXPECT_EQ(after[sourceIndex].second, juce::String(wrapperId))
+      << "the wrapper should land at the exact slot the original block occupied";
+  EXPECT_TRUE(blockById(proc, "blk-ir").isVoid())
+      << "the original block's own id should no longer resolve as a top-level block";
+
+  const juce::var wrapper = blockById(proc, wrapperId);
+  ASSERT_FALSE(wrapper.isVoid());
+  EXPECT_EQ(wrapper["blockType"].toString(), juce::String("dualMono"));
+  const auto* leftArr = wrapper["dualLeft"].getArray();
+  ASSERT_TRUE(leftArr != nullptr && leftArr->size() == 1)
+      << "the source's own content should land as the wrapper's sole Left child";
+  const juce::var leftChild = (*leftArr)[0];
+  EXPECT_EQ(leftChild["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(static_cast<int>(leftChild["tone"]["id"]), 1);
+  EXPECT_FLOAT_EQ(static_cast<float>(leftChild["params"]["mix"]), 1.0f);
+  const auto* rightArr = wrapper["dualRight"].getArray();
+  EXPECT_TRUE(rightArr != nullptr && rightArr->isEmpty())
+      << "conversion should leave the Right side empty for the user to fill in";
+}
+
+TEST(DualMonoBlockTest, ConvertBlockToDualMonoRejectsInsertAndAlreadyDualBlocks) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const auto layout = laneLayout(proc.getChainState(-1), "chain");
+  ASSERT_FALSE(layout.empty());
+  EXPECT_EQ(layout.front().first, juce::String("insert"));
+  EXPECT_TRUE(proc.convertBlockToDualMono(layout.front().second.toStdString()).empty())
+      << "an insert slot has no content to convert";
+
+  const std::string dualId = proc.addDualMonoBlock();
+  ASSERT_FALSE(dualId.empty());
+  EXPECT_TRUE(proc.convertBlockToDualMono(dualId).empty())
+      << "a Dual Mono block is already the target shape";
+}
+
+TEST(DualMonoBlockTest, ConvertBlockToDualMonoSurvivesUndoRedo) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  auto ir = makeIrBlockTree("blk-ir", 1, 100);
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(ir, nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const std::string wrapperId = proc.convertBlockToDualMono("blk-ir");
+  ASSERT_FALSE(wrapperId.empty());
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  ASSERT_TRUE(proc.undoChain());
+  EXPECT_TRUE(blockById(proc, wrapperId).isVoid()) << "undo didn't remove the wrapper";
+  const juce::var restoredSource = blockById(proc, "blk-ir");
+  ASSERT_FALSE(restoredSource.isVoid()) << "undo didn't restore the original block";
+  EXPECT_EQ(restoredSource["blockType"].toString(), juce::String("ir"));
+
+  ASSERT_TRUE(proc.redoChain());
+  EXPECT_TRUE(blockById(proc, "blk-ir").isVoid());
+  const juce::var restoredWrapper = blockById(proc, wrapperId);
+  ASSERT_FALSE(restoredWrapper.isVoid()) << "redo didn't restore the wrapper";
+  EXPECT_EQ(restoredWrapper["blockType"].toString(), juce::String("dualMono"));
+}
+
+TEST(DualMonoBlockTest, CollapseDualMonoToSingleRestoresTheLoneLoadedSide) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  auto ir = makeIrBlockTree("blk-ir", 1, 100);
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(ir, nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const auto before = laneLayout(proc.getChainState(-1), "chain");
+  size_t sourceIndex = before.size();
+  for (size_t i = 0; i < before.size(); ++i)
+    if (before[i].second == juce::String("blk-ir")) sourceIndex = i;
+  ASSERT_LT(sourceIndex, before.size());
+
+  const std::string wrapperId = proc.convertBlockToDualMono("blk-ir");
+  ASSERT_FALSE(wrapperId.empty());
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  const std::string singleId = proc.collapseDualMonoToSingle(wrapperId);
+  ASSERT_FALSE(singleId.empty());
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const auto after = laneLayout(proc.getChainState(-1), "chain");
+  EXPECT_EQ(after.size(), before.size())
+      << "collapsing in place should not change the lane's slot count";
+  EXPECT_EQ(after[sourceIndex].second, juce::String(singleId))
+      << "the collapsed block should land at the exact slot the wrapper occupied";
+  EXPECT_TRUE(blockById(proc, wrapperId).isVoid())
+      << "the wrapper's own id should no longer resolve as a top-level block";
+
+  const juce::var single = blockById(proc, singleId);
+  ASSERT_FALSE(single.isVoid());
+  EXPECT_EQ(single["blockType"].toString(), juce::String("ir"));
+  EXPECT_EQ(static_cast<int>(single["tone"]["id"]), 1);
+  EXPECT_FLOAT_EQ(static_cast<float>(single["params"]["mix"]), 1.0f);
+}
+
+TEST(DualMonoBlockTest, CollapseDualMonoToSingleRejectsBothEmptyOrBothLoaded) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string emptyWrapperId = proc.addDualMonoBlock();
+  ASSERT_FALSE(emptyWrapperId.empty());
+  EXPECT_TRUE(proc.collapseDualMonoToSingle(emptyWrapperId).empty())
+      << "both sides empty has nothing to collapse to";
+
+  const std::string leftId = proc.loadToneIntoDualSlot(
+      emptyWrapperId, /*isLeftSide=*/true,
+      juce::String(
+          "{\"id\":1,\"format\":\"nam\",\"models\":[{\"id\":10,\"name\":\"amp\",\"model_url\":"
+          "\"https://test.invalid/amp.nam\"}]}"));
+  ASSERT_FALSE(leftId.empty());
+  const std::string rightId = proc.loadToneIntoDualSlot(
+      emptyWrapperId, /*isLeftSide=*/false,
+      juce::String(
+          "{\"id\":2,\"format\":\"ir\",\"models\":[{\"id\":20,\"name\":\"cab\",\"model_url\":"
+          "\"https://test.invalid/cab.wav\"}]}"));
+  ASSERT_FALSE(rightId.empty());
+  EXPECT_TRUE(proc.collapseDualMonoToSingle(emptyWrapperId).empty())
+      << "both sides loaded has no clear single side to keep";
+}
+
+TEST(DualMonoBlockTest, CollapseDualMonoToSingleSurvivesUndoRedo) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  auto ir = makeIrBlockTree("blk-ir", 1, 100);
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(ir, nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const std::string wrapperId = proc.convertBlockToDualMono("blk-ir");
+  ASSERT_FALSE(wrapperId.empty());
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+  const std::string singleId = proc.collapseDualMonoToSingle(wrapperId);
+  ASSERT_FALSE(singleId.empty());
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  ASSERT_TRUE(proc.undoChain());
+  EXPECT_TRUE(blockById(proc, singleId).isVoid()) << "undo didn't remove the collapsed block";
+  const juce::var restoredWrapper = blockById(proc, wrapperId);
+  ASSERT_FALSE(restoredWrapper.isVoid()) << "undo didn't restore the wrapper";
+  EXPECT_EQ(restoredWrapper["blockType"].toString(), juce::String("dualMono"));
+
+  ASSERT_TRUE(proc.redoChain());
+  EXPECT_TRUE(blockById(proc, wrapperId).isVoid());
+  const juce::var restoredSingle = blockById(proc, singleId);
+  ASSERT_FALSE(restoredSingle.isVoid()) << "redo didn't restore the collapsed block";
+  EXPECT_EQ(restoredSingle["blockType"].toString(), juce::String("ir"));
+}
+
+TEST(DualMonoBlockTest, CopyDualSlotFromSiblingFillsEmptySideWithClone) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string wrapperId = proc.addDualMonoBlock();
+  ASSERT_FALSE(wrapperId.empty());
+
+  const std::string leftId = proc.loadToneIntoDualSlot(
+      wrapperId, /*isLeftSide=*/true,
+      juce::String("{\"id\":1,\"format\":\"nam\",\"models\":[{\"id\":10,\"name\":\"amp\","
+                  "\"model_url\":\"https://test.invalid/amp.nam\"}]}"));
+  ASSERT_FALSE(leftId.empty());
+
+  const std::string copiedId = proc.copyDualSlotFromSibling(wrapperId, /*toLeftSide=*/false);
+  ASSERT_FALSE(copiedId.empty());
+
+  const juce::var wrapper = blockById(proc, wrapperId);
+  ASSERT_FALSE(wrapper.isVoid());
+  const auto* rightArr = wrapper["dualRight"].getArray();
+  ASSERT_TRUE(rightArr != nullptr && rightArr->size() == 1);
+  const juce::var rightChild = (*rightArr)[0];
+  EXPECT_EQ(rightChild["blockType"].toString(), juce::String("nam"));
+  EXPECT_EQ(static_cast<int>(rightChild["tone"]["id"]), 1);
+  EXPECT_NE(rightChild["blockId"].toString(), juce::String(leftId))
+      << "the copy must be its own block, not a shared reference";
+}
+
+TEST(DualMonoBlockTest, CopyDualSlotFromSiblingRejectsWhenTargetLoadedOrSiblingEmpty) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string wrapperId = proc.addDualMonoBlock();
+  ASSERT_FALSE(wrapperId.empty());
+  EXPECT_TRUE(proc.copyDualSlotFromSibling(wrapperId, true).empty())
+      << "both sides empty - nothing to copy";
+
+  const std::string leftId = proc.loadToneIntoDualSlot(
+      wrapperId, /*isLeftSide=*/true,
+      juce::String("{\"id\":1,\"format\":\"nam\",\"models\":[{\"id\":10,\"name\":\"amp\","
+                  "\"model_url\":\"https://test.invalid/amp.nam\"}]}"));
+  ASSERT_FALSE(leftId.empty());
+  EXPECT_TRUE(proc.copyDualSlotFromSibling(wrapperId, true).empty())
+      << "target already loaded - would silently discard its own content";
+
+  const std::string rightId = proc.loadToneIntoDualSlot(
+      wrapperId, /*isLeftSide=*/false,
+      juce::String("{\"id\":2,\"format\":\"ir\",\"models\":[{\"id\":20,\"name\":\"cab\","
+                  "\"model_url\":\"https://test.invalid/cab.wav\"}]}"));
+  ASSERT_FALSE(rightId.empty());
+  EXPECT_TRUE(proc.copyDualSlotFromSibling(wrapperId, true).empty())
+      << "both sides loaded - still nothing valid to target";
+}
+
+TEST(DualMonoBlockTest, CopyDualSlotFromSiblingSurvivesUndoRedo) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+
+  const std::string wrapperId = proc.addDualMonoBlock();
+  ASSERT_FALSE(wrapperId.empty());
+  const std::string leftId = proc.loadToneIntoDualSlot(
+      wrapperId, /*isLeftSide=*/true,
+      juce::String("{\"id\":1,\"format\":\"nam\",\"models\":[{\"id\":10,\"name\":\"amp\","
+                  "\"model_url\":\"https://test.invalid/amp.nam\"}]}"));
+  ASSERT_FALSE(leftId.empty());
+
+  const std::string copiedId = proc.copyDualSlotFromSibling(wrapperId, /*toLeftSide=*/false);
+  ASSERT_FALSE(copiedId.empty());
+
+  ASSERT_TRUE(proc.undoChain());
+  const juce::var afterUndo = blockById(proc, wrapperId);
+  ASSERT_FALSE(afterUndo.isVoid());
+  const auto* rightAfterUndo = afterUndo["dualRight"].getArray();
+  EXPECT_TRUE(rightAfterUndo != nullptr && rightAfterUndo->isEmpty())
+      << "undo didn't clear the copied side back to empty";
+
+  ASSERT_TRUE(proc.redoChain());
+  const juce::var afterRedo = blockById(proc, wrapperId);
+  ASSERT_FALSE(afterRedo.isVoid());
+  const auto* rightAfterRedo = afterRedo["dualRight"].getArray();
+  ASSERT_TRUE(rightAfterRedo != nullptr && rightAfterRedo->size() == 1);
+  EXPECT_EQ((*rightAfterRedo)[0]["blockType"].toString(), juce::String("nam"));
+}
+
 TEST(DualMonoBlockTest, SurvivesUndoRedoOfCreation) {
   ChainTestProcessor proc;
   proc.setPlayConfigDetails(2, 2, kFs, kBlock);

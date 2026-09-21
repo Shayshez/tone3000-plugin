@@ -18,7 +18,7 @@ import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
 import type { ChainSide, ChainItem, ToneBlock } from '../types/chain';
-import { isEqFlat, isInsertSlot } from '../types/chain';
+import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
 import type { TileMenuAnchor, TileMenuItem } from './TileMenu';
@@ -404,6 +404,54 @@ const DualMonoTileHalf: React.FC<{ child: ChainItem | undefined; halfSize: numbe
   );
 };
 
+/** Universal circle glyphs for TileChannelBadge, not text: one ring (Mono),
+    two separate rings (Dual - independent, unrelated channels), two
+    overlapping rings (Stereo - a genuine linked pair). Plain stroked
+    circles, no fill, matching every other small chrome icon's weight. */
+const MonoGlyph: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+    <circle cx="8" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+  </svg>
+);
+const DualGlyph: React.FC = () => (
+  <svg width="20" height="14" viewBox="0 0 24 16" fill="none">
+    <circle cx="6" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+    <circle cx="18" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+  </svg>
+);
+const StereoGlyph: React.FC = () => (
+  <svg width="17" height="14" viewBox="0 0 20 16" fill="none">
+    <circle cx="7" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+    <circle cx="13" cy="8" r="5" stroke={WHITE} strokeWidth="1.5" />
+  </svg>
+);
+
+/** Bottom-left pill used to mark a tile's channel identity at a glance,
+    without opening the block: Dual (a Dual Mono wrapper, independent L/R
+    inside one mono lane - the original ask this existed for, see
+    DualMonoTileImage below), Stereo (a lane of a two-lane stereo chain, or
+    an ordinary block whose own loaded content is genuinely stereo - e.g. a
+    true stereo IR, see TileSurface's own derivation) or Mono (a single,
+    unlinked channel). Clear of the hover-only top action strip and
+    BlockLed's own bottom-right corner. */
+const TileChannelBadge: React.FC<{ mode: 'dual' | 'stereo' | 'mono' }> = ({ mode }) => (
+  <div
+    style={{
+      position: 'absolute',
+      bottom: '8rem',
+      left: '8rem',
+      padding: '4rem 6rem',
+      borderRadius: '4rem',
+      backgroundColor: 'rgba(0, 0, 0, 0.55)',
+      display: 'flex',
+      alignItems: 'center',
+      pointerEvents: 'none',
+    }}
+  >
+    {mode === 'dual' ? <DualGlyph /> : mode === 'stereo' ? <StereoGlyph /> : <MonoGlyph />}
+  </div>
+);
+
 /** A Dual Mono tile's own artwork: each side's real thumbnail split down
     the middle (matching SplitFileDropZone's own half/divider/half
     layout), instead of the generic "00 DUAL MONO" glyph every other
@@ -420,34 +468,10 @@ const DualMonoTileImage: React.FC<{ block: ToneBlock; size: number }> = ({ block
     </div>
     {/* Block-type identity, kept even once real artwork fills both halves -
         two split thumbnails alone don't read as "this is a Dual Mono
-        block" at a glance the way the old generic glyph did. Bottom-left:
-        clear of the hover-only top action strip and BlockLed's own
-        bottom-right corner. Same abbreviated label ChainMapStrip's
-        BLOCK_TYPE_LABEL already uses for this type. */}
-    <div
-      style={{
-        position: 'absolute',
-        bottom: '8rem',
-        left: '8rem',
-        padding: '3rem 8rem',
-        borderRadius: '4rem',
-        backgroundColor: 'rgba(0, 0, 0, 0.55)',
-        pointerEvents: 'none',
-      }}
-    >
-      <span
-        style={{
-          fontFamily: FONT_MONO,
-          fontSize: '11rem',
-          fontWeight: 400,
-          color: WHITE,
-          textTransform: 'uppercase',
-          letterSpacing: '0.5rem',
-        }}
-      >
-        Dual
-      </span>
-    </div>
+        block" at a glance the way the old generic glyph did. Same
+        abbreviated label ChainMapStrip's BLOCK_TYPE_LABEL already uses for
+        this type. */}
+    <TileChannelBadge mode="dual" />
   </div>
 );
 
@@ -470,6 +494,11 @@ const TileSurface: React.FC<{
   onArmHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   onDropOnHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   actions: TileActions;
+  /** Stereo chain mode (two lanes) vs mono (one) - drives an ordinary
+      block's own Mono/Stereo channel badge (see TileChannelBadge). A Dual
+      Mono block ignores this; it always reads "Dual" regardless of chain
+      mode. */
+  stereo: boolean;
 }> = ({
   block,
   size,
@@ -480,12 +509,21 @@ const TileSurface: React.FC<{
   onArmHalf,
   onDropOnHalf,
   actions,
+  stereo,
 }) => {
   const { blockId, tone } = block;
   // Same derivation as ChainBlock.tsx's own eqActive / ChainMapStrip's
   // eqModified: EQ powered on and not flat (a flat or bypassed EQ is
   // skipped natively, so neither counts as "shaping the sound").
   const eqActive = block.params.eq.enabled && !isEqFlat(block.params.eq);
+
+  // A block reads Stereo either because the chain itself is two-lane
+  // stereo (each lane a real physical channel), or because its own loaded
+  // content is genuinely stereo regardless of chain mode - a true stereo IR
+  // (ToneBlock.irNumChannels >= 2, see ChainBlock.tsx's own isMonoIr) keeps
+  // independent left/right convolution (convolverStereo, ChainBlock.h) even
+  // inside a single mono lane. Anything else in a mono lane is Mono.
+  const isTrueStereoIr = block.blockType === 'ir' && (block.irNumChannels ?? 1) >= 2;
 
   // A model download/prepare is in flight: `modelLoading` covers switches
   // (where the previous model keeps playing, so `loaded` stays true) and
@@ -509,7 +547,7 @@ const TileSurface: React.FC<{
         // dies across drag re-renders. The traveling tile pins it visible.
         className={dragging ? 'gallery-tile tile-chrome-visible' : 'gallery-tile'}
         onClick={actions.onOpen}
-        {...helpProps(toneTileHelp(tone.title))}
+        {...helpProps(toneTileHelp(tone.title, block.blockType))}
         style={{
           width: `${size}rem`,
           height: `${size}rem`,
@@ -557,16 +595,19 @@ const TileSurface: React.FC<{
             {block.blockType === 'dualMono' ? (
               <DualMonoTileImage block={block} size={size} />
             ) : (
-              <ToneImage
-                src={tone.images?.[0]}
-                alt={tone.title}
-                gear={tone.gear}
-                local={tone.local}
-                blockType={block.blockType}
-                boxSize={size}
-                iconSize={64}
-                draggable={false}
-              />
+              <>
+                <ToneImage
+                  src={tone.images?.[0]}
+                  alt={tone.title}
+                  gear={tone.gear}
+                  local={tone.local}
+                  blockType={block.blockType}
+                  boxSize={size}
+                  iconSize={64}
+                  draggable={false}
+                />
+                <TileChannelBadge mode={stereo || isTrueStereoIr ? 'stereo' : 'mono'} />
+              </>
             )}
           </div>
         )}
@@ -638,6 +679,28 @@ const TileSurface: React.FC<{
             >
               <Power size={ICON_SIZE} />
             </ChromeIconButton>
+            {/* First of what'll grow into a richer hover info surface (more
+                fields/actions land here in later passes) - for now just the
+                block type, since a tile is otherwise all picture and no
+                information. Absolutely centered so it doesn't skew the
+                Power/action-cluster flex layout on either side. */}
+            <span
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                fontFamily: FONT_MONO,
+                fontSize: '11rem',
+                fontWeight: 400,
+                color: WHITE,
+                textTransform: 'uppercase',
+                letterSpacing: '0.5rem',
+                pointerEvents: 'none',
+              }}
+            >
+              {BLOCK_TYPE_LABEL[block.blockType]}
+            </span>
             <div style={{ display: 'flex', gap: '16rem' }}>
               {/* Same yellow-armed/muted-idle chrome as the block detail
                   view's own EQ button (ChainBlock.tsx's eqActive), and the
@@ -707,6 +770,9 @@ interface GalleryBlockProps {
   /** Open the detail takeover for this block with its EQ panel already
       showing - the gallery's quick-access EQ button. */
   onOpenEq: (blockId: string) => void;
+  /** Stereo chain mode (two lanes) - drives an ordinary block's own
+      Mono/Stereo channel badge (see TileChannelBadge). */
+  stereo: boolean;
 }
 
 /** Memoized so a lane re-render (e.g. another tile's optimistic state) only
@@ -714,7 +780,7 @@ interface GalleryBlockProps {
     the ChainActions context, so there are no per-render callback props to
     defeat the memo. */
 export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
-  ({ block, index, group, size, onOpen, onOpenEq }) => {
+  ({ block, index, group, size, onOpen, onOpenEq, stereo }) => {
     const { blockId, params } = block;
     const actions = useChainActions();
     const toast = useToast();
@@ -793,6 +859,7 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
           hoverHalf={hoverHalf}
           onArmHalf={armHalf}
           onDropOnHalf={handleDropOnHalf}
+          stereo={stereo}
           actions={{
             onOpen: (e) => {
               if (shouldIgnoreClick(e)) return;

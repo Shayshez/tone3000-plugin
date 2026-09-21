@@ -68,11 +68,23 @@ export const DualGoniometerScope: React.FC<{ blockId: string; size?: number }> =
     // fast attack (a loud transient should snap the scale out immediately),
     // slow release (quiet content shouldn't visibly shrink/rescale on every
     // frame, only ease back down once it's genuinely stayed quiet).
-    const MAX_RADIUS_FRACTION = 0.46;
+    // Backed off from 0.46: at that fraction, loud transients' auto-gain
+    // pushed points close enough to the frame edge to read as clipping
+    // against the border - this leaves real headroom instead.
+    const MAX_RADIUS_FRACTION = 0.38;
     const MIN_PEAK = 0.03;
     const ENV_ATTACK = 0.35;
     const ENV_RELEASE = 0.01;
     let peakEnvelope = 0.3;
+
+    // The per-frame alpha fade never actually reaches a true-black pixel:
+    // once a channel decays to canvas's 8-bit quantum 1, 1 * (1-FADE_ALPHA)
+    // rounds back up to 1 forever (any alpha <= 0.5 has this floor), so old
+    // content "burns in" as a faint stain that outlives its own trail by
+    // minutes. A periodic hard clear bounds how long any stuck pixel can
+    // possibly survive, instead of relying on the exponential fade alone.
+    const HARD_CLEAR_INTERVAL_MS = 2000;
+    let lastHardClear = 0;
 
     let alive = true;
     let polling = false;
@@ -101,8 +113,14 @@ export const DualGoniometerScope: React.FC<{ blockId: string; size?: number }> =
       // flickering dot cloud. Plain 'source-over' for the fade itself (not
       // 'lighter' - fading must darken, not brighten).
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = `rgba(0, 0, 0, ${FADE_ALPHA})`;
-      ctx.fillRect(0, 0, size, size);
+      const now = performance.now();
+      if (now - lastHardClear > HARD_CLEAR_INTERVAL_MS) {
+        lastHardClear = now;
+        ctx.clearRect(0, 0, size, size);
+      } else {
+        ctx.fillStyle = `rgba(0, 0, 0, ${FADE_ALPHA})`;
+        ctx.fillRect(0, 0, size, size);
+      }
       drawGrid();
 
       if (flat.length >= 2) {

@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { IS_COARSE_POINTER } from '../hooks/useUiScale';
+import { BLOCK_TYPE_LABEL } from '../types/chain';
+import type { ToneBlock } from '../types/chain';
 
 /**
  * Central help system: every control publishes a one-line hint here while
@@ -261,6 +263,10 @@ const HELP_DESKTOP = {
   addEqTile: 'EQ: add a standalone 6-band EQ block here - no model, always 100% wet.',
   addDualMonoTile:
     'Dual Mono: a fixed pair of two blocks, one per channel - pick each side’s tone from its own detail view.',
+  convertToDualMono:
+    'Convert to Dual Mono: wraps this block as the Left side of a new Dual Mono pair, keeping its tone and settings. Right starts empty.',
+  collapseDualMonoToSingle:
+    'Collapse to Single: replaces this block with its one loaded side, keeping its tone and settings.',
   loadFileTile: 'Load File: pick a local file to load here. No account needed.',
   loadFolderTile: 'Load Folder: pick a folder of files; loads as one multi-model block.',
   blockPower: 'Power: bypass this block.',
@@ -272,6 +278,9 @@ const HELP_DESKTOP = {
   dualPanRight: knobHelp('Pan R', 'Right slot’s position in the recombined stereo image.'),
   addDualSlotLeft: 'Left: pick a tone for this slot.',
   addDualSlotRight: 'Right: pick a tone for this slot.',
+  copyDualSlotFromLeft: 'Copy from Left: fill this side with a copy of Left’s tone and settings.',
+  copyDualSlotFromRight:
+    'Copy from Right: fill this side with a copy of Right’s tone and settings.',
   dualSideOpen: 'Open: this side’s full editor.',
   dualLink: 'Link: mirror Pan, match Mix and Vol between both sides.',
   dualMute: 'Mute: silence this side.',
@@ -464,11 +473,12 @@ export const HELP = (IS_COARSE_POINTER ? touchify(HELP_DESKTOP) : HELP_DESKTOP) 
   string
 >;
 
-/** Gallery tile: leads with the tone's own name. */
-export const toneTileHelp = (title: string) =>
+/** Gallery tile: leads with the tone's own name, then its block type
+    (NAM/IR/CAB/EQ/DUAL - same abbreviation ChainMapStrip's own chips use). */
+export const toneTileHelp = (title: string, blockType: ToneBlock['blockType']) =>
   IS_COARSE_POINTER
-    ? `${title}. Tap: open · drag: reorder · touch and hold: menu.`
-    : `${title}. Click: open · drag: reorder · ${alt('drag')}: duplicate · right-click: copy / load file.`;
+    ? `${title} · ${BLOCK_TYPE_LABEL[blockType]}. Tap: open · drag: reorder · touch and hold: menu.`
+    : `${title} · ${BLOCK_TYPE_LABEL[blockType]}. Click: open · drag: reorder · ${alt('drag')}: duplicate · right-click: copy / load file.`;
 
 /** Curve-type selector buttons in the EQ editor. */
 export const bandTypeHelp = (label: string) => `${label}: band curve shape.`;

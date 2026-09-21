@@ -106,6 +106,25 @@ public:
   // blockId isn't a DUAL_MONO block; true (a no-op) if that side was
   // already empty.
   bool removeDualSlotContent(const std::string& dualBlockId, bool isLeftSide);
+  // Fills an empty side with a clone of its loaded sibling's own content
+  // (settings/tone/model cache) - a quick way to start from artificial
+  // stereo (identical content on both sides) before diverging it with
+  // Align/Pan/Ø. Only valid when the target side is empty and the sibling
+  // is loaded; returns the new child's id, "" otherwise.
+  std::string copyDualSlotFromSibling(const std::string& dualBlockId, bool toLeftSide);
+  // In-place conversion: replaces an ordinary (already-loaded) block with a
+  // fresh Dual Mono wrapper at the same lane slot, seeding dualLeft with a
+  // clone of the original block's settings/tone/model cache (right stays
+  // empty for the user to fill in) - same clone shape duplicateChainBlock
+  // uses. Returns the new wrapper's id, "" if blockId isn't found or is
+  // already an insert/DUAL_MONO block.
+  std::string convertBlockToDualMono(const std::string& blockId);
+  // Mirror image: collapses a Dual Mono wrapper back to an ordinary block
+  // at the same lane slot, seeded from whichever side is loaded. Only
+  // valid when exactly one side has content and the other is empty (both
+  // empty or both loaded return "" - nothing to collapse to, or a real
+  // choice with no clear answer). Returns the new block's id.
+  std::string collapseDualMonoToSingle(const std::string& blockId);
   // Live Pan L/Pan R/Width for a Dual Mono block's recombine (see
   // runDualMono, Processor.cpp) - called continuously while a knob drags
   // (DSP-side smoothing handles click-avoidance, see dualLeftPanSmoother et

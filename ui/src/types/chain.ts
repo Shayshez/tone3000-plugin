@@ -391,6 +391,20 @@ export function isInsertSlot(item: ChainItem): item is InsertSlot {
   return item.kind === 'insert';
 }
 
+/** Abbreviated label per native block type - shared by ChainMapStrip's own
+    strip chips and helpText.ts's toneTileHelp (gallery tile hover hint), so
+    both read the same abbreviation for a given type. Lives here (not in
+    either component file) since ChainMapStrip.tsx already imports from
+    helpText.ts - a shared const avoids the circular import that would
+    otherwise create. */
+export const BLOCK_TYPE_LABEL: Record<ToneBlock['blockType'], string> = {
+  nam: 'NAM',
+  ir: 'IR',
+  cab: 'CAB',
+  eq: 'EQ',
+  dualMono: 'DUAL',
+};
+
 /** One entry in the native preset store (see getPresetList). */
 export interface PresetInfo {
   id: string;

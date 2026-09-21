@@ -58,6 +58,9 @@ export function useChainState() {
       addDualMonoBlock: backend.getPluginFunction('addDualMonoBlock'),
       loadToneIntoDualSlot: backend.getPluginFunction('loadToneIntoDualSlot'),
       removeDualSlotContent: backend.getPluginFunction('removeDualSlotContent'),
+      copyDualSlotFromSibling: backend.getPluginFunction('copyDualSlotFromSibling'),
+      convertBlockToDualMono: backend.getPluginFunction('convertBlockToDualMono'),
+      collapseDualMonoToSingle: backend.getPluginFunction('collapseDualMonoToSingle'),
       setDualImage: backend.getPluginFunction('setDualImage'),
       setDualLinked: backend.getPluginFunction('setDualLinked'),
       setDualSolo: backend.getPluginFunction('setDualSolo'),
@@ -213,6 +216,22 @@ export function useChainState() {
         ),
       removeDualSlotContent: (dualBlockId: string, isLeftSide: boolean) =>
         run('removeDualSlotContent', () => native.removeDualSlotContent(dualBlockId, isLeftSide)),
+      /** An empty side's own "copy from sibling" button - fills it with a
+          clone of the loaded sibling's own content, the quick start for
+          artificial stereo before diverging with Align/Pan/Ø. */
+      copyDualSlotFromSibling: (dualBlockId: string, toLeftSide: boolean) =>
+        run<string>('copyDualSlotFromSibling', () =>
+          native.copyDualSlotFromSibling(dualBlockId, toLeftSide)
+        ),
+      /** The occupied tile's own right-click "Convert to Dual Mono" row -
+          replaces the block in place with a fresh Dual Mono wrapper, Left
+          seeded from its own content, Right empty. */
+      convertBlockToDualMono: (blockId: string) =>
+        run<string>('convertBlockToDualMono', () => native.convertBlockToDualMono(blockId)),
+      /** Mirror image - the Dual Mono block's own "collapse to single" row,
+          only valid with exactly one side loaded. */
+      collapseDualMonoToSingle: (blockId: string) =>
+        run<string>('collapseDualMonoToSingle', () => native.collapseDualMonoToSingle(blockId)),
       /** Fire-and-forget, safe at knob-drag rates - same shape as
           setBlockParam above, not run()'s coalescing treatment. */
       setDualImage: (blockId: string, leftPan: number, rightPan: number, width: number) => {

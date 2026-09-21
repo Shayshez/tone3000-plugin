@@ -218,6 +218,34 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 args[0].toString().toStdString(), coerceBool(args[1])));
           }))
       .withNativeFunction(
+          // (dualBlockId, toLeftSide): fills an empty side with a clone of
+          // its loaded sibling's own content. Resolves to the new child's
+          // blockId, "" on failure.
+          "copyDualSlotFromSibling",
+          guarded(2, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.copyDualSlotFromSibling(
+                args[0].toString().toStdString(), coerceBool(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId): in-place conversion - replaces an ordinary block
+          // with a Dual Mono wrapper at the same lane slot, seeding Left
+          // with a clone of that block's own content. Resolves to the new
+          // wrapper's blockId, "" on failure.
+          "convertBlockToDualMono",
+          guarded(1, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.convertBlockToDualMono(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
+          // (blockId): mirror image - collapses a Dual Mono wrapper (with
+          // exactly one side loaded) back to an ordinary block at the same
+          // lane slot. Resolves to the new block's blockId, "" on failure.
+          "collapseDualMonoToSingle",
+          guarded(1, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.collapseDualMonoToSingle(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
           // (blockId, leftPan, rightPan, width): live Pan L/Pan R/Width for
           // a Dual Mono block's recombine - called continuously while a
           // knob drags, same idiom as setZoneImage used to be.

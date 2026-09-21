@@ -299,6 +299,7 @@ export const GalleryLane: React.FC<{
             size={tileSize}
             onOpen={onOpen}
             onOpenEq={onOpenEq}
+            stereo={stereo}
           />
         )
       )}

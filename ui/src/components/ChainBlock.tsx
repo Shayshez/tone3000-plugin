@@ -5,6 +5,8 @@ import {
   Ban,
   Bookmark,
   ChevronRight,
+  Combine,
+  Copy,
   Download,
   Equal,
   FolderClosed,
@@ -20,7 +22,7 @@ import {
   VolumeX,
 } from './icons';
 import { ChainMapStrip } from './ChainMapStrip';
-import { ToneImage } from './GearIcon';
+import { GearIcon, ToneImage } from './GearIcon';
 import { WaveformDisplay } from './WaveformDisplay';
 import { IrEnvelopeGraph } from './IrEnvelopeGraph';
 import type { EnvelopePatch } from './IrEnvelopeGraph';
@@ -526,6 +528,11 @@ const DualSideCard: React.FC<{
   /** Open this side in the full single-block editor - `null` for a plain
       open (thumbnail), 'eq'/'info' to land straight in that sub-view. */
   onOpenChild: (initial: 'eq' | 'info' | null) => void;
+  /** True when the *other* side has content - drives the empty state's own
+      "copy from sibling" button (a quick start for artificial stereo:
+      identical content on both sides to then diverge with Align/Pan/Ø).
+      Irrelevant once `child` is set. */
+  siblingLoaded: boolean;
   /** Controlled from the parent rather than DualSideCard's own local state -
       when Link is on, the parent computes the offset-preserving mirror
       value for the sibling side and updates its knob too, same split Pan
@@ -562,6 +569,7 @@ const DualSideCard: React.FC<{
   onPanDragStateChange,
   panHelp,
   onOpenChild,
+  siblingLoaded,
   mix,
   onMixChange,
   vol,
@@ -658,15 +666,32 @@ const DualSideCard: React.FC<{
             {isLeftSide ? 'Left' : 'Right'}
           </span>
         </div>
-        {/* An empty side is still a live pass-through (see
-            BlockParams.dualLeftMuted's own comment) - Mute silences that
-            pass-through, the only control that makes sense before
-            anything's loaded here (no child block yet to hold Pan/Mix/Vol/
-            Solo). Same `muted`/`onMuteToggle` a loaded side's own Mute
-            button below uses - one real per-side flag, unconditional. */}
-        <ChromeIconButton tone="danger" on={muted} help={HELP.dualMute} onClick={onMuteToggle}>
-          {muted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
-        </ChromeIconButton>
+        <div style={{ display: 'flex', flexDirection: 'row', gap: '8rem' }}>
+          {/* An empty side is still a live pass-through (see
+              BlockParams.dualLeftMuted's own comment) - Mute silences that
+              pass-through, the only control that makes sense before
+              anything's loaded here (no child block yet to hold Pan/Mix/
+              Vol/Solo). Same `muted`/`onMuteToggle` a loaded side's own
+              Mute button below uses - one real per-side flag,
+              unconditional. */}
+          <ChromeIconButton tone="danger" on={muted} help={HELP.dualMute} onClick={onMuteToggle}>
+            {muted ? <VolumeX size={ICON_SIZE} /> : <Volume2 size={ICON_SIZE} />}
+          </ChromeIconButton>
+          {/* Quick start for artificial stereo: clones the loaded
+              sibling's own content into this empty side (settings/tone/
+              model cache, same shape Convert to Dual Mono/Collapse to
+              Single use) so both sides start identical - Align/Pan/Ø then
+              diverge them from there. Only meaningful once the sibling
+              actually has something to copy. */}
+          {siblingLoaded && (
+            <ChromeIconButton
+              help={isLeftSide ? HELP.copyDualSlotFromRight : HELP.copyDualSlotFromLeft}
+              onClick={() => actions.copyDualSlotFromSibling(dualBlockId, isLeftSide)}
+            >
+              <Copy size={ICON_SIZE} />
+            </ChromeIconButton>
+          )}
+        </div>
       </div>
     );
   }
@@ -2605,6 +2630,21 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     </ChromeTextButton>
                   </div>
                 )}
+                {/* Only a genuine "one side active, the other has no
+                    block" shape collapses cleanly - the mirror image of
+                    Convert to Dual Mono's own single-source shape (see the
+                    ordinary card's own header button). Both empty or both
+                    loaded has no clear single side to keep, so the button
+                    simply doesn't show rather than offering a destructive
+                    choice with no good default. */}
+                {Boolean(dualLeft) !== Boolean(dualRight) && (
+                  <ChromeIconButton
+                    help={HELP.collapseDualMonoToSingle}
+                    onClick={() => actions.collapseDualMonoToSingle(blockId)}
+                  >
+                    <Combine />
+                  </ChromeIconButton>
+                )}
                 <ChromeIconButton
                   help={HELP.removeBlock}
                   onClick={() => actions.removeBlock(blockId)}
@@ -3087,6 +3127,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   onPanDragStateChange={handleKnobDragState}
                   panHelp={HELP.dualPanLeft}
                   onOpenChild={(initial) => openChild('left', initial)}
+                  siblingLoaded={!!dualRight}
                   mix={dualLeftMix}
                   onMixChange={(val) => handleDualChildMixChange(true, val)}
                   vol={dualLeftVol}
@@ -3156,6 +3197,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   onPanDragStateChange={handleKnobDragState}
                   panHelp={HELP.dualPanRight}
                   onOpenChild={(initial) => openChild('right', initial)}
+                  siblingLoaded={!!dualLeft}
                   mix={dualRightMix}
                   onMixChange={(val) => handleDualChildMixChange(false, val)}
                   vol={dualRightVol}
@@ -3580,6 +3622,18 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               >
                 <ArrowLeftRight />
               </ChromeIconButton>
+              {/* A block already nested as one side of a Dual Mono pair
+                  can't be wrapped again (the native side only ever seeds a
+                  dual child as NAM/IR/CAB/EQ) - this only ever shows on a
+                  genuine top-level lane block's own editor. */}
+              {!dualParent && (
+                <ChromeIconButton
+                  help={HELP.convertToDualMono}
+                  onClick={() => actions.convertBlockToDualMono(blockId)}
+                >
+                  <GearIcon gear="dualMono" color="currentColor" />
+                </ChromeIconButton>
+              )}
               <ChromeIconButton
                 help={HELP.removeBlock}
                 onClick={() => {
