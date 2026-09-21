@@ -226,6 +226,9 @@ export const GalleryLane: React.FC<{
   /** Open the detail takeover with its EQ panel already showing - the
       gallery tile's own EQ quick-access button. */
   onOpenEq: (blockId: string) => void;
+  /** Open the detail takeover with its Stereo Processing panel already
+      showing - a Dual Mono tile's own quick-access button, next to EQ's. */
+  onOpenStereo: (blockId: string) => void;
   /** Open the tone browser targeting the clicked insert slot. */
   onAdd: (insertBlockId: string) => void;
   /** Paste the copied block into the insert slot at this lane index; null
@@ -247,6 +250,7 @@ export const GalleryLane: React.FC<{
   stereo = false,
   onOpen,
   onOpenEq,
+  onOpenStereo,
   onAdd,
   onPasteBlock = null,
   side = 'left',
@@ -299,6 +303,7 @@ export const GalleryLane: React.FC<{
             size={tileSize}
             onOpen={onOpen}
             onOpenEq={onOpenEq}
+            onOpenStereo={onOpenStereo}
             stereo={stereo}
           />
         )

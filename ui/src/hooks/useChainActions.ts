@@ -72,12 +72,16 @@ export interface ChainActions {
   copyDualSlotFromSibling: (dualBlockId: string, toLeftSide: boolean) => void;
   /** The occupied tile's own right-click "Convert to Dual Mono" row:
       replaces this block in place with a fresh Dual Mono wrapper, Left
-      seeded from its own content, Right left empty. */
-  convertBlockToDualMono: (blockId: string) => void;
+      seeded from its own content, Right left empty. Resolves to the new
+      wrapper's blockId (null on failure) - the caller jumps the detail
+      view to it, since this block's own id stops resolving. */
+  convertBlockToDualMono: (blockId: string) => Promise<string | null>;
   /** Mirror image - a Dual Mono block's own "collapse to single" button:
       replaces the wrapper in place with an ordinary block seeded from
-      whichever side is loaded. Only valid with exactly one side loaded. */
-  collapseDualMonoToSingle: (blockId: string) => void;
+      whichever side is loaded. Only valid with exactly one side loaded.
+      Resolves to the new block's blockId (null on failure), same
+      "caller jumps the detail view" reasoning as convertBlockToDualMono. */
+  collapseDualMonoToSingle: (blockId: string) => Promise<string | null>;
   /** Live Pan L/Pan R/Width for a Dual Mono block's recombine - called
       continuously while a knob drags (native-side smoothing handles
       click-avoidance), same idiom as every other continuous param. */

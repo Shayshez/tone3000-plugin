@@ -193,6 +193,12 @@ export const ChainView: React.FC<ChainViewProps> = ({
   // above - surviving an OAuth-swap round trip with EQ still showing isn't
   // worth the complexity for what's a one-shot navigation hint.
   const [openBlockEq, setOpenBlockEq] = useState(false);
+  // Same idea, for a Dual Mono tile's own Stereo Processing shortcut
+  // (GalleryBlock's onOpenStereo) - mutually exclusive with openBlockEq
+  // (both cleared whenever the other's own entry point is used), same
+  // "initial state only, not persisted" reasoning as openBlockEq's own
+  // comment.
+  const [openBlockStereo, setOpenBlockStereo] = useState(false);
   /** The item under drag; drives the DragOverlay ghost. */
   const [activeDrag, setActiveDrag] = useState<ChainItem | null>(null);
 
@@ -563,6 +569,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
           sampleRate={sampleRate}
           namSlimSizeDefault={namSlimSizeDefault}
           initialShowEq={openBlockEq}
+          initialShowStereo={openBlockStereo}
           onBack={() => {
             pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
             setDetailBlockId(null);
@@ -595,10 +602,17 @@ export const ChainView: React.FC<ChainViewProps> = ({
         stereo={stereo}
         onOpen={(blockId) => {
           setOpenBlockEq(false);
+          setOpenBlockStereo(false);
           setDetailBlockId(blockId);
         }}
         onOpenEq={(blockId) => {
           setOpenBlockEq(true);
+          setOpenBlockStereo(false);
+          setDetailBlockId(blockId);
+        }}
+        onOpenStereo={(blockId) => {
+          setOpenBlockStereo(true);
+          setOpenBlockEq(false);
           setDetailBlockId(blockId);
         }}
         onAdd={(insertBlockId) => actions.addModel(side, insertBlockId)}

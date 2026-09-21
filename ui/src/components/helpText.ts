@@ -272,6 +272,8 @@ const HELP_DESKTOP = {
   blockPower: 'Power: bypass this block.',
   retryLoad: 'Retry: re-download this model.',
   galleryEqShortcut: 'EQ: jump straight to this block’s EQ view. Yellow: EQ shaping the sound.',
+  galleryStereoShortcut:
+    'Stereo: jump straight to this block’s Stereo Processing view. Yellow: Align/Ø shaping the sound.',
   swapTone: 'Swap: replace this tone, keeping its slot.',
   removeBlock: 'Remove: delete this block.',
   dualPanLeft: knobHelp('Pan L', 'Left slot’s position in the recombined stereo image.'),

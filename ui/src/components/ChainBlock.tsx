@@ -983,6 +983,12 @@ interface ChainBlockProps {
       mount - i.e. opening from the gallery, where the card was unmounted a
       moment ago. */
   initialShowEq?: boolean;
+  /** Same idea as `initialShowEq`, for a Dual Mono block's own Stereo
+      Processing panel - the gallery tile's own Stereo shortcut button
+      (GalleryBlock's onOpenStereo) opens straight into it. Only matters at
+      mount, same reasoning as `initialShowEq`; meaningless outside the
+      isDualMono branch. */
+  initialShowStereo?: boolean;
   /** Same idea as `initialShowEq`, for the Info panel - the Dual Mono
       compact card's per-side Info icon opens straight into a side's full
       editor with this set (see DualSideCard below). Only matters at mount,
@@ -1028,6 +1034,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   onPasteBlockAt,
   onFillToFaceplate,
   initialShowEq = false,
+  initialShowStereo = false,
   initialShowInfo = false,
   hideChainStrip = false,
   dualParent,
@@ -1172,7 +1179,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // shape the EQ pill already has (an earlier separate-screen version read
   // as an unnecessary extra navigation hop once EQ's own pattern was right
   // there to match).
-  const [showStereo, setShowStereo] = useState(false);
+  const [showStereo, setShowStereo] = useState(initialShowStereo);
   const [dualStereoProcessingEnabled, setDualStereoProcessingEnabled] = useState(
     params.dualStereoProcessingEnabled ?? true
   );
@@ -2640,7 +2647,17 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 {Boolean(dualLeft) !== Boolean(dualRight) && (
                   <ChromeIconButton
                     help={HELP.collapseDualMonoToSingle}
-                    onClick={() => actions.collapseDualMonoToSingle(blockId)}
+                    onClick={async () => {
+                      // This wrapper's own id stops resolving the instant
+                      // the collapse lands - jump to the new single block's
+                      // id right after, or ChainView's detail view falls
+                      // back to the gallery instead of staying open on the
+                      // result (the same "swap kicks back to the main
+                      // screen" shape this session already fixed once for
+                      // the ordinary block's own Swap button).
+                      const newId = await actions.collapseDualMonoToSingle(blockId);
+                      if (newId) onJumpToBlock(newId);
+                    }}
                   >
                     <Combine />
                   </ChromeIconButton>
@@ -3629,7 +3646,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               {!dualParent && (
                 <ChromeIconButton
                   help={HELP.convertToDualMono}
-                  onClick={() => actions.convertBlockToDualMono(blockId)}
+                  onClick={async () => {
+                    // This block's own id stops resolving the instant the
+                    // wrapper lands - jump to its id right after, or
+                    // ChainView's detail view falls back to the gallery
+                    // instead of staying open on the result (same shape as
+                    // collapseDualMonoToSingle's own fix, see its comment).
+                    const newId = await actions.convertBlockToDualMono(blockId);
+                    if (newId) onJumpToBlock(newId);
+                  }}
                 >
                   <GearIcon gear="dualMono" color="currentColor" />
                 </ChromeIconButton>
