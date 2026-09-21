@@ -2553,7 +2553,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           <button
             type="button"
             onClick={onBack}
-            {...helpProps(HELP.backToChain)}
+            {...helpProps(dualParent ? HELP.backToDual : HELP.backToChain)}
             style={{
               display: 'flex',
               alignItems: 'center',

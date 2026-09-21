@@ -391,6 +391,7 @@ const HELP_DESKTOP = {
   shareTone: 'Share: copy TONE3000 link.',
   modelSelectSignedOut: 'Models: sign in to TONE3000 to switch models.',
   backToChain: 'Back: chain overview.',
+  backToDual: 'Back: this Dual Mono block.',
 
   // EQ editor
   eqFader: IS_COARSE_POINTER
