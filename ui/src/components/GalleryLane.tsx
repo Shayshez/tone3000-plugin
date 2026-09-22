@@ -25,7 +25,7 @@ import {
 } from './theme';
 import { useParameter } from '../hooks/useParameter';
 import { useChainActions } from '../hooks/useChainActions';
-import type { ChainBranch, ChainItem, ChainSide } from '../types/chain';
+import type { ChainBranch, ChainItem, ChainSide, ToneBlock } from '../types/chain';
 import { isInsertSlot } from '../types/chain';
 /**
  * Lane-level pieces of the chain gallery (see ChainView for the drag
@@ -42,6 +42,27 @@ export const TILE_GAP = 24;
 export const LANE_GAP = 24;
 /** Gutter inside the scroll area; tiles fade out under it while scrolling. */
 export const EDGE_FADE_WIDTH = 32;
+
+/** True for an enabled block that widens whatever it receives into a real
+    stereo image on its own, independent of the lane's own chain-mode flag:
+    a Dual Mono block (its own Pan/Align - see ChainBlock.tsx's isDualMono
+    branch) or a true stereo IR (independent L/R convolution - see
+    GalleryBlock.tsx's own isTrueStereoIr). Disabled means bypassed/dry, so
+    it passes through whatever channel count it already received rather
+    than widening anything itself. */
+const isStereoWidener = (block: ToneBlock): boolean =>
+  block.params.enabled &&
+  (block.blockType === 'dualMono' || (block.blockType === 'ir' && (block.irNumChannels ?? 1) >= 2));
+
+/** True once an earlier block in this same lane has already widened the
+    signal into real stereo (see isStereoWidener): every block downstream of
+    it processes that widened signal even though the lane itself is still a
+    single mono lane, so its own channel badge (see TileChannelBadge) should
+    read Stereo too, not just fall back to the lane's own chain-mode flag -
+    an EQ (or any other block) placed after a Dual Mono block or a stereo IR
+    was reading Mono here despite genuinely carrying a stereo signal. */
+const isDownstreamOfStereoWidener = (items: ChainItem[], index: number): boolean =>
+  items.slice(0, index).some((it) => !isInsertSlot(it) && isStereoWidener(it));
 
 /** Signal-flow routing lines for an add tile at the given lane position. */
 const addTileRouting = (index: number, count: number): AddTileRouting => {
@@ -304,7 +325,7 @@ export const GalleryLane: React.FC<{
             onOpen={onOpen}
             onOpenEq={onOpenEq}
             onOpenStereo={onOpenStereo}
-            stereo={stereo}
+            stereo={stereo || isDownstreamOfStereoWidener(items, index)}
           />
         )
       )}
