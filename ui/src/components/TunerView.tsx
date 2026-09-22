@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { X as XIcon } from './icons';
-import { useNativeFunction } from '../hooks/useFunction';
+import { useTunerReading } from '../hooks/useTunerReading';
 import {
   BRAND_BLUE,
   BRAND_RED,
@@ -11,21 +11,12 @@ import {
   WHITE,
 } from './theme';
 
-interface TunerReading {
-  frequency: number;
-  confidence: number;
-  level: number;
-}
-
-const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
-
 // Cents window considered "in tune" and the full deflection of one side.
 const IN_TUNE_CENTS = 5;
 const MAX_CENTS = 50;
 
 // Bar colors from the center outward (blue → yellow → red), per screenshot.
 const SIDE_COLORS = [BRAND_BLUE, BRAND_YELLOW, BRAND_YELLOW, BRAND_RED, BRAND_RED, BRAND_RED];
-const POLL_MS = 50;
 
 // Tapered panel geometry from the idle-state SVG (50×181 with the short
 // inner edge running from y=30 to y=151). Gap is 16 so six bars land at
@@ -36,16 +27,6 @@ const BAR_GAP = 16;
 const BAR_TAPER_TOP = (30 / 181) * 100;
 const BAR_TAPER_BOTTOM = (151 / 181) * 100;
 
-const frequencyToNote = (frequency: number) => {
-  const midi = 69 + 12 * Math.log2(frequency / 440);
-  const nearest = Math.round(midi);
-  return {
-    name: NOTE_NAMES[((nearest % 12) + 12) % 12],
-    octave: Math.floor(nearest / 12) - 1,
-    cents: (midi - nearest) * 100,
-  };
-};
-
 // Number of bars lit on the deflection side: blue only near in-tune, all six
 // red at a half-semitone off.
 const litCountForCents = (absCents: number): number => {
@@ -55,58 +36,7 @@ const litCountForCents = (absCents: number): number => {
 };
 
 export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  // Stateless binding: this polls at 20 Hz, so it must not set hook state.
-  const getTunerReading = useNativeFunction<TunerReading>('getTunerReading');
-  const [note, setNote] = useState<string | null>(null);
-  const [cents, setCents] = useState(0);
-  const [hasSignal, setHasSignal] = useState(false);
-  const [frequency, setFrequency] = useState(0);
-  const smoothedCentsRef = useRef(0);
-  const holdTimeoutRef = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    let cancelled = false;
-    let polling = false;
-
-    const poll = async () => {
-      if (cancelled || polling) return;
-      polling = true;
-      try {
-        const reading = await getTunerReading();
-        if (cancelled || !reading) return;
-
-        const freq = typeof reading.frequency === 'number' ? reading.frequency : 0;
-        const confidence = typeof reading.confidence === 'number' ? reading.confidence : 0;
-
-        if (freq > 0 && confidence > 0.5) {
-          const detected = frequencyToNote(freq);
-          // Light exponential smoothing so the display doesn't jitter.
-          smoothedCentsRef.current = smoothedCentsRef.current * 0.6 + detected.cents * 0.4;
-          setNote(detected.name);
-          setCents(smoothedCentsRef.current);
-          setFrequency(freq);
-          setHasSignal(true);
-          if (holdTimeoutRef.current) window.clearTimeout(holdTimeoutRef.current);
-          // Hold the last note on screen briefly after the signal decays.
-          holdTimeoutRef.current = window.setTimeout(() => setHasSignal(false), 900);
-        }
-      } catch {
-        // Ignore individual polling failures.
-      } finally {
-        polling = false;
-      }
-    };
-
-    const interval = window.setInterval(poll, POLL_MS);
-    poll();
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      if (holdTimeoutRef.current) window.clearTimeout(holdTimeoutRef.current);
-    };
-  }, [getTunerReading]);
-
+  const { note, cents, frequency, hasSignal } = useTunerReading();
   const absCents = Math.abs(cents);
   const roundedCents = Math.round(cents);
   const inTune = hasSignal && absCents <= IN_TUNE_CENTS;
