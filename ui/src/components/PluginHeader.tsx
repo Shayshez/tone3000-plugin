@@ -3,8 +3,8 @@ import { rem } from '../hooks/useUiScale';
 import { Undo2, Redo2 } from './icons';
 import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
+import { MiniTuner } from './MiniTuner';
 import { PresetBar } from './PresetBar';
-import { StereoModeToggle } from './StereoModeToggle';
 import { HELP } from './helpText';
 import { BORDER } from './theme';
 import type { usePresets } from '../hooks/usePresets';
@@ -35,8 +35,6 @@ interface PluginHeaderProps {
   /** Greys out the preset bar's New button (see PresetBar). */
   atDefault: boolean;
   onReset: () => void;
-  stereoEnabled: boolean;
-  onStereoToggle: (enabled: boolean) => void;
   showTuner: boolean;
   onToggleTuner: (show: boolean) => void;
   canUndo: boolean;
@@ -51,8 +49,8 @@ interface PluginHeaderProps {
 }
 
 /**
- * Full-width top bar: logo, preset controls, stereo toggle, tuner, undo/redo
- * and the account menu. Memoized because Plugin re-renders on every chain
+ * Full-width top bar: logo, preset controls, tuner, undo/redo and the
+ * account menu. Memoized because Plugin re-renders on every chain
  * poll tick while nothing up here changes.
  */
 export const PluginHeader = React.memo(function PluginHeader({
@@ -60,8 +58,6 @@ export const PluginHeader = React.memo(function PluginHeader({
   activePreset,
   atDefault,
   onReset,
-  stereoEnabled,
-  onStereoToggle,
   showTuner,
   onToggleTuner,
   canUndo,
@@ -110,16 +106,20 @@ export const PluginHeader = React.memo(function PluginHeader({
           onMove={presetStore.actions.move}
           onReset={onReset}
         />
-        <StereoModeToggle stereoEnabled={stereoEnabled} onToggle={onStereoToggle} />
-        <IconButton
-          onClick={() => onToggleTuner(!showTuner)}
-          help={HELP.tuner}
-          active={showTuner}
-          fillWhenActive
-          size={28}
-        >
-          <TuningForkIcon size={18} />
-        </IconButton>
+        {/* Mini tuner + its full-screen entry point: a tight pair, same
+            grouping as undo/redo below. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16rem' }}>
+          <MiniTuner />
+          <IconButton
+            onClick={() => onToggleTuner(!showTuner)}
+            help={HELP.tuner}
+            active={showTuner}
+            fillWhenActive
+            size={28}
+          >
+            <TuningForkIcon size={18} />
+          </IconButton>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16rem' }}>
           <IconButton onClick={onUndo} disabled={!canUndo} help={HELP.undo} size={28}>
             <Undo2 size={18} />

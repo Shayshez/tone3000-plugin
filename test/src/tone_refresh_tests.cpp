@@ -4,8 +4,8 @@
 // block): merges a fresh /tones/{id} API payload into every block holding
 // that tone. These pin the contracts:
 //
-//   - fresh metadata (title, counts, url) lands on every matching block in
-//     both lanes, while each block's stored models array survives untouched
+//   - fresh metadata (title, counts, url) lands on every block that holds
+//     that tone, while each block's stored models array survives untouched
 //     (it carries the active model's model_url, which retries/reloads need),
 //   - it is purely a metadata write: no undo step, and the revision only
 //     bumps when something actually changed (an identical payload no-ops),
@@ -32,28 +32,25 @@ juce::String freshPayload(int toneId, const juce::String& title, int downloads,
          "\"model_url\":\"https://test.invalid/served.wav\"}]}";
 }
 
-// First tone block of a lane in the chain-state payload.
-juce::var firstToneBlock(const juce::var& state, const char* laneKey) {
-  if (const auto* lane = state[laneKey].getArray())
+// The Nth tone block in the chain-state payload.
+juce::var toneBlockAt(const juce::var& state, int n) {
+  if (const auto* lane = state["chain"].getArray())
     for (const auto& item : *lane)
-      if (item["kind"].toString() == "tone")
+      if (item["kind"].toString() == "tone" && n-- == 0)
         return item;
   return {};
 }
 
-TEST(ToneRefreshTest, UpdatesMetadataAcrossLanesAndPreservesStoredModels) {
+TEST(ToneRefreshTest, UpdatesMetadataOnEveryMatchingBlockAndPreservesStoredModels) {
   ChainTestProcessor proc;
 
-  // The same tone on both lanes, but with *different* active models, so the
-  // per-block merge provably keeps each block's own stored models array.
+  // Two blocks holding the same tone, but with *different* active models, so
+  // the per-block merge provably keeps each block's own stored models array.
   juce::ValueTree state("ChainSnapshot");
-  state.setProperty("stereoEnabled", true, nullptr);
   juce::ValueTree left("ChainBlocks");
-  left.appendChild(makeIrBlockTree("blk-l", 1, 100), nullptr);
+  left.appendChild(makeIrBlockTree("blk-a", 1, 100), nullptr);
+  left.appendChild(makeIrBlockTree("blk-b", 1, 101), nullptr);
   state.appendChild(left, nullptr);
-  juce::ValueTree right("RightChainBlocks");
-  right.appendChild(makeIrBlockTree("blk-r", 1, 101), nullptr);
-  state.appendChild(right, nullptr);
   proc.restoreFromTree(state);
   ASSERT_TRUE(waitForChainLoaded(proc));
 
@@ -62,27 +59,27 @@ TEST(ToneRefreshTest, UpdatesMetadataAcrossLanesAndPreservesStoredModels) {
   EXPECT_TRUE(proc.refreshToneMetadata(freshPayload(1, "Fresh Title", 42, 7, true)));
 
   const juce::var after = proc.getChainState(-1);
-  for (const char* laneKey : {"chain", "chainRight"}) {
-    const juce::var block = firstToneBlock(after, laneKey);
-    ASSERT_TRUE(block.isObject()) << laneKey;
-    EXPECT_EQ(block["tone"]["title"].toString(), "Fresh Title") << laneKey;
-    EXPECT_EQ(static_cast<int>(block["tone"]["downloads_count"]), 42) << laneKey;
-    EXPECT_EQ(static_cast<int>(block["tone"]["favorites_count"]), 7) << laneKey;
-    EXPECT_TRUE(static_cast<bool>(block["tone"]["is_favorite"])) << laneKey;
-    EXPECT_EQ(block["tone"]["url"].toString(), "https://tone3000.com/tones/fresh-1") << laneKey;
+  for (int n = 0; n < 2; ++n) {
+    const juce::var block = toneBlockAt(after, n);
+    ASSERT_TRUE(block.isObject()) << n;
+    EXPECT_EQ(block["tone"]["title"].toString(), "Fresh Title") << n;
+    EXPECT_EQ(static_cast<int>(block["tone"]["downloads_count"]), 42) << n;
+    EXPECT_EQ(static_cast<int>(block["tone"]["favorites_count"]), 7) << n;
+    EXPECT_TRUE(static_cast<bool>(block["tone"]["is_favorite"])) << n;
+    EXPECT_EQ(block["tone"]["url"].toString(), "https://tone3000.com/tones/fresh-1") << n;
     // The stored models array survives: still exactly the block's own active
     // model, not the payload's "served-model".
     const auto* models = block["tone"]["models"].getArray();
-    ASSERT_NE(models, nullptr) << laneKey;
-    ASSERT_EQ(models->size(), 1) << laneKey;
-    EXPECT_EQ(models->getReference(0)["name"].toString(), "cab") << laneKey;
+    ASSERT_NE(models, nullptr) << n;
+    ASSERT_EQ(models->size(), 1) << n;
+    EXPECT_EQ(models->getReference(0)["name"].toString(), "cab") << n;
   }
-  EXPECT_EQ(static_cast<int>(firstToneBlock(after, "chain")["tone"]["models"][0]["id"]), 100);
-  EXPECT_EQ(static_cast<int>(firstToneBlock(after, "chainRight")["tone"]["models"][0]["id"]), 101);
+  EXPECT_EQ(static_cast<int>(toneBlockAt(after, 0)["tone"]["models"][0]["id"]), 100);
+  EXPECT_EQ(static_cast<int>(toneBlockAt(after, 1)["tone"]["models"][0]["id"]), 101);
 
   // Metadata only: the active models never moved, and no undo step appeared.
-  EXPECT_EQ(static_cast<int>(firstToneBlock(after, "chain")["activeModelId"]), 100);
-  EXPECT_EQ(static_cast<int>(firstToneBlock(after, "chainRight")["activeModelId"]), 101);
+  EXPECT_EQ(static_cast<int>(toneBlockAt(after, 0)["activeModelId"]), 100);
+  EXPECT_EQ(static_cast<int>(toneBlockAt(after, 1)["activeModelId"]), 101);
   EXPECT_EQ(static_cast<bool>(after["canUndo"]), couldUndoBefore);
 }
 

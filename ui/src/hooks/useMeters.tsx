@@ -25,8 +25,6 @@ export type MeterId =
 
 /** Store key for the CPU readout (a %, not a dB level; see useCpuPercent). */
 const CPU_ID = 'cpu';
-/** Store key for the spread correlation (-1..1, not dB; see useCorrelation). */
-const CORRELATION_ID = 'correlation';
 
 export const meterId = {
   /** Per-channel main meter ('input'/'output' alone = max of both channels). */
@@ -76,10 +74,8 @@ const clipGroup = (id: string): string[] => {
 
 class MeterStore {
   private levels = new Map<string, number>();
-  /** Spread output correlation (-1..1, 1 when idle), quantized (see below). */
-  private correlation = 1;
   /** Per-Dual-Mono-block Align correlation (-1..1, 1 when idle/not a Dual
-      Mono block), same quantizing as the global correlation above. */
+      Mono block), quantized (see below). */
   private blockCorrelations = new Map<string, number>();
   /** Displayed CPU % (one decimal), published at CPU_UI_INTERVAL_MS after EMA smoothing. */
   private cpuPercent = 0;
@@ -118,8 +114,6 @@ class MeterStore {
   get = (id: string): number => this.levels.get(id) ?? FLOOR_DB;
 
   getCpu = (): number => this.cpuPercent;
-
-  getCorrelation = (): number => this.correlation;
 
   getBlockCorrelation = (blockId: string): number => this.blockCorrelations.get(blockId) ?? 1;
 
@@ -166,21 +160,11 @@ class MeterStore {
         this.applyBlockCorrelation(blockId, levels.alignCorrelation);
     }
     this.applyCpu(res.cpu);
-    this.applyCorrelation(res.correlation);
   }
 
   /** Quantize to 0.05: the meter is a threshold indicator, so finer steps
       would only cause invisible re-renders. Missing/invalid reads as 1
-      (idle = trivially mono-safe). */
-  private applyCorrelation(raw: number | undefined) {
-    const finite = typeof raw === 'number' && Number.isFinite(raw);
-    const value = finite ? Math.round(Math.max(-1, Math.min(1, raw)) * 20) / 20 : 1;
-    if (this.correlation === value) return;
-    this.correlation = value;
-    this.listeners.get(CORRELATION_ID)?.forEach((callback) => callback());
-  }
-
-  /** Same quantizing as applyCorrelation above, keyed per block. */
+      (idle = trivially mono-safe). Keyed per block. */
   private applyBlockCorrelation(blockId: string, raw: number) {
     const finite = typeof raw === 'number' && Number.isFinite(raw);
     const value = finite ? Math.round(Math.max(-1, Math.min(1, raw)) * 20) / 20 : 1;
@@ -263,22 +247,9 @@ export function useMeter(id: MeterId | string): number {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-/** Spread output correlation (-1..1, 1 when idle), for the mono-safety
-    indicator in the spread group. Rides the shared meter poll. */
-export function useCorrelation(): number {
-  const store = useContext(MeterStoreContext);
-  if (!store) throw new Error('useCorrelation must be used within a MetersProvider');
-
-  const subscribe = useCallback(
-    (callback: () => void) => store.subscribe(CORRELATION_ID, callback),
-    [store]
-  );
-  return useSyncExternalStore(subscribe, store.getCorrelation);
-}
-
 /** A Dual Mono block's own Align output correlation (-1..1, 1 when idle or
     not a Dual Mono block), for that block's own mono-safety indicator.
-    Rides the shared meter poll, same as useCorrelation. */
+    Rides the shared meter poll. */
 export function useBlockCorrelation(blockId: string): number {
   const store = useContext(MeterStoreContext);
   if (!store) throw new Error('useBlockCorrelation must be used within a MetersProvider');

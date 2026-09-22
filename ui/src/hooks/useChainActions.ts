@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { BlockParamName, ChainSide, EqBand, ToneBlock } from '../types/chain';
+import type { BlockParamName, EqBand, ToneBlock } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
 /**
@@ -17,11 +17,7 @@ export interface ChainActions {
       `navigateToDetail` (default false, the gallery's own "+" tiles): when
       true (ChainMapStrip's "+"), open the newly added block's detail view
       once it lands instead of leaving the caller wherever it was. */
-  addModel: (
-    side: ChainSide,
-    insertBlockId: string,
-    options?: { navigateToDetail?: boolean }
-  ) => void;
+  addModel: (insertBlockId: string, options?: { navigateToDetail?: boolean }) => void;
   /** Load a drop on a tile: a .nam / .wav file (NAM must be A2), or a folder
       of them (one block, one model per file). An insert slot adds; an
       existing tone tile swaps in place. `category` is the empty-slot split
@@ -125,28 +121,21 @@ export interface ChainActions {
   swapBlock: (blockId: string, options?: { navigateToDetail?: boolean }) => void;
   /** Copy the tone's TONE3000 URL; resolves true when it hit the clipboard. */
   shareBlock: (block: ToneBlock) => Promise<boolean>;
-  /** Reorder one lane (full order including its insert slot). */
+  /** Reorder the chain (full order including its insert slot). */
   reorderBlocks: (orderedIds: string[]) => void;
-  /** Move a block into the other lane at the given index (stereo drag). */
-  moveBlock: (blockId: string, side: ChainSide, index: number) => void;
-  /** Clone a live tone block (all settings + model) into `side` at `index`
-      (alt-drag duplicate). An insert slot there is filled, otherwise the
-      clone splices in. */
-  duplicateBlock: (sourceBlockId: string, side: ChainSide, index: number) => void;
+  /** Move a block to the given index within the chain (drag reorder). */
+  moveBlock: (blockId: string, index: number) => void;
+  /** Clone a live tone block (all settings + model) into `index` (alt-drag
+      duplicate). An insert slot there is filled, otherwise the clone
+      splices in. */
+  duplicateBlock: (sourceBlockId: string, index: number) => void;
   /** Copy a block into the native block clipboard (tone + settings + model
       bytes). The snapshot is self-contained, so pasting keeps working after
       preset switches or deleting the source block. */
   copyBlock: (blockId: string) => void;
-  /** Paste the copied block into `side` at `index` (the insert slot there
-      is filled). Gate on `canPaste` from useChainState. */
-  pasteBlock: (side: ChainSide, index: number) => void;
-  /** Swap the Left and Right chains wholesale (stereo only). */
-  swapChains: () => void;
-  /** Branch the other lane off `side` after one of its tone blocks (stereo
-      only); the other lane's input becomes the tapped signal. */
-  setBranch: (side: ChainSide, afterBlockId: string) => void;
-  /** Revert to two fully independent chains. */
-  clearBranch: () => void;
+  /** Paste the copied block into `index` (the insert slot there is filled).
+      Gate on `canPaste` from useChainState. */
+  pasteBlock: (index: number) => void;
   /** Native only stores the active model, so the switch always carries the
       model object (paged in from the API by the picker, or a local tone's
       own model list); id/name/model_url is all native needs. */

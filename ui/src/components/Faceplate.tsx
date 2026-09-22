@@ -1,13 +1,10 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { rem } from '../hooks/useUiScale';
-import { ChevronDown, Equal, Power } from './icons';
+import { ChevronDown, Power } from './icons';
 import { KnobControl } from './KnobControl';
-import { balanceDbScale, gainDbScale, gateDbScale, toneScale } from './knobScale';
-import { SpreadGroup } from './SpreadControls';
-import { AlignGroup } from './AlignControls';
+import { dualPanScale, gainDbScale, gateDbScale, toneScale } from './knobScale';
 import { useParameter } from '../hooks/useParameter';
 import type { InputMode } from '../types/chain';
-import { useAutoMeasure, type AutoMeasureResult } from '../hooks/useAutoMeasure';
 import { useDismissable } from '../hooks/useDismissable';
 import { HELP, helpProps } from './helpText';
 import { ChromeIconButton } from './ChromeIconButton';
@@ -38,20 +35,13 @@ import {
  * both. The mode is chain state (session-persisted, not a preset value;
  * it's I/O routing, not tone).
  *
- * Output gain: the main level knob plus a small balance knob that trims the
- * two chains (or spread's two channels) against each other (±12 dB
- * opposing, center = off). The balance knob only appears when the trim is
- * audible (stereo chains on any rig, or spread on a stereo rig); DSP forces
- * center when inactive so a leftover setting can't skew a mono bus. All
- * values are host parameters, so presets/undo get them for free.
- *
- * Mono rigs (mono host track, or a one-channel standalone output device):
- * Spread dims and goes inert as a whole, since a double can't be heard on
- * one channel; native keeps it idle to match, so the output is the plain
- * mono chain even when a preset carries spread switched on. Align stays
- * live: native sums stereo chains to mono there, and aligning them shapes
- * that sum. The Bal knob and auto balance stay too (they trim the two
- * chains inside the sum); the pan rail carries the MONO chip.
+ * Output gain: the main level knob plus a small Pan knob that positions
+ * whatever the chain outputs (plain mono, a real stereo source, or a Dual
+ * Mono block's own widening) in the stereo field (±12 dB opposing gain tilt,
+ * center = no effect). Always shown; DSP itself still centers the tilt on a
+ * mono rig (a stereo host bus feeding a mono output device), since there's
+ * nothing to pan across. All values are host parameters, so presets/undo get
+ * them for free.
  */
 
 export const PLATE_HEIGHT = 108;
@@ -107,18 +97,13 @@ const InputModeGlyph: React.FC<{ mode: InputMode }> = ({ mode }) =>
  */
 const InputModeButton: React.FC<{
   mode: InputMode;
-  /** A chain branch is active: the chain has a single (mono) source, so the
-      "Stereo" routing is unavailable (native enforces the same). */
-  branched: boolean;
   onChange: (mode: InputMode) => void;
-}> = ({ mode, branched, onChange }) => {
+}> = ({ mode, onChange }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismissable(open, rootRef, close);
-  const options = branched
-    ? INPUT_MODE_OPTIONS.filter((option) => option.mode !== 'stereo')
-    : INPUT_MODE_OPTIONS;
+  const options = INPUT_MODE_OPTIONS;
 
   return (
     // The chrome lift lives on the wrapper (not the button) so the floating
@@ -233,77 +218,29 @@ const InputModeButton: React.FC<{
 };
 
 /**
- * Auto balance: one-shot L/R energy match. Click arms a listening
- * measurement on the native side: play for ~2 s and the measured dB
- * difference is written into the outputBalance parameter (the Bal knob
- * visibly moves). Yellow (listening) while armed; click again to cancel;
- * times out after 15 s of silence.
+ * Output gain knob, plus the always-on Pan knob (center = no effect,
+ * off-center attenuates the opposite channel toward silence at a hard pan -
+ * never boosts the near one, so it only ever repositions the output, never
+ * spikes its loudness).
  */
-/** matchedDb is the measured L/R energy diff (positive = left louder), so
-    the correction lifts the quieter side by that amount relative. */
-const balanceDoneMessage = ({ matchedDb = 0 }: AutoMeasureResult): string => {
-  if (Math.abs(matchedDb) < 0.05) return 'Balanced';
-  return `Balanced · ${matchedDb > 0 ? 'R' : 'L'} +${Math.abs(matchedDb).toFixed(1)} dB`;
-};
-
-const AutoBalanceButton: React.FC = () => {
-  const { listening, toggle } = useAutoMeasure(
-    'startAutoBalance',
-    'cancelAutoBalance',
-    'pollAutoBalance',
-    balanceDoneMessage
-  );
-  return (
-    <ChromeIconButton
-      tone="armed"
-      on={listening}
-      help={HELP.autoBalance}
-      onClick={toggle}
-      offsetY={CHROME_LIFT}
-    >
-      <Equal size={ICON_SIZE} />
-    </ChromeIconButton>
-  );
-};
-
-/**
- * Output gain knob. When the balance trim is audible, a smaller balance
- * knob joins it (center = no effect, off-center trims the two chains, or
- * spread's two channels, against each other by up to ±12 dB on top of the
- * main level), plus the auto-balance (=) button when two independent
- * chains are running.
- */
-const OutputGainKnob: React.FC<{
-  stereo: boolean;
-  /** Show the auto-balance (=) button next to the balance knob. */
-  autoBalance: boolean;
-}> = ({ stereo, autoBalance }) => {
+const OutputGainKnob: React.FC = () => {
   const [level, setLevel, onLevelDrag] = useParameter('outputLevel', 'slider');
-  const [balance, setBalance, onBalanceDrag] = useParameter('outputBalance', 'slider');
+  const [pan, setPan, onPanDrag] = useParameter('outputPan', 'slider');
 
-  // The (=) button sits on the outer edge, keeping Bal next to the main
-  // knob: [=][Bal][knob]. Inactive companions stay mounted but invisible so
-  // the group's footprint is constant; toggling stereo/spread must not
-  // shift the plate (it's laid out with space-between).
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '10rem' }}>
-      <div style={{ visibility: autoBalance ? 'visible' : 'hidden' }}>
-        <AutoBalanceButton />
-      </div>
-      <div style={{ visibility: stereo ? 'visible' : 'hidden' }}>
-        <KnobControl
-          label="Bal"
-          value={balance}
-          onChange={setBalance}
-          size={KNOB_SIZE_SECONDARY}
-          variant="bipolar"
-          thumb="secondary"
-          scale={balanceDbScale}
-          defaultValue={0.5}
-          help={HELP.outputBalance}
-          onDragStateChange={onBalanceDrag}
-        />
-      </div>
+      <KnobControl
+        label="Pan"
+        value={pan}
+        onChange={setPan}
+        size={KNOB_SIZE_SECONDARY}
+        variant="bipolar"
+        thumb="secondary"
+        scale={dualPanScale}
+        defaultValue={0.5}
+        help={HELP.outputPan}
+        onDragStateChange={onPanDrag}
+      />
       <KnobControl
         label="Output"
         value={level}
@@ -319,28 +256,8 @@ const OutputGainKnob: React.FC<{
 };
 
 interface FaceplateProps {
-  /** The balance trim is audible (stereo chains on any rig, or spread on a
-      stereo rig; on a mono rig it trims the chains inside the mono sum);
-      shows the output balance knob. */
-  balanceActive: boolean;
-  /** The rig can drive two distinct output channels at all (stereo host
-      bus / 2+ channel output device). False dims the Spread group and makes
-      it inert, power button included: the feature is unavailable, not
-      merely off (native keeps it idle to match, so a preset saved with
-      spread on plays as plain mono until the plugin lands on a stereo rig
-      again). The Align group stays live: it shapes the mono sum of stereo
-      chains. */
-  stereoOutput: boolean;
-  /** Two independent chains are running (stereo mode); shows the auto
-      balance button and swaps the Spread group for the Align group.
-      Mono-mode spread doesn't need auto balance: both channels carry the
-      same chain, so their energy already matches. */
-  stereoChains: boolean;
   /** Plugin is fed a real stereo source; shows the input-mode button. */
   stereoInput: boolean;
-  /** A chain branch is active; hides the "Stereo" input routing (the chain
-      has a single mono source while branched). */
-  branched: boolean;
   inputMode: InputMode;
   onInputModeChange: (mode: InputMode) => void;
 }
@@ -348,11 +265,7 @@ interface FaceplateProps {
 // Memoized: Plugin re-renders on every chain poll tick, but the plate only
 // depends on these few flags (its knobs subscribe to their own parameters).
 export const Faceplate = React.memo(function Faceplate({
-  balanceActive,
-  stereoOutput,
-  stereoChains,
   stereoInput,
-  branched,
   inputMode,
   onInputModeChange,
 }: FaceplateProps) {
@@ -369,11 +282,14 @@ export const Faceplate = React.memo(function Faceplate({
       style={{
         width: '100%',
         height: `${PLATE_HEIGHT}rem`,
-        display: 'flex',
-        // Five peers (Input, Gate, Tone, Spread/Align, Output) share the
-        // plate width. flex-end keeps the secondary Gate on the same label
-        // baseline as the primary knobs (same pattern as Bal next to Output).
-        justifyContent: 'space-between',
+        display: 'grid',
+        // Three columns, the outer two sharing the leftover space equally:
+        // Tone lands in the fixed-width middle column, centered on the
+        // whole plate regardless of how wide Input/Gate or Output end up -
+        // unlike space-between, which only centered it by coincidence (it
+        // drifted off-center the moment a peer's width/count changed, e.g.
+        // when the old Spread group was removed).
+        gridTemplateColumns: '1fr auto 1fr',
         alignItems: 'flex-end',
         flexShrink: 0,
         borderTop: BORDER,
@@ -382,51 +298,61 @@ export const Faceplate = React.memo(function Faceplate({
         boxSizing: 'border-box',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '10rem' }}>
-        <KnobControl
-          label="Input"
-          value={inputLevel}
-          onChange={setInputLevel}
-          size={KNOB_SIZE_PRIMARY}
-          scale={gainDbScale}
-          defaultValue={0.5}
-          help={HELP.inputLevel}
-          onDragStateChange={onInputDrag}
-        />
-        {stereoInput && (
-          <InputModeButton mode={inputMode} branched={branched} onChange={onInputModeChange} />
-        )}
-      </div>
-
-      {/* Powered-off sections: knobs + labels dim and go inert (uiOffClass);
-          the power button stays outside the dimmed wrapper, bright and
-          clickable, carrying the off state itself. */}
       <div
         style={{
+          justifySelf: 'start',
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'flex-end',
-          gap: '10rem',
+          gap: '40rem',
         }}
       >
-        <div className={uiOffClass(!gateEnabled)} style={{ transition: 'opacity 0.2s ease' }}>
+        <div
+          style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '10rem' }}
+        >
           <KnobControl
-            label="Gate"
-            value={noiseGate}
-            onChange={setNoiseGate}
-            size={KNOB_SIZE_SECONDARY}
-            thumb="secondary"
-            scale={gateDbScale}
-            defaultValue={gateDbScale.fromDisplay(-80)}
-            help={HELP.gate}
-            onDragStateChange={onGateDrag}
+            label="Input"
+            value={inputLevel}
+            onChange={setInputLevel}
+            size={KNOB_SIZE_PRIMARY}
+            scale={gainDbScale}
+            defaultValue={0.5}
+            help={HELP.inputLevel}
+            onDragStateChange={onInputDrag}
+          />
+          {stereoInput && <InputModeButton mode={inputMode} onChange={onInputModeChange} />}
+        </div>
+
+        {/* Powered-off sections: knobs + labels dim and go inert (uiOffClass);
+            the power button stays outside the dimmed wrapper, bright and
+            clickable, carrying the off state itself. */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'flex-end',
+            gap: '10rem',
+          }}
+        >
+          <div className={uiOffClass(!gateEnabled)} style={{ transition: 'opacity 0.2s ease' }}>
+            <KnobControl
+              label="Gate"
+              value={noiseGate}
+              onChange={setNoiseGate}
+              size={KNOB_SIZE_SECONDARY}
+              thumb="secondary"
+              scale={gateDbScale}
+              defaultValue={gateDbScale.fromDisplay(-80)}
+              help={HELP.gate}
+              onDragStateChange={onGateDrag}
+            />
+          </div>
+          <PowerButton
+            on={gateEnabled}
+            help={HELP.gatePower}
+            onClick={() => setGateEnabled(!gateEnabled)}
           />
         </div>
-        <PowerButton
-          on={gateEnabled}
-          help={HELP.gatePower}
-          onClick={() => setGateEnabled(!gateEnabled)}
-        />
       </div>
 
       <div
@@ -484,20 +410,9 @@ export const Faceplate = React.memo(function Faceplate({
         />
       </div>
 
-      {/* Stereo-image slot: Spread in mono, Align in stereo. Fixed footprint
-          (IMAGE_GROUP_WIDTH) so mode switches never shift the plate. On a
-          mono rig only Spread dims and goes inert as a whole (the hover
-          hint says why): a double can't be heard on one channel. Align
-          stays live there: it shapes the mono sum of the two chains. */}
-      <div
-        className={uiOffClass(!stereoOutput && !stereoChains)}
-        style={{ transition: 'opacity 0.2s ease' }}
-        {...(!stereoOutput && !stereoChains ? helpProps(HELP.spreadMonoOutput) : {})}
-      >
-        {stereoChains ? <AlignGroup /> : <SpreadGroup />}
+      <div style={{ justifySelf: 'end' }}>
+        <OutputGainKnob />
       </div>
-
-      <OutputGainKnob stereo={balanceActive} autoBalance={stereoChains} />
     </div>
   );
 });

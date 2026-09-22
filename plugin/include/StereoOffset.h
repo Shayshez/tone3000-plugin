@@ -5,19 +5,18 @@
 #include "ImageDeck.h"
 
 /**
- * Align (stereo chain mode): a short delay applied to one chain, in place,
- * primarily for time-aligning the two chains (e.g. captures of the same
- * performance that land a few ms apart). Stereo chain mode only; mono mode
- * has Spread instead (see Spread.h), a separate feature with its own
- * parameters.
+ * Align: a short delay applied to one side, in place, primarily for
+ * time-aligning two sources (e.g. captures of the same performance that
+ * land a few ms apart). Used by a Dual Mono block to align its own two
+ * independent sides against each other.
  *
  * Controls (see StereoOffsetParams for the normalized encoding): one bipolar
- * knob (alignOffset). Center = 0 ms; left of center delays the left chain,
- * right of center the right chain, up to ±24 ms.
+ * knob (alignOffset). Center = 0 ms; left of center delays the left side,
+ * right of center the right side, up to ±24 ms.
  *
- * On top of the corrective delay sits the same advanced deck as Spread
- * (shared primitives in ImageDeck.h), all default OFF so align stays a
- * pure corrective tool until asked otherwise:
+ * On top of the corrective delay sits an advanced deck (shared primitives
+ * in ImageDeck.h), all default OFF so align stays a pure corrective tool
+ * until asked otherwise:
  *  - Wobble: random-walk drift of the delay time (up to ±1.2 ms), which
  *    turns the delayed chain into an ADT-style second take.
  *  - Crossover: both channels are split (LR4, 32.5-520 Hz); lows pass the
@@ -28,8 +27,8 @@
  *    corrected by the delay; it is a creative width control, not part of
  *    the corrective path.
  *  - Diffuse: the phase-diffusion cascade on the delayed side's high band.
- *    No precedence trim here, unlike Spread's lag deck: these are two real
- *    chains and a corrective tool must not color levels.
+ *    No precedence trim here: these are two real sides and a corrective
+ *    tool must not color levels.
  *
  * Lifecycle: while Align is on the engine always runs (with the deck off a
  * 0 ms delay is identity, and the per-sample cost is small), so knob moves
@@ -56,9 +55,9 @@
  * adds at most ±1.2 ms of ~0.3 Hz drift on top, far below real time, so
  * the invariant holds with it engaged.
  *
- * Correlation: process() keeps the same ~300 ms running normalized L/R
- * output correlation as Spread (DeckCorrelation), published for the UI
- * mono-safety meter in the align advanced panel.
+ * Correlation: process() keeps a ~300 ms running normalized L/R output
+ * correlation (DeckCorrelation), published for the UI's per-block
+ * mono-safety meter.
  *
  * Audio thread only (the correlation atomic is read by the UI thread);
  * zero allocation after prepare().

@@ -24,7 +24,7 @@ TEST(PredelayTest, DoesNotAffectDryPath) {
     proc.setPlayConfigDetails(2, 2, kFs, kBlock);
     proc.prepareToPlay(kFs, kBlock);
 
-    seedStereoChains(proc, {"blk-a"}, {});
+    seedChain(proc, {"blk-a"});
     EXPECT_TRUE(waitForChainLoaded(proc)) << "IR block never finished loading from cache";
 
     // Pure dry: mix = 0. Predelay is the only thing that differs between
@@ -72,7 +72,7 @@ TEST(PredelayTest, DelaysOnlyTheWetPath) {
   proc.setPlayConfigDetails(2, 2, kFs, kBlock);
   proc.prepareToPlay(kFs, kBlock);
 
-  seedStereoChains(proc, {"blk-a"}, {});
+  seedChain(proc, {"blk-a"});
   ASSERT_TRUE(waitForChainLoaded(proc));
 
   // Fully wet: output is exactly the convolved+predelayed signal, nothing
@@ -113,7 +113,7 @@ TEST(PredelayTest, DelaysOnlyTheWetPath) {
   ChainTestProcessor proc2;
   proc2.setPlayConfigDetails(2, 2, kFs, kBlock);
   proc2.prepareToPlay(kFs, kBlock);
-  seedStereoChains(proc2, {"blk-a"}, {});
+  seedChain(proc2, {"blk-a"});
   ASSERT_TRUE(waitForChainLoaded(proc2));
   ASSERT_TRUE(proc2.setBlockParam("blk-a", "mix", 1.0));
   ASSERT_TRUE(proc2.setBlockParam("blk-a", "predelay", 0.2));  // 200ms

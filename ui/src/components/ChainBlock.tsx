@@ -109,8 +109,7 @@ const IMAGE_SIZE = 192;
 const IMAGE_SIZE_INFO = 160;
 /** Mini meter height in the side rails (meter sits centered above its knob). */
 const RAIL_METER_HEIGHT = 160;
-/** Stereo Processing screen's Wobble/Crossover/Diffuse columns - same idea
-    and value as ImageDeckPanel.tsx's own SECTION_WIDTH: sized for the
+/** Stereo Processing screen's Wobble/Crossover/Diffuse columns: sized for the
     longest label ("Crossover"), so it doesn't collide with its neighbor. */
 const DECK_SECTION_WIDTH = 82;
 /** Centers the normalize (=) chrome box on the Out knob. */
@@ -625,10 +624,9 @@ const DualSideCard: React.FC<{
           width: '340rem',
         }}
       >
-        {/* Mute sits outside the dimmed group below (same "the button that
-            controls the section stays clickable" shape ImageDeckPanel's own
-            power button uses) so muting stays reachable once the rest goes
-            inert. */}
+        {/* Mute sits outside the dimmed group below - the button that
+            controls the section stays clickable - so muting stays reachable
+            once the rest goes inert. */}
         <div
           className={uiOffClass(muted)}
           style={{
@@ -782,11 +780,11 @@ const DualSideCard: React.FC<{
       {/* Muted: everything below (thumbnail/title, model picker, Pan/Mix/
           Vol) dims and goes inert, same "the toggle itself sits outside the
           dimmed wrapper" shape as every other power-style dim in this file
-          (ImageDeckPanel's own power button, the wrapper's own `enabled`
-          dim below) - only Mute stays clickable so un-muting is still one
-          click away. The rest of the icon row (EQ/Info/Share/Swap/Trash)
-          stays undimmed on purpose: those manage the tone itself, not its
-          audibility, so muting shouldn't block them. */}
+          (the wrapper's own `enabled` dim below) - only Mute stays clickable
+          so un-muting is still one click away. The rest of the icon row
+          (EQ/Info/Share/Swap/Trash) stays undimmed on purpose: those manage
+          the tone itself, not its audibility, so muting shouldn't block
+          them. */}
       <div
         className={uiOffClass(muted)}
         style={{ display: 'flex', flexDirection: 'column', gap: '8rem', minWidth: 0 }}
@@ -974,10 +972,10 @@ interface ChainBlockProps {
       (same targeting GalleryLane's own "+" tiles use). See
       ChainMapStrip.onAdd. */
   onAddBlockAt: (insertBlockId: string) => void;
-  /** Paste the copied block into a specific insert slot in this block's own
-      lane (same canPaste/actions.pasteBlock(side, index) gating GalleryLane's
-      own "+" tiles use, side already bound by ChainView). Null while
-      there's nothing valid to paste. See ChainMapStrip.onPasteBlockAt. */
+  /** Paste the copied block into a specific insert slot in the chain (same
+      canPaste/actions.pasteBlock(index) gating GalleryLane's own "+" tiles
+      use). Null while there's nothing valid to paste. See
+      ChainMapStrip.onPasteBlockAt. */
   onPasteBlockAt: ((index: number) => void) | null;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
@@ -1016,14 +1014,13 @@ interface ChainBlockProps {
       Trash in the header must route through the dual-aware actions
       (addToDualSlot/removeDualSlotContent) instead of the ordinary
       swapBlock/removeBlock a ChainBlock instance uses everywhere else -
-      those act on a *lane slot*, which this child was never in (it's
+      those act on a *chain slot*, which this child was never in (it's
       nested), so calling them on the child's own id either silently no-ops
-      (removeChainBlock only scans the two top-level lanes) or, worse,
-      leaves the picker's post-pick navigation pointed at an id ChainView
-      can never resolve (DETAIL_BLOCK_STORAGE_KEY set to a child id that
-      isn't in chain/chainRight - a real bug this fixes: swapping a side's
-      tone from inside its own full editor left the whole center panel
-      permanently blank). */
+      (removeChainBlock only scans the top-level chain) or, worse, leaves the
+      picker's post-pick navigation pointed at an id ChainView can never
+      resolve (DETAIL_BLOCK_STORAGE_KEY set to a child id that isn't in the
+      chain - a real bug this fixes: swapping a side's tone from inside its
+      own full editor left the whole center panel permanently blank). */
   dualParent?: { blockId: string; isLeftSide: boolean };
 }
 
@@ -1583,7 +1580,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   }, [commitDualAlign, actions, blockId]);
   // One-click probe measurement scoped to this block's own two sides - see
   // useDualAutoAlign's own doc comment for why it's a separate hook from
-  // the global AlignControls.tsx's useAutoMeasure.
+  // the shared useAutoMeasure.
   const { listening: dualAutoAlignListening, toggle: toggleDualAutoAlign } =
     useDualAutoAlign(blockId);
   // Master bypass for the whole Stereo Processing screen (Align + Ø) -
@@ -2322,8 +2319,8 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     // rendering path (see this session's design discussion, recorded in
     // dual_mono_ux_punchlist.md). Local state, not ChainView's own
     // detailBlockId: a dual child is never reachable through the top-level
-    // chain/chainRight arrays ChainView resolves detail views from, so
-    // threading it through there would need ChainView to understand
+    // chain array ChainView resolves detail views from, so threading it
+    // through there would need ChainView to understand
     // nesting it doesn't today (and its awaitingDetailBlock guard would
     // render blank forever for an id it can never confirm - see the
     // research this plan was built on). onBack here only clears this local
@@ -3023,13 +3020,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         Ø
                       </ChromeIconButton>
                     </div>
-                    {/* Wobble/Crossover/Diffuse: fixed-width columns (same
-                        SECTION_WIDTH idea as the global ImageDeckPanel's own
-                        SectionKnob - a label wider than its knob, like
-                        "Crossover", needs real room or it collides with its
-                        neighbor) with the power button floated beside the
-                        knob, not above it - same layout ImageDeckPanel
-                        already uses for this exact control shape. */}
+                    {/* Wobble/Crossover/Diffuse: fixed-width columns (a label
+                        wider than its knob, like "Crossover", needs real
+                        room or it collides with its neighbor) with the power
+                        button floated beside the knob, not above it. */}
                     <div
                       style={{
                         display: 'flex',
@@ -3117,8 +3111,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       {/* No continuous control, just a power toggle - the
                           same fixed-height slot (matching KNOB_SIZE_SECONDARY,
                           the knob columns' own height) keeps its button and
-                          label lined up with Wobble/Crossover's, same
-                          technique as ImageDeckPanel's own Diffuse column. */}
+                          label lined up with Wobble/Crossover's. */}
                       <div
                         style={{
                           width: `${DECK_SECTION_WIDTH}rem`,

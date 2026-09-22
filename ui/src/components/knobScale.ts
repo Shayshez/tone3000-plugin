@@ -53,9 +53,6 @@ export const percentScale: KnobScale = makeScale(
     shows relative dB (0 at center) to keep it simple. */
 export const gainDbScale = linearScale(-24, 24, 'dB', 1);
 
-/** Stereo balance trim: 0.5 = centered, ±12 dB per channel at the ends. */
-export const balanceDbScale = linearScale(-12, 12, 'dB', 1);
-
 /** Gate threshold: normalized spans -100..0 dB. */
 export const gateDbScale = linearScale(-100, 0, 'dB', 0);
 

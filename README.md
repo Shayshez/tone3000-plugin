@@ -19,8 +19,8 @@ install, load tones, and use it.
   pick **Load File / Load Folder**; no account needed. Design notes in
   [`plugin/docs/local-models.md`](plugin/docs/local-models.md).
 - **Build a signal chain.** Multiple NAM and IR blocks, per-block EQ and
-  gain/mix, drag to reorder, dual chains in stereo mode with branching,
-  undo/redo, and presets.
+  gain/mix, drag to reorder, per-block stereo widening with a Dual Mono
+  block, undo/redo, and presets.
 - **Cross-platform.** One plugin on macOS, Windows, and Linux. The UI is a
   React app rendered in a native WebView (WebView2 on Windows, WebKit
   elsewhere).
@@ -206,18 +206,14 @@ flowchart LR
     IG --> GATE["Noise Gate *"]
     GATE --> RS(("⇅ 48k"))
     RS --> OS(("×N ↑ *"))
-    subgraph CHAINS["Tone chains, 48 kHz × oversampling factor"]
+    subgraph CHAIN["Tone chain, 48 kHz × oversampling factor"]
         direction LR
-        CL["Left chain\n(NAM / IR blocks)"]
-        CR["Right chain\n(stereo mode only)"]
+        C["Chain\n(NAM / IR / Dual Mono blocks)"]
     end
-    OS --> CL
-    OS --> CR
-    CL --> OS2(("×N ↓ *"))
-    CR --> OS2
+    OS --> C
+    C --> OS2(("×N ↓ *"))
     OS2 --> RS2(("⇅ 48k"))
-    RS2 --> IMAGE["Spread * (mono) /\nAlign * (stereo)"]
-    IMAGE --> PAN["Balance + Pan *\n(per-chain trim, then\nconstant-power blend)"]
+    RS2 --> PAN["Pan *\n(constant-power)"]
     PAN --> DCB["DC Blocker\n(~5 Hz HPF)"]
     DCB --> TS["Tone Stack *"]
     TS --> OG["Output Level"]
@@ -228,30 +224,20 @@ flowchart LR
   button picks what enters the chain: both channels (default) or one channel
   mirrored onto both. Saved with the session, not with presets; it's I/O
   routing, not tone.
-- **Mono mode**: only the Left chain runs and the pan stage is skipped. With
-  Spread on, the chain output becomes an ADT-style stereo double; see
-  [`plugin/docs/stereo-image.md`](plugin/docs/stereo-image.md) for the design
-  (it also covers the stereo-mode Align feature below, and what happens on a
-  rig that can't reproduce stereo at all: Spread stays idle and greyed out,
-  while stereo chains keep running and are summed to mono).
-- **Stereo mode**: channel 0 feeds the Left chain and channel 1 the Right
-  chain independently. The Balance trim scales each chain (12 dB opposing)
-  before the pan knobs place them with a constant-power law, so a balance
-  dialed in to match the chains stays correct at any pan position; each pan
-  knob carries a solo that auditions its chain alone (exclusive: engaging
-  one clears the other; the mute rides the same smoothed matrix, so it
-  never clicks, and stays out of presets) and a polarity flip (Ø) for
-  captures that land 180° out (the sign rides the same matrix smoothers, so
-  flips glide through zero instead of clicking). Align applies a corrective
-  alignment delay (up to 24 ms, sub-sample precise) to one chain, useful when
-  NAM models or IRs carry different baked-in latency; the auto-align button
-  mutes the output for under half a second, drives both chains with an
-  identical internal sweep, and measures the lag and relative polarity from
-  the cross-correlation (`plugin/include/AutoOffset.h`). On a rig that can't
-  reproduce stereo (mono track, one-channel output device) both chains still
-  run and are summed to mono at the output (½(L+R), the host's own mono-fold
-  law), with balance/solo/Ø live inside the sum, pans inert, and a MONO chip
-  on the pan rail (see the stereo-image doc above).
+- **Single mono chain**: one tone chain regardless of host bus layout; there
+  is no separate stereo chain mode. Stereo widening is entirely opt-in and
+  per-block: a Dual Mono block widens just where it sits in the chain, with
+  its own per-block Align, Ø (polarity), Solo/Mute, and live goniometer - it
+  splits into two independent per-block runs and recombines (Pan/Width)
+  before continuing serially; see
+  [`plugin/docs/stereo-image.md`](plugin/docs/stereo-image.md) for the
+  design.
+- **Pan**: whatever the chain outputs (mono-duplicated, or genuinely widened
+  by a Dual Mono block) passes through a single always-available output Pan
+  knob (constant-power, ±12 dB opposing) that positions it in the stereo
+  field. Active whenever the rig can reproduce two channels; on a rig that
+  can't (mono track, one-channel output device) it stays at identity
+  regardless of its dialed value.
 - **Tone stack**: one global Bass/Middle/Treble EQ after the DC blocker,
   voiced to match the reference
   [NeuralAmpModelerPlugin](https://github.com/sdatkinson/NeuralAmpModelerPlugin)
@@ -265,14 +251,11 @@ flowchart LR
   and IR CPU and sound are identical at every factor. Design notes in
   [`plugin/docs/oversampling.md`](plugin/docs/oversampling.md).
 - **Multi-core processing**: a Plugin Settings option (on by default,
-  machine-wide) spreads independent chain work across a realtime worker
-  pool. The two stereo chains process concurrently (the Right chain, or the
-  branch lane when branched, on a worker while the audio thread processes
-  the other), and an oversampled NAM model's phase instances fork across
-  cores too. The forking thread can always steal jobs back and run them
-  inline, so the toggle is pure scheduling and the output is bit-identical
-  either way (pinned by `test/src/multicore_tests.cpp`). Design notes in
-  [`plugin/docs/multicore.md`](plugin/docs/multicore.md).
+  machine-wide) spreads an oversampled NAM model's phase instances across a
+  realtime worker pool. The forking thread can always steal jobs back and
+  run them inline, so the toggle is pure scheduling and the output is
+  bit-identical either way (pinned by `test/src/multicore_tests.cpp`).
+  Design notes in [`plugin/docs/multicore.md`](plugin/docs/multicore.md).
 
 Inside every tone block:
 
@@ -310,10 +293,11 @@ IR assets in `test/files`:
   would (48 kHz transparency with zero latency, reported PDC matching the
   measured delay at 44.1/96 kHz, latency stability across oversampling
   toggles, state round trips).
-- `multicore_tests.cpp`: parallel stereo output is bit-identical to serial,
-  across topologies, host rates, and oversampling factors.
-- `spread_tests.cpp`, `swap_fade_tests.cpp`, `branch_tests.cpp`, and friends
-  cover the doubler, engine-swap fades, and chain routing.
+- `multicore_tests.cpp`: parallel NAM phase-fork output is bit-identical to
+  serial, across host rates and oversampling factors.
+- `stereo_offset_tests.cpp`, `swap_fade_tests.cpp`, `dual_mono_block_tests.cpp`,
+  and friends cover Dual Mono's per-block Align, engine-swap fades, and
+  chain routing.
 
 ```sh
 ./script/test-dsp.sh                        # build + run everything

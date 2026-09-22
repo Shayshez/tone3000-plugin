@@ -168,12 +168,6 @@ inline IrCategory irCategoryFromString(const juce::String& s) {
   return s == "cab" ? IrCategory::Cab : IrCategory::IrPlayer;
 }
 
-// Which chain is being processed/edited in stereo mode.
-enum class ChainSide { Left, Right };
-
-constexpr int kNumLanes = 2;
-inline int laneIndex(ChainSide side) { return side == ChainSide::Right ? 1 : 0; }
-
 // Wet-path fade time (see ChainBlock::wetFadeGain): every discontinuous
 // per-block transition (engine swap, power toggle, block add/removal)
 // glides the block's wet mix through bypass over this ramp instead of
@@ -181,15 +175,13 @@ inline int laneIndex(ChainSide side) { return side == ChainSide::Right ? 1 : 0; 
 // chain-edit fade (reorder/cross-lane moves mute-splice the chain output).
 constexpr double kWetFadeSeconds = 0.025;
 
-// Minimum tiles per lane. A lane always presents at least this many blocks
-// (tones + insert placeholders), and always at least one insert placeholder,
-// so an empty lane shows kMinLaneSlots empty slots, and once the user has
-// filled them all there is still one trailing empty slot to add into. The
-// invariant (insertCount == max(kMinLaneSlots - toneCount, 1)) is enforced by
-// TONE3000Processor::normalizeLaneInserts after every structural change, with
-// one relaxation: while a stereo branch is active, the branch lane's surplus
-// trailing inserts are trimmed below this baseline so its indented rail ends
-// level with the trunk lane (see alignBranchLaneLengths).
+// Minimum tiles in the chain. The chain always presents at least this many
+// blocks (tones + insert placeholders), and always at least one insert
+// placeholder, so an empty chain shows kMinLaneSlots empty slots, and once
+// the user has filled them all there is still one trailing empty slot to add
+// into. The invariant (insertCount == max(kMinLaneSlots - toneCount, 1)) is
+// enforced by TONE3000Processor::normalizeLaneInserts after every structural
+// change.
 constexpr int kMinLaneSlots = 5;
 
 // Chain block data structure
@@ -600,11 +592,9 @@ struct ChainBlock {
   // toggle's own on/off state survives undo/redo, state restore, and a
   // second open editor window, same as every other per-block bool here.
   bool dualLinked{false};
-  // DUAL_MONO only: exclusive per-side solo, mirroring the *math* (not the
-  // storage - see setDualSolo's own comment) of the chain-level stereo pan
-  // rail's own soloLeft/soloRight (GalleryLane.tsx / chainSoloLeft APVTS
-  // param, Processor.cpp). At most one is ever true - the setter enforces
-  // exclusivity.
+  // DUAL_MONO only: exclusive per-side solo (see setDualSolo's own comment
+  // on the storage/math split). At most one is ever true - the setter
+  // enforces exclusivity.
   bool dualSoloLeft{false};
   bool dualSoloRight{false};
   // DUAL_MONO only: per-side Mute, unconditional (empty or loaded - see
@@ -619,9 +609,9 @@ struct ChainBlock {
   bool dualLeftMuted{false};
   bool dualRightMuted{false};
   // Smoothed 0/1 gain view of Solo (above) *and* the Mute fields - a raw
-  // instant 0<->1 multiply on dl/dr would click (same reasoning the
-  // chain-level solo's own gain rides a smoother for, imageGainLtoL et al.,
-  // 20ms ramps). Reset/seeded alongside the pan/width smoothers above (same
+  // instant 0<->1 multiply on dl/dr would click, so this rides a smoother
+  // (20ms ramps) same as every other discontinuous gain change in this
+  // codebase. Reset/seeded alongside the pan/width smoothers above (same
   // call sites, ChainBlock.h's own convention); the recombine step sets
   // each one's *target* every call (never a hard reset) so a live solo or
   // mute toggle glides.
@@ -630,10 +620,9 @@ struct ChainBlock {
   // DUAL_MONO only: per-side polarity flip (Ø) - two amp captures don't
   // share a polarity convention, so one side can arrive 180 degrees out
   // against the other; genuinely inverted, not fixable by Align's delay
-  // alone (Align corrects timing, this corrects sign). Mirrors the
-  // chain-level pan rail's own Ø chip (chainInvertLeft/Right APVTS
-  // params), but plain per-block fields like every other DUAL_MONO-only
-  // control here - see setDualInvert. Applied as a smoothed +-1 gain
+  // alone (Align corrects timing, this corrects sign). Plain per-block
+  // fields like every other DUAL_MONO-only control here - see
+  // setDualInvert. Applied as a smoothed +-1 gain
   // multiplied into the same per-sample recombine loop that already reads
   // dualLeft/RightSoloGainSmoother (runDualMono), same "glide, never step"
   // reasoning; reset/seeded alongside the smoothers above.

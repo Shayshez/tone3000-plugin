@@ -99,14 +99,13 @@ interface SettingsProps {
       ChainState.namSlimSizeDefault). */
   namSlimSizeDefault: number;
   onNamSlimSizeDefaultChange: (slimSize: number) => void;
-  /** Multi-core processing (spreads stereo chains and oversampled NAM
-      models across CPU cores). */
+  /** Multi-core processing (spreads oversampled NAM models' phase instances
+      across CPU cores). */
   multiCore: boolean;
   onMultiCoreChange: (enabled: boolean) => void;
-  /** Chain lanes; MIDI Mapping names block-power targets after the tone
-      currently in each slot. `chainRight` is null outside stereo. */
+  /** Chain; MIDI Mapping names block-power targets after the tone currently
+      in each slot. */
   chain: ChainItem[];
-  chainRight: ChainItem[] | null;
 }
 
 // Oversampling rate choices. Values are the osFactor parameter's choice
@@ -186,7 +185,6 @@ export const Settings: React.FC<SettingsProps> = ({
   multiCore,
   onMultiCoreChange,
   chain,
-  chainRight,
 }) => {
   const [tab, setTab] = useState<SettingsTab>(standalone ? initialTab : 'plugin');
 
@@ -545,7 +543,7 @@ export const Settings: React.FC<SettingsProps> = ({
           your DAW too.
         </p>
         <div style={{ marginTop: '16rem' }}>
-          <MidiMapSettings chain={chain} chainRight={chainRight} />
+          <MidiMapSettings chain={chain} />
         </div>
       </div>
 

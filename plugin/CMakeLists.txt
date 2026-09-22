@@ -331,8 +331,6 @@ target_sources(${PROJECT_NAME}
         include/ChainBlock.h
         include/ChainHistory.h
         include/ImageDeck.h
-        include/Spread.h
-        src/Spread.cpp
         include/StereoOffset.h
         src/StereoOffset.cpp
         include/AutoOffset.h

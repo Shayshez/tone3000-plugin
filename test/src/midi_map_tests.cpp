@@ -163,25 +163,21 @@ TEST(MidiMapperTest, CcOnContinuousParameterIsAbsolute) {
               proc.parameters.getParameter("inputLevel")->convertFrom0to1(0.0f), 1e-4f);
 }
 
-TEST(MidiMapperTest, BlockPowerTargetsRouteToTheirLane) {
-  // "blockNPower" is the Left lane, "rightBlockNPower" the Right lane;
-  // deliveries must carry both the position and the lane.
+TEST(MidiMapperTest, BlockPowerTargetsDeliverTheirPosition) {
   TONE3000Processor proc;
   learn(proc, "block1Power", ccEvent(30, 127));
-  learn(proc, "rightBlock2Power", ccEvent(31, 127));
+  learn(proc, "block2Power", ccEvent(31, 127));
 
-  std::vector<std::pair<int, bool>> toggles;
-  proc.midiMapper.onBlockPowerToggle = [&toggles](int index, bool right) {
-    toggles.emplace_back(index, right);
-  };
+  std::vector<int> toggles;
+  proc.midiMapper.onBlockPowerToggle = [&toggles](int index) { toggles.push_back(index); };
 
   proc.midiMapper.processMidi(ccEvent(30, 127));
   proc.midiMapper.processMidi(ccEvent(31, 127));
   pumpMessages();
 
   ASSERT_EQ(toggles.size(), 2u);
-  EXPECT_EQ(toggles[0], std::make_pair(0, false));
-  EXPECT_EQ(toggles[1], std::make_pair(1, true));
+  EXPECT_EQ(toggles[0], 0);
+  EXPECT_EQ(toggles[1], 1);
 }
 
 TEST(MidiMapperTest, PresetStepTargetsDeliverCoalescedDeltas) {

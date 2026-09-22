@@ -20,13 +20,11 @@ export interface MappableTarget {
   kind: 'continuous' | 'toggle' | 'trigger';
 }
 
-/** Block-power targets are positional ("Block 1" is a lane's first tone
+/** Block-power targets are positional ("Block 1" is the chain's first tone
     block whatever it currently holds), so a mapping survives tone swaps and
-    preset loads, like switches on a pedalboard. "blockNPower" is the Left
-    lane (the only lane in mono), "rightBlockNPower" the Right lane (stereo
-    only; the mapping screen offers them per the live chain). Display-only
-    cap (the engine takes up to 64): enough for any realistic pedalboard
-    without burying the picker. */
+    preset loads, like switches on a pedalboard. Display-only cap (the
+    engine takes up to 64): enough for any realistic pedalboard without
+    burying the picker. */
 const BLOCK_POWER_TARGETS = 12;
 
 export const MAPPABLE_TARGETS: MappableTarget[] = [
@@ -37,51 +35,19 @@ export const MAPPABLE_TARGETS: MappableTarget[] = [
   { id: 'presetNext', name: 'Next Preset', group: 'Presets', kind: 'trigger' },
   { id: 'inputLevel', name: 'Input Gain', group: 'Global', kind: 'continuous' },
   { id: 'outputLevel', name: 'Output Level', group: 'Global', kind: 'continuous' },
-  { id: 'outputBalance', name: 'Output Balance', group: 'Global', kind: 'continuous' },
+  { id: 'outputPan', name: 'Output Pan', group: 'Global', kind: 'continuous' },
   { id: 'gateEnabled', name: 'Gate Power', group: 'Noise Gate', kind: 'toggle' },
   { id: 'gateThreshold', name: 'Gate Threshold', group: 'Noise Gate', kind: 'continuous' },
   { id: 'toneEqEnabled', name: 'Tone Stack Power', group: 'Tone Stack', kind: 'toggle' },
   { id: 'toneBass', name: 'Bass', group: 'Tone Stack', kind: 'continuous' },
   { id: 'toneMid', name: 'Mid', group: 'Tone Stack', kind: 'continuous' },
   { id: 'toneTreble', name: 'Treble', group: 'Tone Stack', kind: 'continuous' },
-  { id: 'spreadEnabled', name: 'Spread Power', group: 'Spread', kind: 'toggle' },
-  { id: 'spreadOffset', name: 'Spread Offset', group: 'Spread', kind: 'continuous' },
-  { id: 'spreadWobble', name: 'Spread Wobble', group: 'Spread', kind: 'continuous' },
-  { id: 'spreadWobbleEnabled', name: 'Spread Wobble Power', group: 'Spread', kind: 'toggle' },
-  { id: 'spreadCrossover', name: 'Spread Crossover', group: 'Spread', kind: 'continuous' },
-  { id: 'spreadCrossoverEnabled', name: 'Spread Crossover Power', group: 'Spread', kind: 'toggle' },
-  { id: 'spreadDiffuseEnabled', name: 'Spread Diffuse Power', group: 'Spread', kind: 'toggle' },
-  // Virtual target like block powers: stereo on/off is chain state, not an
-  // APVTS parameter (the native mapper resolves the id itself).
-  { id: 'stereoEnabled', name: 'Stereo Mode', group: 'Stereo', kind: 'toggle' },
-  { id: 'alignEnabled', name: 'Align Power', group: 'Align', kind: 'toggle' },
-  { id: 'alignOffset', name: 'Align Offset', group: 'Align', kind: 'continuous' },
-  { id: 'alignWobble', name: 'Align Wobble', group: 'Align', kind: 'continuous' },
-  { id: 'alignWobbleEnabled', name: 'Align Wobble Power', group: 'Align', kind: 'toggle' },
-  { id: 'alignCrossover', name: 'Align Crossover', group: 'Align', kind: 'continuous' },
-  { id: 'alignCrossoverEnabled', name: 'Align Crossover Power', group: 'Align', kind: 'toggle' },
-  { id: 'alignDiffuseEnabled', name: 'Align Diffuse Power', group: 'Align', kind: 'toggle' },
-  { id: 'chainPanLeft', name: 'Pan L', group: 'Stereo', kind: 'continuous' },
-  { id: 'chainPanRight', name: 'Pan R', group: 'Stereo', kind: 'continuous' },
-  { id: 'chainSoloLeft', name: 'Solo L', group: 'Stereo', kind: 'toggle' },
-  { id: 'chainSoloRight', name: 'Solo R', group: 'Stereo', kind: 'toggle' },
-  { id: 'chainInvertLeft', name: 'Invert L', group: 'Stereo', kind: 'toggle' },
-  { id: 'chainInvertRight', name: 'Invert R', group: 'Stereo', kind: 'toggle' },
   ...Array.from(
     { length: BLOCK_POWER_TARGETS },
     (_, i): MappableTarget => ({
       id: `block${i + 1}Power`,
       name: `Block ${i + 1} Power`,
       group: 'Chain',
-      kind: 'toggle',
-    })
-  ),
-  ...Array.from(
-    { length: BLOCK_POWER_TARGETS },
-    (_, i): MappableTarget => ({
-      id: `rightBlock${i + 1}Power`,
-      name: `Block ${i + 1} Power`,
-      group: 'Chain R',
       kind: 'toggle',
     })
   ),

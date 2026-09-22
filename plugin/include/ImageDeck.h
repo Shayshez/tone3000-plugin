@@ -5,13 +5,10 @@
 #include <cmath>
 
 /**
- * Shared DSP primitives for the two stereo-image engines: Spread (mono
- * chain mode, Spread.h) and Align (stereo chain mode, StereoOffset.h). The
- * features are independent (separate parameters, separate lifecycles), but
- * their advanced "deck" sections are deliberately the same circuit so the
- * two faces of the stereo-image slot sound and read alike: a wobbling
- * delay, a crossover that keeps lows out of the treatment, and an allpass
- * diffusion cascade. Design notes in plugin/docs/stereo-image.md.
+ * Shared DSP primitives for Align (StereoOffset.h), Dual Mono's own
+ * per-block stereo-image engine: a wobbling delay, a crossover that keeps
+ * lows out of the treatment, and an allpass diffusion cascade. Design notes
+ * in plugin/docs/stereo-image.md.
  *
  * Everything here is audio-thread only (the correlation atomic is read by
  * the UI thread) and allocation-free.
@@ -91,8 +88,8 @@ struct DeckDiffuser {
 /** Random-walk wobble source: white noise through two cascaded 0.3 Hz
     one-poles. One pole is not enough: its 6 dB/oct tail leaves ~1% of the
     noise variance above 20 Hz, and audio-rate delay-time noise FMs the
-    delayed channel into broadband fizz (regression covered by
-    SpreadTest.WobbleAddsNoBroadbandFizz).
+    delayed channel into broadband fizz (this DeckWobble shape is what
+    keeps Align/Dual Mono's own wobble clean of that artifact).
 
     next() returns the normalized walk in -1..1; callers scale it by
     kDeckWobbleMaxMs and their depth. The normalization is analytic: the

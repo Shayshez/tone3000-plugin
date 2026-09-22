@@ -16,15 +16,12 @@
  * in hosts (the DAW hands us the buffer). The map serializes with plugin
  * state (getStateInformation), so it travels with DAW sessions.
  *
- * Targets come in four kinds:
+ * Targets come in three kinds:
  *   - APVTS parameters ("gateThreshold").
  *   - Positional block powers ("block1Power" = the first tone block in the
- *     Left lane, "rightBlock1Power" = the first in the Right lane; stereo
- *     only). Positional addressing is deliberate: block ids are ephemeral
+ *     chain). Positional addressing is deliberate: block ids are ephemeral
  *     (tone swaps, preset loads), but "my second stomp bypasses block 2" is
  *     a pedalboard fact that should survive all of that.
- *   - Stereo mode ("stereoEnabled"): chain state, not a parameter, so it
- *     gets the same virtual-target treatment as block powers.
  *   - Preset steps ("presetPrevious" / "presetNext"): fire-per-press
  *     triggers that walk the preset list, for footswitches programmed with
  *     CC / note buttons instead of program changes.
@@ -35,7 +32,7 @@
  * from the pairing instead of configured:
  *   - CC on a continuous parameter → absolute (value/127 → normalized).
  *   - CC on any toggle/trigger target (boolean parameter, block power,
- *     stereo mode, preset step) → fires once per press. Press detection
+ *     preset step) → fires once per press. Press detection
  *     (see applyEvent): value ≥ 64 fires; a value < 64 also fires unless it
  *     follows a ≥ 64 value from the same control (a momentary switch's
  *     release). Covers momentary pedals (127 then 0), latching values, and
@@ -50,11 +47,11 @@
  * Parameter writes go through setValueNotifyingHost, the standard MIDI-learn
  * path, which hosts accept from the processing callback. Everything else is
  * deferred to the message thread via AsyncUpdater: learn captures, program
- * changes, preset steps, and block-power / stereo toggles (chain edits take
- * the chain lock and are undoable, so they must never run on the audio
- * thread). Pending toggles are parity-coalesced (XOR per block, a flip
- * counter for stereo, a signed step sum for presets), so two stomps before
- * the async hop still net out to the right state.
+ * changes, preset steps, and block-power toggles (chain edits take the chain
+ * lock and are undoable, so they must never run on the audio thread). Pending
+ * toggles are parity-coalesced (XOR per block, a signed step sum for
+ * presets), so two stomps before the async hop still net out to the right
+ * state.
  */
 class MidiMapper : private juce::AsyncUpdater {
 public:
@@ -95,22 +92,16 @@ public:
   std::function<void()> onChanged;
   /** Program change n arrived (post channel filter). */
   std::function<void(int program)> onProgramChange;
-  /** A mapped block-power control fired for the given chain position
-      (rightLane = the Right lane's Nth tone block, stereo mode only). */
-  std::function<void(int blockIndex, bool rightLane)> onBlockPowerToggle;
-  /** A mapped stereo-mode control fired (net of parity coalescing). */
-  std::function<void()> onStereoToggle;
+  /** A mapped block-power control fired for the given chain position. */
+  std::function<void(int blockIndex)> onBlockPowerToggle;
   /** Mapped preset prev/next controls fired; delta is the net step count
       (+1 per next press, -1 per previous, coalesced like the toggles). */
   std::function<void(int delta)> onPresetStep;
 
 private:
   enum class Source : int { cc = 0, note = 1 };
-  enum class Kind : int { parameter = 0, blockPower = 1, stereoMode = 2, presetStep = 3 };
+  enum class Kind : int { parameter = 0, blockPower = 1, presetStep = 3 };
 
-  /** Virtual target id for the chain's stereo on/off (chain state, not an
-      APVTS parameter; the UI catalog uses the same id). */
-  static constexpr const char* kStereoTarget = "stereoEnabled";
   /** Virtual target ids for preset stepping (the UI catalog uses the same
       ids). Triggers, not toggles: each press walks the preset list. */
   static constexpr const char* kPresetPrevTarget = "presetPrevious";
@@ -121,7 +112,6 @@ private:
     Kind kind = Kind::parameter;
     juce::RangedAudioParameter* param = nullptr;  // Kind::parameter only
     int blockIndex = -1;                          // Kind::blockPower only
-    bool rightBlock = false;                      // Kind::blockPower only: Right lane
     int presetDelta = 0;                          // Kind::presetStep only: +1 / -1
     Source source = Source::cc;
     int number = 0;       // CC number or note number
@@ -139,17 +129,15 @@ private:
   /** Parsed block-power target: index -1 for anything else. */
   struct BlockPowerTarget {
     int index = -1;
-    bool right = false;
   };
 
-  /** "block3Power" → {2, left}, "rightBlock3Power" → {2, right}; index -1
-      for anything else. Bounded by the width of the pending-toggle bitmask. */
+  /** "block3Power" → {2}; index -1 for anything else. Bounded by the width
+      of the pending-toggle bitmask. */
   static BlockPowerTarget blockPowerTargetFor(const juce::String& targetId);
 
   bool isValidTarget(const juce::String& targetId) const {
-    return blockPowerTargetFor(targetId).index >= 0 || targetId == kStereoTarget ||
-           targetId == kPresetPrevTarget || targetId == kPresetNextTarget ||
-           parameters.getParameter(targetId) != nullptr;
+    return blockPowerTargetFor(targetId).index >= 0 || targetId == kPresetPrevTarget ||
+           targetId == kPresetNextTarget || parameters.getParameter(targetId) != nullptr;
   }
 
   Mapping makeMapping(const juce::String& targetId, Source source, int number) const;
@@ -180,10 +168,8 @@ private:
 
   // Audio → message thread deliveries (see class comment).
   std::atomic<int> pendingProgram{-1};  // last PC wins
-  // XOR-coalesced block-power toggles, bit = block position, one mask per lane.
+  // XOR-coalesced block-power toggles, bit = block position.
   std::atomic<juce::uint64> pendingBlockToggles{0};
-  std::atomic<juce::uint64> pendingRightBlockToggles{0};
-  std::atomic<int> pendingStereoToggles{0};  // flip count; parity applies
   std::atomic<int> pendingPresetSteps{0};    // signed sum of ±1 steps
   std::atomic<bool> mapDirty{false};                 // gate for onChanged
 

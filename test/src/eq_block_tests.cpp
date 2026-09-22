@@ -197,7 +197,7 @@ TEST(EqBlockTest, DuplicateAndPasteComeUpLoadedImmediately) {
   ASSERT_FALSE(sourceId.empty());
   ASSERT_TRUE(proc.setBlockEqBand(sourceId, 2, shapedBand()));
 
-  const std::string dupId = proc.duplicateChainBlock(sourceId, "left", 1);
+  const std::string dupId = proc.duplicateChainBlock(sourceId, 1);
   ASSERT_FALSE(dupId.empty());
   const juce::var dup = blockById(proc, dupId);
   ASSERT_FALSE(dup.isVoid());
@@ -207,7 +207,7 @@ TEST(EqBlockTest, DuplicateAndPasteComeUpLoadedImmediately) {
   EXPECT_NEAR(static_cast<double>(dup["params"]["eq"]["bands"][2]["gainDb"]), 12.0, 1e-6);
 
   ASSERT_TRUE(proc.copyChainBlock(sourceId));
-  const std::string pasteId = proc.pasteChainBlock("left", 2);
+  const std::string pasteId = proc.pasteChainBlock(2);
   ASSERT_FALSE(pasteId.empty());
   const juce::var pasted = blockById(proc, pasteId);
   ASSERT_FALSE(pasted.isVoid());

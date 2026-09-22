@@ -120,28 +120,7 @@ private:
 
   juce::WebSliderRelay inputLevelRelay{"inputLevel"};
   juce::WebSliderRelay outputLevelRelay{"outputLevel"};
-  juce::WebSliderRelay outputBalanceRelay{"outputBalance"};
-  juce::WebToggleButtonRelay spreadEnabledRelay{"spreadEnabled"};
-  juce::WebSliderRelay spreadOffsetRelay{"spreadOffset"};
-  juce::WebSliderRelay spreadWobbleRelay{"spreadWobble"};
-  juce::WebToggleButtonRelay spreadWobbleEnabledRelay{"spreadWobbleEnabled"};
-  juce::WebSliderRelay spreadCrossoverRelay{"spreadCrossover"};
-  juce::WebToggleButtonRelay spreadCrossoverEnabledRelay{"spreadCrossoverEnabled"};
-  juce::WebToggleButtonRelay spreadDiffuseEnabledRelay{"spreadDiffuseEnabled"};
-  juce::WebToggleButtonRelay alignEnabledRelay{"alignEnabled"};
-  juce::WebSliderRelay alignOffsetRelay{"alignOffset"};
-  juce::WebSliderRelay alignWobbleRelay{"alignWobble"};
-  juce::WebToggleButtonRelay alignWobbleEnabledRelay{"alignWobbleEnabled"};
-  juce::WebSliderRelay alignCrossoverRelay{"alignCrossover"};
-  juce::WebToggleButtonRelay alignCrossoverEnabledRelay{"alignCrossoverEnabled"};
-  juce::WebToggleButtonRelay alignDiffuseEnabledRelay{"alignDiffuseEnabled"};
-  juce::WebSliderRelay chainPanLeftRelay{"chainPanLeft"};
-  juce::WebSliderRelay chainPanRightRelay{"chainPanRight"};
-  juce::WebToggleButtonRelay chainPanLinkedRelay{"chainPanLinked"};
-  juce::WebToggleButtonRelay chainSoloLeftRelay{"chainSoloLeft"};
-  juce::WebToggleButtonRelay chainSoloRightRelay{"chainSoloRight"};
-  juce::WebToggleButtonRelay chainInvertLeftRelay{"chainInvertLeft"};
-  juce::WebToggleButtonRelay chainInvertRightRelay{"chainInvertRight"};
+  juce::WebSliderRelay outputPanRelay{"outputPan"};
   juce::WebSliderRelay bassRelay{"toneBass"};
   juce::WebSliderRelay midRelay{"toneMid"};
   juce::WebSliderRelay trebleRelay{"toneTreble"};
@@ -158,56 +137,8 @@ private:
       *processor.parameters.getParameter("inputLevel"), inputLevelRelay, nullptr};
   juce::WebSliderParameterAttachment outputLevelWebAttachment{
       *processor.parameters.getParameter("outputLevel"), outputLevelRelay, nullptr};
-  juce::WebSliderParameterAttachment outputBalanceWebAttachment{
-      *processor.parameters.getParameter("outputBalance"), outputBalanceRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment spreadEnabledWebAttachment{
-      *processor.parameters.getParameter("spreadEnabled"), spreadEnabledRelay, nullptr};
-  juce::WebSliderParameterAttachment spreadOffsetWebAttachment{
-      *processor.parameters.getParameter("spreadOffset"), spreadOffsetRelay, nullptr};
-  juce::WebSliderParameterAttachment spreadWobbleWebAttachment{
-      *processor.parameters.getParameter("spreadWobble"), spreadWobbleRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment spreadWobbleEnabledWebAttachment{
-      *processor.parameters.getParameter("spreadWobbleEnabled"), spreadWobbleEnabledRelay,
-      nullptr};
-  juce::WebSliderParameterAttachment spreadCrossoverWebAttachment{
-      *processor.parameters.getParameter("spreadCrossover"), spreadCrossoverRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment spreadCrossoverEnabledWebAttachment{
-      *processor.parameters.getParameter("spreadCrossoverEnabled"), spreadCrossoverEnabledRelay,
-      nullptr};
-  juce::WebToggleButtonParameterAttachment spreadDiffuseEnabledWebAttachment{
-      *processor.parameters.getParameter("spreadDiffuseEnabled"), spreadDiffuseEnabledRelay,
-      nullptr};
-  juce::WebToggleButtonParameterAttachment alignEnabledWebAttachment{
-      *processor.parameters.getParameter("alignEnabled"), alignEnabledRelay, nullptr};
-  juce::WebSliderParameterAttachment alignOffsetWebAttachment{
-      *processor.parameters.getParameter("alignOffset"), alignOffsetRelay, nullptr};
-  juce::WebSliderParameterAttachment alignWobbleWebAttachment{
-      *processor.parameters.getParameter("alignWobble"), alignWobbleRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment alignWobbleEnabledWebAttachment{
-      *processor.parameters.getParameter("alignWobbleEnabled"), alignWobbleEnabledRelay,
-      nullptr};
-  juce::WebSliderParameterAttachment alignCrossoverWebAttachment{
-      *processor.parameters.getParameter("alignCrossover"), alignCrossoverRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment alignCrossoverEnabledWebAttachment{
-      *processor.parameters.getParameter("alignCrossoverEnabled"), alignCrossoverEnabledRelay,
-      nullptr};
-  juce::WebToggleButtonParameterAttachment alignDiffuseEnabledWebAttachment{
-      *processor.parameters.getParameter("alignDiffuseEnabled"), alignDiffuseEnabledRelay,
-      nullptr};
-  juce::WebSliderParameterAttachment chainPanLeftWebAttachment{
-      *processor.parameters.getParameter("chainPanLeft"), chainPanLeftRelay, nullptr};
-  juce::WebSliderParameterAttachment chainPanRightWebAttachment{
-      *processor.parameters.getParameter("chainPanRight"), chainPanRightRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment chainPanLinkedWebAttachment{
-      *processor.parameters.getParameter("chainPanLinked"), chainPanLinkedRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment chainSoloLeftWebAttachment{
-      *processor.parameters.getParameter("chainSoloLeft"), chainSoloLeftRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment chainSoloRightWebAttachment{
-      *processor.parameters.getParameter("chainSoloRight"), chainSoloRightRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment chainInvertLeftWebAttachment{
-      *processor.parameters.getParameter("chainInvertLeft"), chainInvertLeftRelay, nullptr};
-  juce::WebToggleButtonParameterAttachment chainInvertRightWebAttachment{
-      *processor.parameters.getParameter("chainInvertRight"), chainInvertRightRelay, nullptr};
+  juce::WebSliderParameterAttachment outputPanWebAttachment{
+      *processor.parameters.getParameter("outputPan"), outputPanRelay, nullptr};
   juce::WebToggleButtonParameterAttachment gateEnabledWebAttachment{
       *processor.parameters.getParameter("gateEnabled"), gateEnabledRelay, nullptr};
   juce::WebToggleButtonParameterAttachment toneEqEnabledWebAttachment{

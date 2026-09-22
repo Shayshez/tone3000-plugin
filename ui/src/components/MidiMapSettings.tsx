@@ -33,11 +33,10 @@ const channelOptions = [
   ...Array.from({ length: 16 }, (_, i) => ({ value: String(i + 1), label: `Channel ${i + 1}` })),
 ];
 
-/** "block3Power" → {2, left}, "rightBlock3Power" → {2, right}; null for
-    anything else (mirrors the native parse). */
-const blockPowerTarget = (targetId: string): { index: number; right: boolean } | null => {
-  const match = /^(right)?[bB]lock(\d+)Power$/.exec(targetId);
-  return match ? { index: Number(match[2]) - 1, right: match[1] !== undefined } : null;
+/** "block3Power" → 2; null for anything else (mirrors the native parse). */
+const blockPowerTarget = (targetId: string): number | null => {
+  const match = /^[bB]lock(\d+)Power$/.exec(targetId);
+  return match ? Number(match[1]) - 1 : null;
 };
 
 /** Borderless row action, house icon-chrome style: muted at rest, white on
@@ -230,12 +229,10 @@ const LearningRow: React.FC<{
 );
 
 export const MidiMapSettings: React.FC<{
-  /** Chain lanes (block powers are positional over each lane's tone blocks);
-      lets rows and the picker show what each block slot currently holds.
-      `chainRight` is null outside stereo mode. */
+  /** Chain (block powers are positional over its tone blocks); lets rows
+      and the picker show what each block slot currently holds. */
   chain: ChainItem[];
-  chainRight: ChainItem[] | null;
-}> = ({ chain, chainRight }) => {
+}> = ({ chain }) => {
   const { state, actions } = useMidiMap(true);
 
   const learnTargetId = state?.learnTargetId ?? '';
@@ -262,33 +259,25 @@ export const MidiMapSettings: React.FC<{
     if (ccDraft !== '' && number <= 127) actions.setCcMapping(learnTargetId, number);
   }, [ccDraft, learnTargetId, actions]);
 
-  // Block powers address a lane's Nth *tone* block (insert slots skipped),
-  // matching the native toggle's positional walk.
-  const stereo = chainRight != null;
+  // Block powers address the chain's Nth *tone* block (insert slots
+  // skipped), matching the native toggle's positional walk.
   const toneBlocks = useMemo(
     () => chain.filter((item): item is ToneBlock => item.kind === 'tone'),
     [chain]
   );
-  const rightToneBlocks = useMemo(
-    () => (chainRight ?? []).filter((item): item is ToneBlock => item.kind === 'tone'),
-    [chainRight]
-  );
 
-  /** Row / picker subtitle: group, plus the lane and live tone title for
-      block powers. A mapping can outlive its block (chains shrink, stereo
-      turns off; mappings are positional pedalboard facts), so say so instead
-      of showing a stale name. */
+  /** Row / picker subtitle: group, plus the live tone title for block
+      powers. A mapping can outlive its block (chains shrink; mappings are
+      positional pedalboard facts), so say so instead of showing a stale
+      name. */
   const targetContext = useCallback(
     (targetId: string): string => {
-      const block = blockPowerTarget(targetId);
-      if (!block) return targetById.get(targetId)?.group ?? '';
-      // Lanes are only worth naming while two exist.
-      const lane = block.right ? 'Chain R' : stereo ? 'Chain L' : 'Chain';
-      if (block.right && !stereo) return `${lane} · Stereo off`;
-      const title = (block.right ? rightToneBlocks : toneBlocks)[block.index]?.tone.title;
-      return `${lane} · ${title ?? 'Empty slot'}`;
+      const index = blockPowerTarget(targetId);
+      if (index === null) return targetById.get(targetId)?.group ?? '';
+      const title = toneBlocks[index]?.tone.title;
+      return `Chain · ${title ?? 'Empty slot'}`;
     },
-    [stereo, toneBlocks, rightToneBlocks]
+    [toneBlocks]
   );
 
   const unmappedOptions = useMemo(() => {
@@ -297,11 +286,11 @@ export const MidiMapSettings: React.FC<{
       if (mapped.has(t.id)) return false;
       // Only offer block powers for blocks that exist right now; the picker
       // names each one after the tone it currently holds.
-      const block = blockPowerTarget(t.id);
-      if (!block) return true;
-      return block.index < (block.right ? rightToneBlocks : toneBlocks).length;
+      const index = blockPowerTarget(t.id);
+      if (index === null) return true;
+      return index < toneBlocks.length;
     }).map((t) => ({ value: t.id, label: t.name, sublabel: targetContext(t.id) }));
-  }, [state?.mappings, toneBlocks, rightToneBlocks, targetContext]);
+  }, [state?.mappings, toneBlocks, targetContext]);
 
   // Hosted/standalone builds always report a state; only the bridge-less dev
   // browser lands here.

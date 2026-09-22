@@ -15,20 +15,10 @@
 
 juce::ValueTree TONE3000Processor::captureChainSnapshot(bool includeModelData) const {
   juce::ValueTree snapshot("ChainSnapshot");
-  snapshot.setProperty("stereoEnabled", stereoEnabled.load(), nullptr);
-  // Branch routing travels with the chains (undo, presets, DAW state all
-  // share this shape). Empty branchAfterBlockId = independent chains.
-  snapshot.setProperty("branchSide",
-                       branchSourceSide == ChainSide::Right ? "right" : "left", nullptr);
-  snapshot.setProperty("branchAfterBlockId", juce::String(branchAfterBlockId), nullptr);
 
-  juce::ValueTree left("ChainBlocks");
-  serializeChainToTree(lane(ChainSide::Left), left, includeModelData);
-  snapshot.appendChild(left, nullptr);
-
-  juce::ValueTree right("RightChainBlocks");
-  serializeChainToTree(lane(ChainSide::Right), right, includeModelData);
-  snapshot.appendChild(right, nullptr);
+  juce::ValueTree blocks("ChainBlocks");
+  serializeChainToTree(chain, blocks, includeModelData);
+  snapshot.appendChild(blocks, nullptr);
 
   return snapshot;
 }
@@ -302,43 +292,12 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   if (!snapshot.isValid())
     return retired;
 
-  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), lane(ChainSide::Left), retired);
-  reconcileChainFromTree(snapshot.getChildWithName("RightChainBlocks"), lane(ChainSide::Right),
-                         retired);
-
-  const bool wasStereo = stereoEnabled.load();
-  const bool snapStereo = static_cast<bool>(snapshot.getProperty("stereoEnabled", false));
-
-  auto& right = lane(ChainSide::Right);
-  stereoEnabled.store(snapStereo);
-  if (!snapStereo)
-    pendingAddSide = ChainSide::Left;
-
-  // Branch routing rides the snapshot. Alignment validates it against the
-  // freshly reconciled trunk lane; a stale id (snapshot from a chain that no
-  // longer holds the block) degrades to independent chains. Older snapshots
-  // without the properties restore as unbranched for free. Reconciliation
-  // pads every lane back to the per-lane baseline, so a restored *active*
-  // branch re-trims its lane's trailing inserts here to keep the lane ends
-  // even, exactly as they looked when the snapshot was taken.
-  branchSourceSide = snapshot.getProperty("branchSide").toString() == "right"
-                         ? ChainSide::Right
-                         : ChainSide::Left;
-  branchAfterBlockId =
-      snapshot.getProperty("branchAfterBlockId").toString().toStdString();
-  alignBranchLaneLengths();
-
-  // A restored *active* branch + a stereo input fold would silently drop a
-  // channel, so enforce the same invariant setChainBranch does (presets don't
-  // carry inputMode; DAW states restore it just before this runs). A dormant
-  // branch (mono snapshot) doesn't constrain the fold.
-  if (rtBranchTapIndex >= 0 && getInputMode() == InputMode::Stereo)
-    inputMode.store(static_cast<int>(InputMode::Left));
-
-  // Mirrors setStereoMode: the right chain's engines must be ready before the
-  // audio thread starts running them.
-  if (snapStereo && !wasStereo)
-    prepareChain(right);
+  // A legacy snapshot's "RightChainBlocks"/"stereoEnabled"/"branchSide"/
+  // "branchAfterBlockId" fields (from before the global stereo-lane mode was
+  // removed) are simply never read here - the old right-lane content and
+  // branch/solo/invert/align state silently fold away, leaving only the old
+  // Left lane, with no error and no user-facing message.
+  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
 
   // Restores can add/remove/retire IR blocks wholesale (undo/redo, presets,
   // project load), so resync the host-facing tail length.

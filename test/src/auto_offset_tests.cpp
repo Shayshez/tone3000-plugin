@@ -4,13 +4,12 @@
 // capture and unmute on its fixed schedule, and the soft-PHAT estimator must
 // recover integer and fractional inter-chain lags through gain/voicing
 // differences and polarity inversion, rejecting a lag beyond what the
-// Offset knob can express. The last tests close the loop: once through the
-// real StereoOffset engine, and once through a real processor with
-// different NAM/IR chains per lane, where the probe must produce the same
-// answer run after run.
+// Offset knob can express. The last test closes the loop through the real
+// StereoOffset engine. AutoOffset/StereoOffset are shared with Dual Mono's
+// own per-block probe (armDualAutoAlign/pollDualAutoAlign) - see
+// dual_mono_block_tests.cpp for that call site's coverage.
 #include "AutoOffset.h"
 #include "StereoOffset.h"
-#include "chain_test_helpers.h"
 #include "test_helpers.h"
 
 #include <gtest/gtest.h>
@@ -288,65 +287,12 @@ TEST(AutoOffsetTest, EndToEndMeasureThenAlignThroughStereoOffset) {
   EXPECT_EQ(bestCorrelationLag(outR, outL, start, 8 * kBlock, kLag), 0);
 }
 
-// Drives startAutoOffset through the real processor (probe injection,
-// chain rendering, capture tap, mute stage, message-thread poll) and
-// returns the terminal poll payload.
-juce::var runProbe(TONE3000Processor& proc) {
-  proc.startAutoOffset();
-  juce::AudioBuffer<float> buffer(2, kBlock);
-  juce::MidiBuffer midi;
-  for (int block = 0; block < 400; ++block) {
-    buffer.clear();
-    proc.processBlock(buffer, midi);
-    const juce::var poll = proc.pollAutoOffset();
-    const juce::String state = poll["state"].toString();
-    if (state == "done" || state == "timeout")
-      return poll;
-  }
-  return {};
-}
-
-TEST(AutoOffsetTest, ProbeAlignsRealNamAndIrChains) {
-  // Two genuinely different rigs: Left a full amp+cab capture, Right a
-  // different amp head into a separate cab IR. The probe must complete
-  // silently on schedule, produce an in-range offset, and (the point of a
-  // deterministic stimulus) repeat within a tenth of a sample.
-  ChainTestProcessor proc;
-  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
-  proc.prepareToPlay(kFs, kBlock);
-
-  juce::ValueTree state("ChainSnapshot");
-  state.setProperty("stereoEnabled", true, nullptr);
-  juce::ValueTree left("ChainBlocks");
-  left.appendChild(makeNamBlockTree("amp-l", 1, 100, "a2-amp-cab-test.nam"), nullptr);
-  state.appendChild(left, nullptr);
-  juce::ValueTree right("RightChainBlocks");
-  right.appendChild(makeNamBlockTree("amp-r", 2, 101, "a2-am-test-2.nam"), nullptr);
-  right.appendChild(makeIrBlockTree("cab-r", 3, 102, "cab-ir-test-2.wav"), nullptr);
-  state.appendChild(right, nullptr);
-  proc.restoreFromTree(state);
-  ASSERT_TRUE(waitForChainLoaded(proc)) << "chains never finished loading from cache";
-
-  const juce::var first = runProbe(proc);
-  ASSERT_EQ(first["state"].toString(), "done")
-      << "first probe did not complete: " << juce::JSON::toString(first).toStdString();
-  const double firstMs = static_cast<double>(first["matchedMs"]);
-  EXPECT_LT(std::abs(firstMs), 24.0);
-
-  // Let the ramp-back finish and the chain tails from the first probe decay
-  // before measuring again.
-  {
-    juce::AudioBuffer<float> buffer(2, kBlock);
-    juce::MidiBuffer midi;
-    for (int block = 0; block < 30; ++block) {
-      buffer.clear();
-      proc.processBlock(buffer, midi);
-    }
-  }
-
-  const juce::var second = runProbe(proc);
-  ASSERT_EQ(second["state"].toString(), "done") << "second probe did not complete";
-  EXPECT_NEAR(static_cast<double>(second["matchedMs"]), firstMs, 0.1 * 1000.0 / kFs);
-}
+// The global two-lane auto-align probe (startAutoOffset/pollAutoOffset,
+// measuring Left lane against Right lane) was removed along with the
+// stereo-lane chain mode. AutoOffset itself (the measurement engine
+// exercised by every other test in this file) is unchanged: Dual Mono's own
+// per-block probe (armDualAutoAlign/pollDualAutoAlign, see
+// dual_mono_block_tests.cpp) drives the same engine instance at its own
+// call site instead of this one.
 
 }  // namespace

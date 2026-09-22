@@ -8,11 +8,11 @@
 //     none is given), reports blockType "dualMono", and is loaded
 //     immediately (it has nothing of its own to fetch) - the same shape as
 //     ChainBlockType::EQ,
-//   - with a spare physical channel (mono mode, 2-ch buffer) it *widens*:
-//     each side's processed signal lands in its own output channel, proven
-//     by swapping which content sits on which side and confirming the
-//     output channels swap with it,
-//   - pinned to one physical channel (stereo mode, each lane runs mono) it
+//   - with a spare physical channel (a 2-ch buffer) it *widens*: each side's
+//     processed signal lands in its own output channel, proven by swapping
+//     which content sits on which side and confirming the output channels
+//     swap with it,
+//   - pinned to one physical channel (a genuinely mono host output) it
 //     *folds*: identical content on both sides reduces to exactly what that
 //     content would produce as a plain, unwrapped block; different content
 //     on both sides measurably differs from either side alone,
@@ -126,29 +126,48 @@ juce::ValueTree makeDualMonoBlockTree(const juce::String& blockId,
   return block;
 }
 
-// Wraps `blockTree` as the sole content of a lane, restores it, and drives
-// `in` through. `stereoMode` picks which pipeline shape the block runs
-// under: false = mono mode, the lane sees the full (up to 2-channel) buffer
-// directly; true = stereo mode, `blockTree` sits alone in the Left lane,
-// which then runs on exactly one physical channel (the Right lane stays at
-// its default empty insert slots). Returns both output channels.
+// Wraps `blockTree` as the sole content of the chain, restores it, and
+// drives `in` through. `monoRig` picks which pipeline shape the block runs
+// under: false = the chain sees the full (up to 2-channel) buffer directly;
+// true = a genuinely mono host output (a 1-channel buffer), the only way to
+// reach Dual Mono's numChannels==1 fold branch where Pan/Width go inert and
+// the two sides average via a true 50/50 sum. Returns both output channels
+// (a mono rig duplicates its one channel into both).
 std::pair<std::vector<float>, std::vector<float>> runLane(const juce::ValueTree& blockTree,
                                                            const std::vector<float>& in,
-                                                           bool stereoMode) {
+                                                           bool monoRig) {
   ChainTestProcessor proc;
-  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.setPlayConfigDetails(2, monoRig ? 1 : 2, kFs, kBlock);
   proc.prepareToPlay(kFs, kBlock);
 
   juce::ValueTree state("ChainSnapshot");
-  if (stereoMode) state.setProperty("stereoEnabled", true, nullptr);
-  juce::ValueTree left("ChainBlocks");
-  left.appendChild(blockTree.createCopy(), nullptr);
-  state.appendChild(left, nullptr);
+  juce::ValueTree lane("ChainBlocks");
+  lane.appendChild(blockTree.createCopy(), nullptr);
+  state.appendChild(lane, nullptr);
   proc.restoreFromTree(state);
   EXPECT_TRUE(waitForDualMonoLoaded(proc));
 
-  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
-  return processStereo(proc, in);
+  if (!monoRig) {
+    processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+    return processStereo(proc, in);
+  }
+
+  auto driveMono = [&](const std::vector<float>& signal) {
+    const int total = static_cast<int>(signal.size());
+    std::vector<float> out(signal.size(), 0.0f);
+    juce::AudioBuffer<float> buffer(1, kBlock);
+    juce::MidiBuffer midi;
+    for (int off = 0; off + kBlock <= total; off += kBlock) {
+      buffer.copyFrom(0, 0, signal.data() + off, kBlock);
+      proc.processBlock(buffer, midi);
+      std::copy(buffer.getReadPointer(0), buffer.getReadPointer(0) + kBlock, out.begin() + off);
+    }
+    return out;
+  };
+
+  driveMono(makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  const auto out = driveMono(in);
+  return {out, out};
 }
 }  // namespace
 
@@ -604,9 +623,9 @@ TEST(DualMonoBlockTest, WidenCaseGivesEachSideItsOwnOutputChannel) {
   auto irTree = [] { return makeIrBlockTree("blk-ir", 2, 200); };
 
   const auto runA =
-      runLane(makeDualMonoBlockTree("blk-dual", namTree(), irTree()), in, /*stereoMode=*/false);
+      runLane(makeDualMonoBlockTree("blk-dual", namTree(), irTree()), in, /*monoRig=*/false);
   const auto runB =
-      runLane(makeDualMonoBlockTree("blk-dual", irTree(), namTree()), in, /*stereoMode=*/false);
+      runLane(makeDualMonoBlockTree("blk-dual", irTree(), namTree()), in, /*monoRig=*/false);
 
   const float crossDiffNam = maxAbsDiff(runA.first, runB.second);   // NAM: A's L vs B's R
   const float crossDiffIr = maxAbsDiff(runA.second, runB.first);    // IR: A's R vs B's L
@@ -626,19 +645,18 @@ TEST(DualMonoBlockTest, WidenCaseGivesEachSideItsOwnOutputChannel) {
       << "left and right should carry genuinely different content, not the same signal twice";
 }
 
-// Fold (stereo mode: the block sits alone in the Left lane, which then runs
-// on exactly one physical channel): identical content on both sides must
-// reduce to exactly what that content produces as a plain, unwrapped
-// block - proving fold is a true average (averaging two identical signals
-// is the identity), not some other blend.
+// Fold (a genuinely mono host output, one physical channel): identical
+// content on both sides must reduce to exactly what that content produces
+// as a plain, unwrapped block - proving fold is a true average (averaging
+// two identical signals is the identity), not some other blend.
 TEST(DualMonoBlockTest, FoldWithIdenticalContentBothSidesEqualsPlainSingleBlock) {
   const auto in = makeNoise(20 * kBlock, 555, 0.25f);
 
   const auto dualRun = runLane(
       makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam-l", 1, 100),
                             makeNamBlockTree("blk-nam-r", 1, 100)),
-      in, /*stereoMode=*/true);
-  const auto plainRun = runLane(makeNamBlockTree("blk-nam", 1, 100), in, /*stereoMode=*/true);
+      in, /*monoRig=*/true);
+  const auto plainRun = runLane(makeNamBlockTree("blk-nam", 1, 100), in, /*monoRig=*/true);
 
   const float diff = maxAbsDiff(dualRun.first, plainRun.first);
   std::printf("[DualMonoBlockTest] fold (identical both sides) vs plain block max |diff|: %.6f\n",
@@ -655,9 +673,9 @@ TEST(DualMonoBlockTest, FoldBlendsBothSidesNotJustOne) {
   const auto dualRun = runLane(
       makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
                             makeIrBlockTree("blk-ir", 2, 200)),
-      in, /*stereoMode=*/true);
-  const auto namOnlyRun = runLane(makeNamBlockTree("blk-nam", 1, 100), in, /*stereoMode=*/true);
-  const auto irOnlyRun = runLane(makeIrBlockTree("blk-ir", 2, 200), in, /*stereoMode=*/true);
+      in, /*monoRig=*/true);
+  const auto namOnlyRun = runLane(makeNamBlockTree("blk-nam", 1, 100), in, /*monoRig=*/true);
+  const auto irOnlyRun = runLane(makeIrBlockTree("blk-ir", 2, 200), in, /*monoRig=*/true);
 
   const float diffFromNam = maxAbsDiff(dualRun.first, namOnlyRun.first);
   const float diffFromIr = maxAbsDiff(dualRun.first, irOnlyRun.first);
@@ -1329,37 +1347,49 @@ TEST(DualMonoBlockTest, DualAlignSurvivesStateRestore) {
 }
 
 // Reuses FoldWithIdenticalContentBothSidesEqualsPlainSingleBlock's own
-// "identical content on both sides" setup (same model both sides, stereo
-// chain mode, so the block folds to mono): with no invert, l == r and the
-// fold reduces to the plain block (already pinned by that test). Flipping
-// just the right side's polarity makes it l + (-l) = 0 - proves Ø is real
-// signal-domain inversion, not just a persisted flag, and (via the
-// existing test above) that it doesn't fire without being asked.
+// "identical content on both sides" setup (same model both sides, a
+// genuinely mono host output, so the block folds to mono): with no invert,
+// l == r and the fold reduces to the plain block (already pinned by that
+// test). Flipping just the right side's polarity makes it l + (-l) = 0 -
+// proves Ø is real signal-domain inversion, not just a persisted flag, and
+// (via the existing test above) that it doesn't fire without being asked.
 TEST(DualMonoBlockTest, DualInvertOnIdenticalContentCancelsInFold) {
   const auto in = makeNoise(20 * kBlock, 555, 0.25f);
 
   ChainTestProcessor proc;
-  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.setPlayConfigDetails(2, 1, kFs, kBlock);
   proc.prepareToPlay(kFs, kBlock);
 
   juce::ValueTree state("ChainSnapshot");
-  state.setProperty("stereoEnabled", true, nullptr);
-  juce::ValueTree left("ChainBlocks");
-  left.appendChild(
+  juce::ValueTree lane("ChainBlocks");
+  lane.appendChild(
       makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam-l", 1, 100),
                             makeNamBlockTree("blk-nam-r", 1, 100)),
       nullptr);
-  state.appendChild(left, nullptr);
+  state.appendChild(lane, nullptr);
   proc.restoreFromTree(state);
   ASSERT_TRUE(waitForDualMonoLoaded(proc));
 
   ASSERT_TRUE(proc.setDualInvert("blk-dual", false, true));  // invert the right side only
 
-  processStereo(proc, makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
-  const auto out = processStereo(proc, in);
+  auto driveMono = [&](const std::vector<float>& signal) {
+    const int total = static_cast<int>(signal.size());
+    std::vector<float> out(signal.size(), 0.0f);
+    juce::AudioBuffer<float> buffer(1, kBlock);
+    juce::MidiBuffer midi;
+    for (int off = 0; off + kBlock <= total; off += kBlock) {
+      buffer.copyFrom(0, 0, signal.data() + off, kBlock);
+      proc.processBlock(buffer, midi);
+      std::copy(buffer.getReadPointer(0), buffer.getReadPointer(0) + kBlock, out.begin() + off);
+    }
+    return out;
+  };
+
+  driveMono(makeNoise(kWarmupBlocks * kBlock, 1111, 0.25f));
+  const auto out = driveMono(in);
 
   float peak = 0.0f;
-  for (float sample : out.first) peak = std::max(peak, std::abs(sample));
+  for (float sample : out) peak = std::max(peak, std::abs(sample));
   std::printf(
       "[DualMonoBlockTest] fold, identical content, right side inverted, peak: %.6f\n",
       static_cast<double>(peak));

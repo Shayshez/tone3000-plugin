@@ -7,17 +7,15 @@ MidiMapper::~MidiMapper() {
 }
 
 MidiMapper::BlockPowerTarget MidiMapper::blockPowerTargetFor(const juce::String& targetId) {
-  const bool right = targetId.startsWith("rightBlock");
-  const int prefixLength = right ? 10 : 5;  // "rightBlock" / "block"
-  if ((!right && !targetId.startsWith("block")) || !targetId.endsWith("Power"))
+  if (!targetId.startsWith("block") || !targetId.endsWith("Power"))
     return {};
-  const auto middle = targetId.substring(prefixLength, targetId.length() - 5);
+  const auto middle = targetId.substring(5, targetId.length() - 5);
   if (middle.isEmpty() || !middle.containsOnly("0123456789"))
     return {};
   const int position = middle.getIntValue();  // 1-based in the id
   if (position < 1 || position > 64)
     return {};
-  return {position - 1, right};
+  return {position - 1};
 }
 
 //==============================================================================
@@ -95,14 +93,7 @@ void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
         // Block enable is a locked, undoable chain edit, so hop to the message
         // thread. XOR keeps rapid double-stomps parity-correct if they land
         // before the async update runs.
-        (mapping.rightBlock ? pendingRightBlockToggles : pendingBlockToggles)
-            .fetch_xor(juce::uint64(1) << mapping.blockIndex);
-        triggerAsyncUpdate();
-        return;
-      case Kind::stereoMode:
-        // Same deferral as block powers; a flip counter's parity is the XOR
-        // equivalent for a single toggle.
-        pendingStereoToggles.fetch_add(1);
+        pendingBlockToggles.fetch_xor(juce::uint64(1) << mapping.blockIndex);
         triggerAsyncUpdate();
         return;
       case Kind::presetStep:
@@ -210,15 +201,14 @@ MidiMapper::Mapping MidiMapper::makeMapping(const juce::String& targetId, Source
   const int presetDelta = targetId == kPresetNextTarget   ? 1
                           : targetId == kPresetPrevTarget ? -1
                                                           : 0;
-  const Kind kind = presetDelta != 0          ? Kind::presetStep
-                    : targetId == kStereoTarget ? Kind::stereoMode
-                    : block.index >= 0          ? Kind::blockPower
-                                                : Kind::parameter;
+  const Kind kind = presetDelta != 0 ? Kind::presetStep
+                    : block.index >= 0 ? Kind::blockPower
+                                       : Kind::parameter;
   auto* param = kind == Kind::parameter ? parameters.getParameter(targetId) : nullptr;
   jassert(kind != Kind::parameter || param != nullptr);  // callers validate the id first
   const bool toggle = kind != Kind::parameter || source == Source::note ||
                       (param != nullptr && param->isBoolean());
-  return {targetId, kind, param, block.index, block.right, presetDelta, source, number, toggle};
+  return {targetId, kind, param, block.index, presetDelta, source, number, toggle};
 }
 
 void MidiMapper::notifyChanged() {
@@ -249,15 +239,7 @@ void MidiMapper::handleAsyncUpdate() {
   auto toggles = pendingBlockToggles.exchange(0);
   for (int index = 0; toggles != 0; ++index, toggles >>= 1)
     if ((toggles & 1) != 0 && onBlockPowerToggle)
-      onBlockPowerToggle(index, false);
-
-  auto rightToggles = pendingRightBlockToggles.exchange(0);
-  for (int index = 0; rightToggles != 0; ++index, rightToggles >>= 1)
-    if ((rightToggles & 1) != 0 && onBlockPowerToggle)
-      onBlockPowerToggle(index, true);
-
-  if (pendingStereoToggles.exchange(0) % 2 != 0 && onStereoToggle)
-    onStereoToggle();
+      onBlockPowerToggle(index);
 
   if (const int steps = pendingPresetSteps.exchange(0); steps != 0 && onPresetStep)
     onPresetStep(steps);

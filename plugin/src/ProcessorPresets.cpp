@@ -12,20 +12,10 @@
 // undo step, so a preset load is itself undoable.
 
 const std::vector<juce::String>& TONE3000Processor::presetParameterIds() {
-  // chainSolo* stays out on purpose: solo is monitoring state, not tone,
-  // and a preset saved mid-audition must not load with a chain muted.
   static const std::vector<juce::String> ids = {
-      "inputLevel",     "outputLevel",      "outputBalance",
+      "inputLevel",     "outputLevel",      "outputPan",
       "toneBass",       "toneMid",          "toneTreble",
       "gateThreshold",  "gateEnabled",      "toneEqEnabled",
-      "spreadEnabled",  "spreadOffset",     "spreadWobble",
-      "spreadWobbleEnabled", "spreadCrossover", "spreadCrossoverEnabled",
-      "spreadDiffuseEnabled",
-      "alignEnabled",   "alignOffset",      "alignWobble",
-      "alignWobbleEnabled", "alignCrossover", "alignCrossoverEnabled",
-      "alignDiffuseEnabled",
-      "chainPanLeft",   "chainPanRight",    "chainPanLinked",
-      "chainInvertLeft", "chainInvertRight",
   };
   return ids;
 }
@@ -206,12 +196,11 @@ bool TONE3000Processor::movePreset(const juce::String& presetId, int delta) {
 }
 
 bool TONE3000Processor::isChainAtDefault() const {
-  if (activePresetId.isNotEmpty() || stereoEnabled.load())
+  if (activePresetId.isNotEmpty())
     return false;
-  for (const auto& l : lanes)
-    for (const auto& b : l)
-      if (b->type != ChainBlockType::INSERT)
-        return false;
+  for (const auto& b : chain)
+    if (b->type != ChainBlockType::INSERT)
+      return false;
   // Normalized-space tolerance: UI resets and preset loads land exactly on
   // the default, but a knob dragged back or host automation can be a hair
   // off. 1e-4 of a ±24 dB range is 0.005 dB, far below any UI step.
@@ -237,8 +226,8 @@ bool TONE3000Processor::resetToDefault() {
     juce::ScopedLock lock(chainMutex);
     pushChainHistory();
     // A bare snapshot *is* the default state: the restore retires every
-    // block (lanes pad back to fresh insert slots), turns stereo off and
-    // clears the branch, in one undoable step.
+    // block (the chain pads back to fresh insert slots), in one undoable
+    // step.
     retired = restoreChainSnapshot(juce::ValueTree("ChainSnapshot"));
     activePresetId.clear();
     activePresetName.clear();

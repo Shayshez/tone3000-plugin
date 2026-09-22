@@ -107,12 +107,12 @@ interface ChainMapStripProps {
   onSelectEq: (blockId: string) => void;
   /** Add a block at this specific insert slot, via the existing add-tone
       flow (TONE3000 browser or local file) — the same
-      actions.addModel(side, insertBlockId) targeting GalleryLane's own "+"
+      actions.addModel(insertBlockId) targeting GalleryLane's own "+"
       tiles use. */
   onAdd: (insertBlockId: string) => void;
   /** Paste the copied block into this slot; null while there's nothing
       valid to paste (the menu shows Paste disabled) - same
-      canPaste/actions.pasteBlock(side, index) gating GalleryLane's own "+"
+      canPaste/actions.pasteBlock(index) gating GalleryLane's own "+"
       tiles use, threaded down from ChainView via ChainBlock. */
   onPasteBlockAt: ((index: number) => void) | null;
 }

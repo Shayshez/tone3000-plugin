@@ -183,59 +183,23 @@ const HELP_DESKTOP = {
   inputLevel: knobHelp('Input', 'chain input level, ±24 dB.'),
   inputMode: 'Input Mode: source channels. Stereo: both · L/R: one. Click: choose.',
   outputLevel: knobHelp('Output', 'master output level, ±24 dB.'),
-  outputBalance: knobHelp('Balance', 'level trim between chains, ±12 dB (pre-pan). Center: off.'),
-  autoBalance: 'Auto Balance: click, play ~2 s to match chain levels. Click again: cancel.',
+  outputPan: knobHelp('Pan', 'output stereo position. Center: off.'),
 
-  // Faceplate: gate, tone stack, stereo image (spread / align)
+  // Faceplate: gate, tone stack
   gate: knobHelp('Gate', 'noise gate threshold, -100 to 0 dB.'),
   gatePower: 'Gate Power: noise gate on/off.',
   toneBass: knobHelp('Bass', 'tone stack lows, 0-10: ±20 dB shelf at 150 Hz.'),
   toneMiddle: knobHelp('Middle', 'tone stack mids, 0-10: ±15 dB bell at 425 Hz.'),
   toneTreble: knobHelp('Treble', 'tone stack highs, 0-10: ±10 dB shelf at 1.8 kHz.'),
   tonePower: 'Tone Stack Power: Bass/Middle/Treble on/off.',
-  spreadOffset: knobHelp(
-    'Offset',
-    'double-track lag, ≤24 ms toward L or R. Center: off. Right-click: advanced.'
-  ),
-  spreadWobble: knobHelp('Wobble', 'humanizing delay drift, up to ±1.2 ms.'),
-  spreadWobblePower: 'Wobble Power: delay drift on/off. Off: a static, more comb-like double.',
-  spreadCrossover: knobHelp('Crossover', 'lows below the cutoff stay dual-mono, 33-520 Hz.'),
-  spreadCrossoverPower: 'Crossover Power: off doubles the full band (lows lose mono safety).',
-  spreadDiffuse: 'Diffuse Power: phase-decorrelates the lagged side. Off: a pure delay.',
-  spreadAdvert: 'Spread: mono-to-stereo double via a wobbling short lag. Click: enable.',
-  // On touch the advanced deck answers a hold on the Offset knob only (see
-  // SpreadControls / AlignControls), so the power rows drop the tail that
-  // touchify would otherwise turn into a false "touch and hold" promise.
-  spreadPower: IS_COARSE_POINTER
-    ? 'Spread Power: spread off; collapses its controls.'
-    : 'Spread Power: spread off; collapses its controls. Right-click: advanced.',
-  imageCorrelation: 'Mono safety: dim: safe · yellow: caution · red: cancellation on mono sum.',
-  spreadMonoOutput:
-    'Spread: unavailable, the output is mono (mono track or one-channel output device).',
-  alignOffset: knobHelp(
-    'Offset',
-    'corrective chain alignment, ≤24 ms toward L or R. Center: off. Right-click: advanced.'
-  ),
-  alignWobble: knobHelp('Wobble', 'humanizing drift of the align delay, up to ±1.2 ms.'),
-  alignWobblePower: 'Wobble Power: drifts the delayed chain like an ADT double-track.',
-  alignCrossover: knobHelp('Crossover', 'lows below the cutoff skip the deck, 33-520 Hz.'),
-  alignCrossoverPower: 'Crossover Power: on keeps lows out of the delay and diffusion.',
-  alignDiffuse: 'Diffuse Power: phase-decorrelates the delayed chain for width.',
-  alignAdvert: 'Align: corrective chain time alignment. Click: enable.',
-  alignPower: IS_COARSE_POINTER
-    ? 'Align Power: align off; collapses its controls.'
-    : 'Align Power: align off; collapses its controls. Right-click: advanced.',
-  autoAlign:
-    'Auto Align: a ½ s internal sweep time-aligns the chains and fixes inverted polarity. Click again: cancel.',
 
   // Top bar
+  miniTuner: 'Tuning direction, always on: flat/sharp/in-tune. Open the tuner for note detail.',
   tuner: 'Tuner: chromatic tuner. Click again: back.',
   undo: 'Undo: revert last chain edit.',
   redo: 'Redo: re-apply undone edit.',
   settings: 'Settings: plugin and audio options.',
   account: 'Account: settings and TONE3000 sign-out.',
-  monoMode: 'Mono: one chain, both outputs.',
-  stereoMode: 'Stereo: independent Left/Right chains.',
 
   // Presets
   presetPrev: 'Previous Preset: step back through the list.',
@@ -307,19 +271,6 @@ const HELP_DESKTOP = {
   dualAlignCrossover: knobHelp('Crossover', 'lows below the cutoff skip the deck, 33-520 Hz.'),
   dualAlignCrossoverPower: 'Crossover Power: on keeps lows out of the delay and diffusion.',
   dualAlignDiffuse: 'Diffuse Power: phase-decorrelates the delayed side for width.',
-  panLeft: knobHelp('Pan L', 'Left chain, hard left ↔ center.'),
-  panRight: knobHelp('Pan R', 'Right chain, center ↔ hard right.'),
-  panLink: 'Link Pans: mirror both pan knobs.',
-  monoSum:
-    'Mono output: both chains summed to one channel. Bal/S/Ø still shape the blend; pans are off.',
-  panMonoSum: 'Pan: unavailable, the output is mono. The chains are summed instead (see MONO).',
-  soloLeft: 'Solo L: hear the Left chain alone.',
-  soloRight: 'Solo R: hear the Right chain alone.',
-  invertLeft: 'Invert L: flip the Left chain polarity. Fixes chains that hollow out or cancel.',
-  invertRight: 'Invert R: flip the Right chain polarity. Fixes chains that hollow out or cancel.',
-  swapChains: 'Swap Chains: exchange Left/Right chains.',
-  branchGap: 'Branch: feed the other chain from this point in this chain.',
-  branchJunction: 'Branch Point: the other chain starts here. Click: make chains independent.',
 
   // Block card
   blockIn: knobHelp('In', 'block input gain, ±24 dB.'),
@@ -449,8 +400,8 @@ const HELP_DESKTOP = {
 
 /**
  * Desktop pointer vocabulary rewritten for touch. `Right-click` first, since
- * it contains `click`; everything a right-click reaches (context menus, the
- * advanced Spread/Align decks) answers a touch and hold on a touch screen.
+ * it contains `click`; everything a right-click reaches (context menus,
+ * advanced decks) answers a touch and hold on a touch screen.
  */
 const TOUCH_WORDING: readonly (readonly [RegExp, string])[] = [
   [/Right-click/g, 'Touch and hold'],

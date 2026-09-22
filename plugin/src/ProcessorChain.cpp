@@ -6,14 +6,6 @@
 // CHAIN MANAGEMENT
 // ####################
 
-// The lane loadTone inserts into: Left in mono mode, or the side the UI armed
-// before launching the Select flow in stereo.
-std::vector<std::unique_ptr<ChainBlock>>& TONE3000Processor::activeChain() {
-  if (stereoEnabled.load() && pendingAddSide == ChainSide::Right)
-    return lane(ChainSide::Right);
-  return lane(ChainSide::Left);
-}
-
 namespace {
 // TONE3000Processor::Lane isn't nameable from a free function (private
 // alias), so this works in terms of the bare vector type directly - Lane*
@@ -40,15 +32,12 @@ ChainBlock* findInLane(std::vector<std::unique_ptr<ChainBlock>>& lane,
 }
 }  // namespace
 
-// Find a block by id across both lanes and any Dual Mono block's own
+// Find a block by id in the chain, including any Dual Mono block's own
 // children (ids are globally unique) - required so async model loading
 // (queueToneLoad's background completion) can re-locate a dual child after
 // the fetch finishes, same as it does for any top-level block.
 ChainBlock* TONE3000Processor::findBlockById(const std::string& blockId) {
-  for (auto& l : lanes)
-    if (ChainBlock* found = findInLane(l, blockId))
-      return found;
-  return nullptr;
+  return findInLane(chain, blockId);
 }
 
 namespace {
@@ -388,34 +377,24 @@ std::string TONE3000Processor::loadTone(const juce::String& toneJsonString,
   // up across both lanes; ids are globally unique), or the active lane's
   // first insert when the id is stale/absent (chain edited mid-flow, or an
   // older UI that doesn't send one).
-  Lane* targetLane = nullptr;
-  Lane::iterator slot;
+  Lane::iterator slot = chain.end();
   if (!targetInsertId.empty()) {
-    for (auto& l : lanes) {
-      auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-        return isInsertBlock(b) && b->id == targetInsertId;
-      });
-      if (it != l.end()) {
-        targetLane = &l;
-        slot = it;
-        break;
-      }
-    }
+    slot = std::find_if(chain.begin(), chain.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+      return isInsertBlock(b) && b->id == targetInsertId;
+    });
   }
-  if (targetLane == nullptr) {
-    targetLane = &activeChain();
-    slot = std::find_if(targetLane->begin(), targetLane->end(), isInsertBlock);
-  }
+  if (slot == chain.end())
+    slot = std::find_if(chain.begin(), chain.end(), isInsertBlock);
 
   // The tone takes the slot's position; the consumed insert dies here (it has
   // no engines, so destroying it under the lock is fine). Alignment then
   // re-pads the lane, which appends a fresh trailing insert once every
   // minimum slot holds a tone, and keeps a branched layout's lane ends even.
-  if (slot != targetLane->end())
+  if (slot != chain.end())
     *slot = std::move(block);
   else
-    targetLane->push_back(std::move(block));
-  alignBranchLaneLengths();
+    chain.push_back(std::move(block));
+  normalizeLaneInserts(chain);
 
   bumpChainRevision();
   queueToneLoad(blockId, parsed.firstModelId, parsed.modelUrl, parsed.modelName, parsed.type);
@@ -457,30 +436,20 @@ std::string TONE3000Processor::addEqBlock(const std::string& targetInsertId) {
   // Same slot-resolution as loadTone: the insert the user right-clicked
   // (looked up across both lanes; ids are globally unique), or the active
   // lane's first insert when the id is stale/absent.
-  Lane* targetLane = nullptr;
-  Lane::iterator slot;
+  Lane::iterator slot = chain.end();
   if (!targetInsertId.empty()) {
-    for (auto& l : lanes) {
-      auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-        return isInsertBlock(b) && b->id == targetInsertId;
-      });
-      if (it != l.end()) {
-        targetLane = &l;
-        slot = it;
-        break;
-      }
-    }
+    slot = std::find_if(chain.begin(), chain.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+      return isInsertBlock(b) && b->id == targetInsertId;
+    });
   }
-  if (targetLane == nullptr) {
-    targetLane = &activeChain();
-    slot = std::find_if(targetLane->begin(), targetLane->end(), isInsertBlock);
-  }
+  if (slot == chain.end())
+    slot = std::find_if(chain.begin(), chain.end(), isInsertBlock);
 
-  if (slot != targetLane->end())
+  if (slot != chain.end())
     *slot = std::move(block);
   else
-    targetLane->push_back(std::move(block));
-  alignBranchLaneLengths();
+    chain.push_back(std::move(block));
+  normalizeLaneInserts(chain);
 
   bumpChainRevision();
   return blockId;
@@ -536,30 +505,20 @@ std::string TONE3000Processor::addDualMonoBlock(const std::string& targetInsertI
   block->dualGoniometer.prepare(chainSampleRate());
 
   // Same slot-resolution as addEqBlock.
-  Lane* targetLane = nullptr;
-  Lane::iterator slot;
+  Lane::iterator slot = chain.end();
   if (!targetInsertId.empty()) {
-    for (auto& l : lanes) {
-      auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-        return isInsertBlock(b) && b->id == targetInsertId;
-      });
-      if (it != l.end()) {
-        targetLane = &l;
-        slot = it;
-        break;
-      }
-    }
+    slot = std::find_if(chain.begin(), chain.end(), [&](const std::unique_ptr<ChainBlock>& b) {
+      return isInsertBlock(b) && b->id == targetInsertId;
+    });
   }
-  if (targetLane == nullptr) {
-    targetLane = &activeChain();
-    slot = std::find_if(targetLane->begin(), targetLane->end(), isInsertBlock);
-  }
+  if (slot == chain.end())
+    slot = std::find_if(chain.begin(), chain.end(), isInsertBlock);
 
-  if (slot != targetLane->end())
+  if (slot != chain.end())
     *slot = std::move(block);
   else
-    targetLane->push_back(std::move(block));
-  alignBranchLaneLengths();
+    chain.push_back(std::move(block));
+  normalizeLaneInserts(chain);
 
   bumpChainRevision();
   return blockId;
@@ -701,19 +660,10 @@ std::string TONE3000Processor::convertBlockToDualMono(const std::string& blockId
   ChainEditFade editFade(*this);
   juce::ScopedLock lock(chainMutex);
 
-  Lane* targetLane = nullptr;
-  Lane::iterator slot;
-  for (auto& l : lanes) {
-    auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-      return b->id == blockId;
-    });
-    if (it != l.end()) {
-      targetLane = &l;
-      slot = it;
-      break;
-    }
-  }
-  if (targetLane == nullptr)
+  Lane::iterator slot = std::find_if(
+      chain.begin(), chain.end(),
+      [&](const std::unique_ptr<ChainBlock>& b) { return b->id == blockId; });
+  if (slot == chain.end())
     return "";
 
   const ChainBlock* source = slot->get();
@@ -782,19 +732,10 @@ std::string TONE3000Processor::collapseDualMonoToSingle(const std::string& block
   ChainEditFade editFade(*this);
   juce::ScopedLock lock(chainMutex);
 
-  Lane* targetLane = nullptr;
-  Lane::iterator slot;
-  for (auto& l : lanes) {
-    auto it = std::find_if(l.begin(), l.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-      return b->id == blockId;
-    });
-    if (it != l.end()) {
-      targetLane = &l;
-      slot = it;
-      break;
-    }
-  }
-  if (targetLane == nullptr)
+  Lane::iterator slot = std::find_if(
+      chain.begin(), chain.end(),
+      [&](const std::unique_ptr<ChainBlock>& b) { return b->id == blockId; });
+  if (slot == chain.end())
     return "";
 
   ChainBlock* wrapper = slot->get();
@@ -843,24 +784,21 @@ std::string TONE3000Processor::collapseDualMonoToSingle(const std::string& block
   return newId;
 }
 
-std::string TONE3000Processor::landToneBlock(std::unique_ptr<ChainBlock> block,
-                                             const juce::String& side, int index) {
+std::string TONE3000Processor::landToneBlock(std::unique_ptr<ChainBlock> block, int index) {
   const std::string newId = block->id;
-  Lane& target = side == "right" ? lane(ChainSide::Right) : lane(ChainSide::Left);
-  index = juce::jlimit(0, static_cast<int>(target.size()), index);
-  if (index < static_cast<int>(target.size()) && isInsertBlock(target[static_cast<size_t>(index)]))
-    target[static_cast<size_t>(index)] = std::move(block);  // paste fills the empty tile
+  index = juce::jlimit(0, static_cast<int>(chain.size()), index);
+  if (index < static_cast<int>(chain.size()) && isInsertBlock(chain[static_cast<size_t>(index)]))
+    chain[static_cast<size_t>(index)] = std::move(block);  // paste fills the empty tile
   else
-    target.insert(target.begin() + index, std::move(block));
-  alignBranchLaneLengths();
+    chain.insert(chain.begin() + index, std::move(block));
+  normalizeLaneInserts(chain);
 
   bumpChainRevision();
   queueActiveModelLoad(*findBlockById(newId));
   return newId;
 }
 
-std::string TONE3000Processor::duplicateChainBlock(const std::string& sourceBlockId,
-                                                   const juce::String& side, int index) {
+std::string TONE3000Processor::duplicateChainBlock(const std::string& sourceBlockId, int index) {
   // Structural like reorder/move (a whole new block splices into the running
   // chain), so mute-splice instead of relying on one block's wet fade.
   ChainEditFade editFade(*this);
@@ -869,10 +807,6 @@ std::string TONE3000Processor::duplicateChainBlock(const std::string& sourceBloc
   const ChainBlock* source = findBlockById(sourceBlockId);
   if (source == nullptr || source->type == ChainBlockType::INSERT) {
     DBG("duplicateChainBlock: source not a tone block: " << sourceBlockId);
-    return "";
-  }
-  if (side == "right" && !stereoEnabled.load()) {
-    DBG("duplicateChainBlock: right lane requires stereo mode");
     return "";
   }
 
@@ -895,9 +829,8 @@ std::string TONE3000Processor::duplicateChainBlock(const std::string& sourceBloc
   clone->modelLoading = true;
   clone->applyDefaultMixOnLoad = false;  // the copied mix is a setting, not a default
 
-  landToneBlock(std::move(clone), side, index);
-  DBG("Duplicated block " << sourceBlockId << " -> " << newId << " (" << side << " @ " << index
-                          << ")");
+  landToneBlock(std::move(clone), index);
+  DBG("Duplicated block " << sourceBlockId << " -> " << newId << " (@ " << index << ")");
   return newId;
 }
 
@@ -922,17 +855,13 @@ bool TONE3000Processor::copyChainBlock(const std::string& blockId) {
   return true;
 }
 
-std::string TONE3000Processor::pasteChainBlock(const juce::String& side, int index) {
+std::string TONE3000Processor::pasteChainBlock(int index) {
   // Structural like duplicate: a whole new block lands in the running chain.
   ChainEditFade editFade(*this);
   juce::ScopedLock lock(chainMutex);
 
   if (!blockClipboardSettings.isValid()) {
     DBG("pasteChainBlock: clipboard is empty");
-    return "";
-  }
-  if (side == "right" && !stereoEnabled.load()) {
-    DBG("pasteChainBlock: right lane requires stereo mode");
     return "";
   }
 
@@ -957,8 +886,8 @@ std::string TONE3000Processor::pasteChainBlock(const juce::String& side, int ind
   block->modelLoading = true;
   block->applyDefaultMixOnLoad = false;  // the copied mix is a setting, not a default
 
-  landToneBlock(std::move(block), side, index);
-  DBG("Pasted clipboard block -> " << newId << " (" << side << " @ " << index << ")");
+  landToneBlock(std::move(block), index);
+  DBG("Pasted clipboard block -> " << newId << " (@ " << index << ")");
   return newId;
 }
 
@@ -1047,28 +976,26 @@ bool TONE3000Processor::refreshToneMetadata(const juce::String& toneJsonString) 
   juce::ScopedLock lock(chainMutex);
 
   bool changed = false;
-  for (const ChainSide side : {ChainSide::Left, ChainSide::Right}) {
-    for (auto& block : lane(side)) {
-      if (block->type == ChainBlockType::INSERT || block->toneId != toneId)
-        continue;
-      // Local tones have no catalog behind them; a same-id API tone is a
-      // different thing entirely and must never overwrite one.
-      if (static_cast<bool>(block->toneVar["local"]))
-        continue;
+  for (auto& block : chain) {
+    if (block->type == ChainBlockType::INSERT || block->toneId != toneId)
+      continue;
+    // Local tones have no catalog behind them; a same-id API tone is a
+    // different thing entirely and must never overwrite one.
+    if (static_cast<bool>(block->toneVar["local"]))
+      continue;
 
-      // Fresh payload wholesale, except the stored models array: native
-      // persists only the active model, and queueActiveModelLoad / retry /
-      // switchModel resolve the download URL from that entry. The API
-      // payload's models list has no such guarantee.
-      juce::var mergedVar = freshVar.clone();
-      mergedVar.getDynamicObject()->setProperty("models", block->toneVar["models"]);
-      const juce::String mergedJson = juce::JSON::toString(mergedVar);
-      if (mergedJson == block->toneJson)
-        continue;
+    // Fresh payload wholesale, except the stored models array: native
+    // persists only the active model, and queueActiveModelLoad / retry /
+    // switchModel resolve the download URL from that entry. The API
+    // payload's models list has no such guarantee.
+    juce::var mergedVar = freshVar.clone();
+    mergedVar.getDynamicObject()->setProperty("models", block->toneVar["models"]);
+    const juce::String mergedJson = juce::JSON::toString(mergedVar);
+    if (mergedJson == block->toneJson)
+      continue;
 
-      setToneOnBlock(*block, toneId, mergedJson, mergedVar);
-      changed = true;
-    }
+    setToneOnBlock(*block, toneId, mergedJson, mergedVar);
+    changed = true;
   }
 
   if (changed) {
@@ -1328,26 +1255,21 @@ bool TONE3000Processor::removeChainBlock(const std::string& blockId) {
   {
     juce::ScopedLock lock(chainMutex);
 
-    for (auto& chain : lanes) {
-      auto it = std::find_if(
-          chain.begin(), chain.end(),
-          [&blockId](const std::unique_ptr<ChainBlock>& block) { return block->id == blockId; });
-      if (it != chain.end()) {
-        if (isInsertBlock(*it)) {
-          DBG("Cannot remove insert block");
-          return false;
-        }
-        pushChainHistory();
-        removed = std::move(*it);
-        chain.erase(it);
-        // Dropping below the minimum grows the lane back to it (at the end);
-        // removing the tapped block clears the branch, and a shortened trunk
-        // re-aligns the branch lane's end.
-        alignBranchLaneLengths();
-        refreshIrTailLength();  // a long-tailed IR may just have left the chain
-        bumpChainRevision();
-        break;
+    auto it = std::find_if(
+        chain.begin(), chain.end(),
+        [&blockId](const std::unique_ptr<ChainBlock>& block) { return block->id == blockId; });
+    if (it != chain.end()) {
+      if (isInsertBlock(*it)) {
+        DBG("Cannot remove insert block");
+        return false;
       }
+      pushChainHistory();
+      removed = std::move(*it);
+      chain.erase(it);
+      // Dropping below the minimum grows the lane back to it (at the end).
+      normalizeLaneInserts(chain);
+      refreshIrTailLength();  // a long-tailed IR may just have left the chain
+      bumpChainRevision();
     }
   }
 
@@ -1367,33 +1289,22 @@ bool TONE3000Processor::reorderChainBlocks(const std::vector<std::string>& newOr
   ChainEditFade editFade(*this);
   juce::ScopedLock lock(chainMutex);
 
-  // Both lanes render at once now, so the target chain is inferred from the
-  // ids themselves: the order must be a permutation of exactly one lane.
-  // (Block ids are globally unique across both chains.)
-  auto isPermutationOf = [](const std::vector<std::unique_ptr<ChainBlock>>& chain,
+  auto isPermutationOf = [](const std::vector<std::unique_ptr<ChainBlock>>& c,
                             const std::vector<std::string>& order) {
-    if (order.size() != chain.size())
+    if (order.size() != c.size())
       return false;
     std::vector<std::string> chainIds, orderIds = order;
-    for (const auto& block : chain)
+    for (const auto& block : c)
       chainIds.push_back(block->id);
     std::sort(chainIds.begin(), chainIds.end());
     std::sort(orderIds.begin(), orderIds.end());
     return chainIds == orderIds;
   };
 
-  std::vector<std::unique_ptr<ChainBlock>>* target = nullptr;
-  for (auto& l : lanes)
-    if (isPermutationOf(l, newOrder)) {
-      target = &l;
-      break;
-    }
-
-  if (target == nullptr) {
-    DBG("Failed to reorder chain blocks: order is not a permutation of either chain");
+  if (!isPermutationOf(chain, newOrder)) {
+    DBG("Failed to reorder chain blocks: order is not a permutation of the chain");
     return false;
   }
-  auto& chain = *target;
 
   pushChainHistory();
 
@@ -1411,55 +1322,8 @@ bool TONE3000Processor::reorderChainBlocks(const std::vector<std::string>& newOr
   }
 
   chain = std::move(reorderedBlocks);
-  // The tap follows its block to the new position (a moved tap changes the
-  // branch lane's indent, so its trailing inserts re-align).
-  alignBranchLaneLengths();
   bumpChainRevision();
   DBG("Successfully reordered chain blocks (including insert block)");
-  return true;
-}
-
-bool TONE3000Processor::moveBlockToChain(const std::string& blockId, const juce::String& side,
-                                         int index) {
-  // Cross-lane moves change both chains at once; mute-splice like reorder.
-  ChainEditFade editFade(*this);
-  juce::ScopedLock lock(chainMutex);
-
-  if (!stereoEnabled.load()) {
-    DBG("moveBlockToChain: only valid in stereo mode");
-    return false;
-  }
-
-  auto& target = lane(side == "right" ? ChainSide::Right : ChainSide::Left);
-  auto& source = lane(side == "right" ? ChainSide::Left : ChainSide::Right);
-
-  auto it = std::find_if(source.begin(), source.end(),
-                         [&blockId](const std::unique_ptr<ChainBlock>& block) {
-                           return block && block->id == blockId;
-                         });
-  if (it == source.end()) {
-    DBG("moveBlockToChain: block not found in the other lane: " << blockId);
-    return false;
-  }
-  if (isInsertBlock(*it)) {
-    DBG("moveBlockToChain: insert slots stay in their lane");
-    return false;
-  }
-
-  pushChainHistory();
-
-  auto block = std::move(*it);
-  source.erase(it);
-  index = juce::jlimit(0, static_cast<int>(target.size()), index);
-  target.insert(target.begin() + index, std::move(block));
-
-  // The tone count changed on both sides: the source may need a slot back,
-  // the target may shed a (trailing) surplus one. The tapped block leaving
-  // the trunk clears the branch; otherwise the lane ends re-align.
-  alignBranchLaneLengths();
-
-  bumpChainRevision();
-  DBG("Moved block " << blockId << " to " << side << " chain at index " << index);
   return true;
 }
 
@@ -1880,15 +1744,9 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     juce::var eq;
     bool rtFailed = false;
     // DUAL_MONO only: the two fixed child slots (each 0 or 1 row - see
-    // ChainBlock::dualLeft/dualRight), recombine controls, and whether the
-    // enclosing lane currently has a spare physical channel to widen into
-    // (false = folds to mono; mirrors runDualMono's own widen-vs-fold
-    // decision, which this can't read directly since it isn't inside the
-    // audio callback - stereo mode means every lane runs with exactly one
-    // physical channel, so any Dual Mono block in it must fold).
+    // ChainBlock::dualLeft/dualRight) and recombine controls.
     std::vector<BlockRow> dualLeft, dualRight;
     float dualLeftPan = 0.0f, dualRightPan = 1.0f, dualWidth = 1.0f;
-    bool dualChannelLimited = false;
     bool dualLinked = false, dualSoloLeft = false, dualSoloRight = false;
     bool dualLeftMuted = false, dualRightMuted = false;
     bool dualLeftInvert = false, dualRightInvert = false;
@@ -1900,10 +1758,10 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   };
 
   juce::uint32 revision = 0;
-  std::vector<BlockRow> left, right;
-  bool stereo = false, canUndo = false, canRedo = false, branched = false;
+  std::vector<BlockRow> left;
+  bool canUndo = false, canRedo = false;
   bool canPaste = false, atDefault = false;
-  juce::String presetId, presetName, branchSide, activeSide, branchAfter;
+  juce::String presetId, presetName;
 
   {
     juce::ScopedLock lock(chainMutex);
@@ -1922,13 +1780,9 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     }
 
     // std::function, not auto: DUAL_MONO rows recurse into this same lambda
-    // for their two child slots (a plain auto lambda can't reference
-    // itself). `stereo` is captured by reference from the outer scope even
-    // though it's assigned after this lambda is first used below - only
-    // read once the lambda actually runs (during copyLane's own body,
-    // after `stereo` is set), never during its construction.
+    // for their two child slots (a plain auto lambda can't reference itself).
     std::function<void(const Lane&, std::vector<BlockRow>&)> copyLane =
-        [&copyLane, &stereo](const Lane& l, std::vector<BlockRow>& out) {
+        [&copyLane](const Lane& l, std::vector<BlockRow>& out) {
       out.reserve(l.size());
       for (const auto& block : l) {
         BlockRow row;
@@ -2027,7 +1881,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
           row.dualLeftPan = block->dualLeftPanNormalized;
           row.dualRightPan = block->dualRightPanNormalized;
           row.dualWidth = block->dualWidthNormalized;
-          row.dualChannelLimited = stereo;
           row.dualLinked = block->dualLinked;
           row.dualSoloLeft = block->dualSoloLeft;
           row.dualSoloRight = block->dualSoloRight;
@@ -2049,13 +1902,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       }
     };
 
-    // Read before the first copyLane call - DUAL_MONO rows need it (see
-    // copyLane's own capture comment) and it's cheap/stable to read this
-    // early regardless.
-    stereo = stereoEnabled.load();
-    copyLane(lane(ChainSide::Left), left);
-    if (stereo)
-      copyLane(lane(ChainSide::Right), right);
+    copyLane(chain, left);
 
     canUndo = chainHistory.canUndo();
     canRedo = chainHistory.canRedo();
@@ -2063,12 +1910,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     atDefault = isChainAtDefault();
     presetId = activePresetId;
     presetName = activePresetName;
-    branched = stereo && !branchAfterBlockId.empty();
-    if (branched) {
-      branchSide = branchSourceSide == ChainSide::Right ? "right" : "left";
-      branchAfter = juce::String(branchAfterBlockId);
-    }
-    activeSide = pendingAddSide == ChainSide::Right ? "right" : "left";
   }
 
   // Lock released; build the payload. std::function, not auto: DUAL_MONO
@@ -2187,15 +2028,16 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("dualAlignDiffuseEnabled", row.dualAlignDiffuseEnabled);
       item->setProperty("params", juce::var(params.get()));
 
-      // DUAL_MONO only: the two fixed child slots, nested the same shape as
-      // the top-level chain/chainRight arrays (each is 0 or 1 item - see
-      // ChainBlock::dualLeft/dualRight). dualChannelLimited mirrors
-      // runDualMono's own widen-vs-fold decision (see BlockRow's own
-      // comment) so the UI can dim Pan/Width when they're currently inert.
+      // DUAL_MONO only: the two fixed child slots (each 0 or 1 item - see
+      // ChainBlock::dualLeft/dualRight). dualChannelLimited is always false
+      // now that every chain owns both physical output channels (no more
+      // two-lane stereo mode splitting them) - kept in the payload so the
+      // UI's existing dim-Pan/Width-when-limited handling stays inert
+      // rather than needing a shape change.
       if (row.blockType == ChainBlockType::DUAL_MONO) {
         item->setProperty("dualLeft", serializeChain(row.dualLeft));
         item->setProperty("dualRight", serializeChain(row.dualRight));
-        item->setProperty("dualChannelLimited", row.dualChannelLimited);
+        item->setProperty("dualChannelLimited", false);
       }
 
       chainArray.add(juce::var(item.get()));
@@ -2206,8 +2048,6 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   juce::DynamicObject::Ptr state = new juce::DynamicObject();
   state->setProperty("revision", static_cast<int>(revision));
   state->setProperty("chain", serializeChain(left));
-  if (stereo)
-    state->setProperty("chainRight", serializeChain(right));
   // History flags ride along with the chain state: they only ever change
   // together with a revision bump (mutation, undo/redo or a state load).
   state->setProperty("canUndo", canUndo);
@@ -2225,25 +2065,13 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     preset->setProperty("name", presetName);
     state->setProperty("preset", juce::var(preset.get()));
   }
-  state->setProperty("stereoEnabled", stereo);
-  // Active branch (stereo mode only): which lane is the trunk and which of
-  // its tone blocks feeds the other lane. Absent when the chains are
-  // independent, and while mono, where a set branch lies dormant.
-  if (branched) {
-    juce::DynamicObject::Ptr branch = new juce::DynamicObject();
-    branch->setProperty("side", branchSide);
-    branch->setProperty("afterBlockId", branchAfter);
-    state->setProperty("branch", juce::var(branch.get()));
-  }
-  state->setProperty("activeSide", activeSide);
   // True when a real stereo source feeds the plugin (stereo host bus or a
   // stereo standalone input device); drives the faceplate input-mode button
   // and the dual input meters.
   state->setProperty("stereoInput", stereoInputDetected.load());
   // Output-side twin: false on a mono rig (mono host bus, or a one-channel
-  // standalone output device). Spread is idle then (the UI greys it out),
-  // and stereo chains are summed to mono (see processImageStage): the UI
-  // dims the pans and shows the MONO chip on the pan rail.
+  // standalone output device). Pan is inert then (see processImageStage):
+  // the UI hides the knob.
   state->setProperty("stereoOutput", stereoOutputDetected.load());
   // True in the standalone app; gates standalone-only settings.
   state->setProperty("standalone", isStandalone());
@@ -2273,12 +2101,6 @@ juce::var TONE3000Processor::getMeterLevels() const {
   root->setProperty("output", channelPair(outputMeterLevelL.load(), outputMeterLevelR.load()));
   // Audio-callback load as a 0..1 proportion (the hint bar shows it as a %).
   root->setProperty("cpu", loadMeasurer.getLoadAsProportion());
-  // Stereo-image output correlation (-1..1, 1 when the engine is idle) for
-  // the mono-compatibility meter: whichever image engine the mode runs
-  // (Spread in mono, the Align deck in stereo). Riding this poll costs no
-  // extra bridge traffic.
-  root->setProperty("correlation", stereoEnabled.load() ? stereoOffset.correlation()
-                                                        : spread.correlation());
 
   juce::DynamicObject::Ptr blocks = new juce::DynamicObject();
   {
@@ -2286,259 +2108,23 @@ juce::var TONE3000Processor::getMeterLevels() const {
     // time is a few property writes, so contention with the audio thread is
     // negligible even at per-frame polling rates.
     juce::ScopedLock lock(chainMutex);
-    for (const auto& chain : lanes) {
-      for (const auto& block : chain) {
-        if (block->type == ChainBlockType::INSERT)
-          continue;
-        juce::DynamicObject::Ptr levels = new juce::DynamicObject();
-        levels->setProperty("in", block->inputMeterDb.load());
-        levels->setProperty("out", block->outputMeterDb.load());
-        // Mono-safety readout for the block's own Stereo Processing screen -
-        // the goniometer's own continuous correlation (see BlockGoniometer's
-        // own comment for why this is NOT dualAlign.correlation(), which
-        // freezes whenever Align itself isn't actively running).
-        if (block->type == ChainBlockType::DUAL_MONO)
-          levels->setProperty("alignCorrelation", block->dualGoniometer.correlation());
-        blocks->setProperty(juce::String(block->id), juce::var(levels.get()));
-      }
+    for (const auto& block : chain) {
+      if (block->type == ChainBlockType::INSERT)
+        continue;
+      juce::DynamicObject::Ptr levels = new juce::DynamicObject();
+      levels->setProperty("in", block->inputMeterDb.load());
+      levels->setProperty("out", block->outputMeterDb.load());
+      // Mono-safety readout for the block's own Stereo Processing screen -
+      // the goniometer's own continuous correlation (see BlockGoniometer's
+      // own comment for why this is NOT dualAlign.correlation(), which
+      // freezes whenever Align itself isn't actively running).
+      if (block->type == ChainBlockType::DUAL_MONO)
+        levels->setProperty("alignCorrelation", block->dualGoniometer.correlation());
+      blocks->setProperty(juce::String(block->id), juce::var(levels.get()));
     }
   }
   root->setProperty("blocks", juce::var(blocks.get()));
   return root.get();
-}
-
-// ####################
-// STEREO MODE
-// ####################
-void TONE3000Processor::setStereoMode(bool enabled) {
-  // Mono ↔ stereo rewires the whole routing (one chain on both channels ↔
-  // two independent lanes) with no single block to fade, so mute-splice like
-  // reorder. Cheap early-out first: no fade when nothing changes.
-  if (stereoEnabled.load() == enabled)
-    return;
-
-  ChainEditFade editFade(*this);
-  juce::ScopedLock lock(chainMutex);
-
-  if (stereoEnabled.load() == enabled)
-    return;
-
-  pushChainHistory();
-
-  auto& right = lane(ChainSide::Right);
-  stereoEnabled.store(enabled);
-
-  if (!enabled)
-    pendingAddSide = ChainSide::Left;
-
-  // Branching only runs between two chains: dormant while mono (the fields
-  // persist so toggling back re-engages the branch), live again in stereo.
-  // Alignment also seeds the right chain's minimum slot layout the first
-  // time stereo is enabled (legacy states that only carried one insert get
-  // padded here too), and a re-engaging branch re-evens the lane ends
-  // (mono edits may have changed the trunk's length underneath it).
-  alignBranchLaneLengths();
-
-  // A re-engaged branch means a single mono source again, so re-enforce the
-  // input-mode invariant (the fold may have gone back to stereo while the
-  // branch lay dormant).
-  if (rtBranchTapIndex >= 0 && getInputMode() == InputMode::Stereo)
-    inputMode.store(static_cast<int>(InputMode::Left));
-
-  // Make sure the right chain's engines are ready to run in the chain domain.
-  if (enabled)
-    prepareChain(right);
-
-  bumpChainRevision();
-  DBG("Stereo mode " << (enabled ? "enabled" : "disabled"));
-}
-
-// ####################
-// CHAIN BRANCHING
-// ####################
-
-// Re-resolve branchAfterBlockId into rtBranchTapIndex for the RT path.
-// Clears the branch entirely when the tapped block is no longer a tone block
-// in the trunk lane (removed, moved across, stale snapshot). Validated in
-// mono mode too, so edits made while the branch is dormant can't leave a
-// stale id behind. Called after every structural change; callers own
-// history/revision/fade; this is pure bookkeeping.
-void TONE3000Processor::refreshBranchTapIndex() {
-  rtBranchTapIndex = -1;
-  if (branchAfterBlockId.empty())
-    return;
-
-  const auto& trunk = lane(branchSourceSide);
-  int tapIdx = -1;
-  for (int i = 0; i < static_cast<int>(trunk.size()); ++i) {
-    const auto& b = trunk[static_cast<size_t>(i)];
-    if (b != nullptr && b->id == branchAfterBlockId && b->type != ChainBlockType::INSERT) {
-      tapIdx = i;
-      break;
-    }
-  }
-  if (tapIdx == -1) {
-    DBG("Branch tap block left the trunk lane; reverting to independent chains");
-    branchAfterBlockId.clear();
-    return;
-  }
-
-  // Dormant in mono mode: the fields persist (a mono round trip brings the
-  // branch back) but the RT path ignores them (like the right lane itself).
-  if (stereoEnabled.load())
-    rtBranchTapIndex = tapIdx;
-}
-
-// Keep the lanes' visible ends even while a branch is active. The branch
-// lane renders indented past the trunk's tap gap (its input is that trunk
-// prefix's output), so with both lanes at the per-lane baseline its rail
-// overshoots the trunk's end by the whole indent, all trailing empty
-// placeholders. Those are free real estate, so trim them (never below the
-// one insert every lane keeps) until both lanes end on the same slot
-// column. Trim-only, best-effort: no lane ever grows extra placeholders
-// past the per-lane baseline, tone blocks never move, so lanes that
-// genuinely need to be uneven (a long trunk, or branch tones running past
-// the trunk's end) simply stay uneven. Without an active branch this
-// restores the plain per-lane baseline. Pure bookkeeping like
-// normalizeLaneInserts: callers own history/revision/fade.
-void TONE3000Processor::alignBranchLaneLengths() {
-  // Baseline first (also undoes earlier alignment, so branch moves never
-  // compound), then re-resolve the tap: insert churn can shift its index.
-  normalizeLaneInserts(lane(ChainSide::Left));
-  normalizeLaneInserts(lane(ChainSide::Right));
-  refreshBranchTapIndex();
-  if (rtBranchTapIndex < 0)
-    return;
-
-  const Lane& trunk = lane(branchSourceSide);
-  Lane& branchLane =
-      lane(branchSourceSide == ChainSide::Left ? ChainSide::Right : ChainSide::Left);
-
-  // The branch lane's first tile sits `indent` slot columns into the trunk.
-  const int indent = rtBranchTapIndex + 1;
-  const int targetSlots = static_cast<int>(trunk.size()) - indent;
-
-  int inserts =
-      static_cast<int>(std::count_if(branchLane.begin(), branchLane.end(), isInsertBlock));
-  while (static_cast<int>(branchLane.size()) > targetSlots && inserts > 1 &&
-         isInsertBlock(branchLane.back())) {
-    branchLane.pop_back();
-    --inserts;
-  }
-}
-
-bool TONE3000Processor::setChainBranch(const juce::String& side,
-                                       const std::string& afterBlockId) {
-  // Rerouting one whole lane's input is structural (no single block to
-  // fade), so mute-splice like reorder.
-  ChainEditFade editFade(*this);
-  juce::ScopedLock lock(chainMutex);
-
-  if (!stereoEnabled.load()) {
-    DBG("setChainBranch: only valid in stereo mode");
-    return false;
-  }
-
-  const ChainSide trunkSide = side == "right" ? ChainSide::Right : ChainSide::Left;
-  const auto& trunk = lane(trunkSide);
-  const bool tapExists =
-      std::any_of(trunk.begin(), trunk.end(), [&](const std::unique_ptr<ChainBlock>& b) {
-        return b != nullptr && b->id == afterBlockId && b->type != ChainBlockType::INSERT;
-      });
-  if (!tapExists) {
-    DBG("setChainBranch: tap block not a tone block in the " << side << " lane: "
-                                                             << afterBlockId);
-    return false;
-  }
-
-  // Re-pointing to the spot already tapped is a no-op: no history entry,
-  // no revision bump (the UI can re-fire on fast clicks).
-  if (branchSourceSide == trunkSide && branchAfterBlockId == afterBlockId)
-    return true;
-
-  pushChainHistory();
-
-  branchSourceSide = trunkSide;
-  branchAfterBlockId = afterBlockId;
-  // The branch lane just gained an indent past the tap gap; its surplus
-  // trailing insert placeholders trim away to end level with the trunk.
-  alignBranchLaneLengths();
-
-  // A branched chain has a single (mono) source: the trunk's channel. A
-  // stereo input fold would silently drop the other channel, so force a
-  // definite pick; the UI hides the "stereo" option while branched.
-  if (getInputMode() == InputMode::Stereo)
-    inputMode.store(static_cast<int>(InputMode::Left));
-
-  bumpChainRevision();
-  DBG("Chain branch set: " << side << " after block " << afterBlockId);
-  return true;
-}
-
-bool TONE3000Processor::clearChainBranch() {
-  {
-    juce::ScopedLock lock(chainMutex);
-    if (branchAfterBlockId.empty())
-      return false;  // nothing to clear: no fade, no history entry
-  }
-
-  ChainEditFade editFade(*this);
-  juce::ScopedLock lock(chainMutex);
-  if (branchAfterBlockId.empty())
-    return false;
-
-  pushChainHistory();
-  branchAfterBlockId.clear();
-  // Independent lanes go back to the plain per-lane baseline (any trailing
-  // inserts trimmed for the branch grow back).
-  alignBranchLaneLengths();
-  bumpChainRevision();
-  DBG("Chain branch cleared; chains independent again");
-  return true;
-}
-
-void TONE3000Processor::setActiveEditChain(const juce::String& side) {
-  juce::ScopedLock lock(chainMutex);
-  if (side == "right")
-    pendingAddSide = ChainSide::Right;
-  else if (side == "left")
-    pendingAddSide = ChainSide::Left;
-  bumpChainRevision();
-}
-
-bool TONE3000Processor::swapChains() {
-  // Both lanes change output channel at once; mute-splice like reorder.
-  ChainEditFade editFade(*this);
-  juce::ScopedLock lock(chainMutex);
-
-  if (!stereoEnabled.load())
-    return false;
-
-  pushChainHistory();
-  // Insert slots travel with their lane (ids are lane-agnostic UUIDs, so
-  // global uniqueness is preserved); each lane's slot invariant moves
-  // wholesale with its blocks.
-  std::swap(lane(ChainSide::Left), lane(ChainSide::Right));
-
-  // The trunk lane moved sides; the branch (and the lane-end alignment its
-  // geometry drives) moves with it.
-  branchSourceSide =
-      branchSourceSide == ChainSide::Left ? ChainSide::Right : ChainSide::Left;
-  alignBranchLaneLengths();
-
-  // Polarity flips describe the captures, so they travel with their lanes
-  // (pans stay put: they're image placement, not chain state).
-  auto* invLeft = parameters.getParameter("chainInvertLeft");
-  auto* invRight = parameters.getParameter("chainInvertRight");
-  if (invLeft != nullptr && invRight != nullptr && invLeft->getValue() != invRight->getValue()) {
-    const float left = invLeft->getValue();
-    invLeft->setValueNotifyingHost(invRight->getValue());
-    invRight->setValueNotifyingHost(left);
-  }
-
-  bumpChainRevision();
-  DBG("Swapped Left/Right chains");
-  return true;
 }
 
 bool TONE3000Processor::setBlockParam(const std::string& blockId, const juce::String& param,
@@ -2991,12 +2577,7 @@ void TONE3000Processor::rebuildIrShapeInBackground(const std::string& blockId,
   // after the lock (convolution teardown is too heavy to hold it).
 }
 
-bool TONE3000Processor::toggleBlockPower(int position, bool rightLane) {
-  // The Right lane only processes in stereo mode; a mapped right-block stomp
-  // outside it must not edit chain state the user can't see.
-  if (rightLane && !isStereoMode())
-    return false;
-
+bool TONE3000Processor::toggleBlockPower(int position) {
   // Resolve the position to a block id under the lock, then route through
   // setBlockParam so a MIDI stomp is exactly a UI power click: undoable,
   // revision-bumped, same validation.
@@ -3005,7 +2586,7 @@ bool TONE3000Processor::toggleBlockPower(int position, bool rightLane) {
   {
     juce::ScopedLock lock(chainMutex);
     int seen = 0;
-    for (const auto& block : lane(rightLane ? ChainSide::Right : ChainSide::Left)) {
+    for (const auto& block : chain) {
       if (block->type == ChainBlockType::INSERT)
         continue;
       if (seen++ == position) {
@@ -3149,9 +2730,8 @@ juce::var TONE3000Processor::getIrWaveform(const std::string& blockId) {
 
 void TONE3000Processor::disableAllBlockSpectrums() {
   juce::ScopedLock lock(chainMutex);
-  for (auto& chain : lanes)
-    for (auto& block : chain)
-      block->spectrum.setEnabled(false);
+  for (auto& block : chain)
+    block->spectrum.setEnabled(false);
 }
 
 void TONE3000Processor::setAccessToken(const juce::String& token) {

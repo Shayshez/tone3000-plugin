@@ -25,13 +25,13 @@ const doneMessage = ({ matchedMs = 0, polarityFlipped = false }: DualAutoAlignRe
 
 /**
  * One-shot Align probe measurement (a brief output mute while an internal
- * sweep drives both sides), rescoped to a single Dual Mono block's own two
- * sides instead of the global chain-level Align - see
- * armDualAutoAlign/pollDualAutoAlign (Processor.cpp). A separate hook
- * rather than reusing the global AlignControls.tsx's own useAutoMeasure so
- * blockId can be baked into the native calls without touching that
- * already-working shared hook. cancelAutoOffset is shared/state-agnostic,
- * so it cancels either kind interchangeably.
+ * sweep drives both sides), scoped to a single Dual Mono block's own two
+ * sides - see armDualAutoAlign/pollDualAutoAlign (Processor.cpp). A
+ * separate hook (rather than the shared useAutoMeasure) so blockId can be
+ * baked into the native calls. cancelAutoOffset is state-agnostic (one
+ * shared AutoOffset engine instance, native-side), so it cancels a probe
+ * armed here the same way it would one armed anywhere else that reuses the
+ * same engine.
  */
 export function useDualAutoAlign(blockId: string) {
   const arm = useNativeFunction<boolean>('armDualAutoAlign');

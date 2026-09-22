@@ -15,7 +15,7 @@
 //   - the clipboard is a snapshot, not a reference: edits to the source
 //     after the copy don't leak into a later paste,
 //   - `canPasteBlock` (getChainState) tracks the clipboard, not the chain,
-//   - an empty clipboard and the right lane in mono are rejected,
+//   - an empty clipboard and bad sources are rejected,
 //   - a paste is one undo step.
 #include "Processor.h"
 #include "chain_test_helpers.h"
@@ -59,7 +59,7 @@ TEST(BlockClipboardTest, PasteFillsInsertSlotAndCarriesEverySetting) {
   EXPECT_TRUE(static_cast<bool>(proc.getChainState(-1)["canPasteBlock"]));
 
   // Paste into the first insert slot (lane index 1): the slot is consumed.
-  const std::string newId = proc.pasteChainBlock("left", 1);
+  const std::string newId = proc.pasteChainBlock(1);
   ASSERT_FALSE(newId.empty());
   EXPECT_NE(newId, "blk-a");
 
@@ -114,7 +114,7 @@ TEST(BlockClipboardTest, PasteSurvivesSourceDeletionAndChainReplacement) {
   ASSERT_TRUE(waitForChainLoaded(proc));
   EXPECT_TRUE(static_cast<bool>(proc.getChainState(-1)["canPasteBlock"]));
 
-  const std::string newId = proc.pasteChainBlock("left", 1);
+  const std::string newId = proc.pasteChainBlock(1);
   ASSERT_FALSE(newId.empty());
 
   const juce::var after = proc.getChainState(-1);
@@ -138,30 +138,26 @@ TEST(BlockClipboardTest, ClipboardIsASnapshotNotAReference) {
   // Edit the source after the copy; the paste must carry the copy-time value.
   ASSERT_TRUE(proc.setBlockParam("blk-a", "mix", 0.2));
 
-  const std::string newId = proc.pasteChainBlock("left", 1);
+  const std::string newId = proc.pasteChainBlock(1);
   ASSERT_FALSE(newId.empty());
   const juce::var after = proc.getChainState(-1);
   EXPECT_FLOAT_EQ(static_cast<float>(after["chain"][0]["params"]["mix"]), 0.2f);
   EXPECT_FLOAT_EQ(static_cast<float>(after["chain"][1]["params"]["mix"]), 0.7f);
 }
 
-TEST(BlockClipboardTest, RejectsEmptyClipboardBadSourcesAndMonoRightLane) {
+TEST(BlockClipboardTest, RejectsEmptyClipboardAndBadSources) {
   ChainTestProcessor proc;
   seedMonoChain(proc, "blk-a");
   ASSERT_TRUE(waitForChainLoaded(proc));
 
   // Nothing copied yet.
-  EXPECT_TRUE(proc.pasteChainBlock("left", 1).empty());
+  EXPECT_TRUE(proc.pasteChainBlock(1).empty());
 
   // Insert slots and unknown ids are not copyable.
   const juce::String insertId = proc.getChainState(-1)["chain"][1]["blockId"].toString();
   EXPECT_FALSE(proc.copyChainBlock(insertId.toStdString()));
   EXPECT_FALSE(proc.copyChainBlock("not-a-block"));
   EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["canPasteBlock"]));
-
-  // Mono mode has no right lane to paste into.
-  ASSERT_TRUE(proc.copyChainBlock("blk-a"));
-  EXPECT_TRUE(proc.pasteChainBlock("right", 0).empty());
 }
 
 }  // namespace

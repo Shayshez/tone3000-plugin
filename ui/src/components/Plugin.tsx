@@ -1,10 +1,9 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useNativeFunction } from '../hooks/useFunction';
 import { useChainState } from '../hooks/useChainState';
 import { ChainActionsProvider } from '../hooks/useChainActions';
 import type { ChainActions } from '../hooks/useChainActions';
 import { usePresets } from '../hooks/usePresets';
-import { useParameter } from '../hooks/useParameter';
 import { useAudioDevice } from '../hooks/useAudioDevice';
 import { useConnectionGate } from '../hooks/useConnectionGate';
 import { useToneSession } from '../hooks/useToneSession';
@@ -53,14 +52,11 @@ export const Plugin: React.FC = () => {
   // Chain state: revision-gated polling + mutation actions, owned by one hook.
   const {
     chain,
-    chainRight,
-    branch,
     canUndo,
     canRedo,
     canPaste,
     atDefault,
     activePreset,
-    stereoEnabled,
     stereoInput,
     stereoOutput,
     inputMode,
@@ -80,30 +76,19 @@ export const Plugin: React.FC = () => {
   // preset replaces the chain; saving/renaming changes the active preset).
   const presetStore = usePresets(refresh);
 
-  // The output carries a real stereo image only when a stereo-image feature
-  // is on (stereo mode, mono-mode spread, or a Dual Mono block widening -
-  // see hasWideningDualMono below) AND the rig can reproduce it
+  // The output carries a real stereo image only when a Dual Mono block
+  // widens it (see hasWideningDualMono below) AND the rig can reproduce it
   // (stereoOutput: stereo host bus / 2+ channel output device); drives the
-  // output meter's stereo form. On a mono rig, Spread is idle and greyed
-  // out, while stereo chains keep running and native sums them to mono
-  // (monoSum below): the Bal knob then trims the two chains *inside* the
-  // sum, so it stays visible whenever stereo chains are on, regardless of
-  // the rig (balanceActive).
-  const [spreadEnabled] = useParameter('spreadEnabled', 'toggle');
+  // output meter's stereo form.
   // A Dual Mono block widens to independent L/R purely off buffer channel
-  // count (see runDualMono, Processor.cpp) - true in mono mode regardless
-  // of stereoEnabled/spreadEnabled, which predate this block type and don't
-  // know about it. Conservative on purpose: any Dual Mono block in the
-  // active mono-mode lane counts, not only once its two sides actually
-  // diverge - showing L/R needles that happen to move together is harmless,
-  // hiding a channel that can carry real content isn't. Stereo mode never
-  // reaches this (each lane is already pinned to one physical channel
-  // there, so a Dual Mono block folds instead - see dualChannelLimited).
-  const hasWideningDualMono =
-    !stereoEnabled && chain.some((item) => !isInsertSlot(item) && item.blockType === 'dualMono');
-  const stereoImage = (stereoEnabled || spreadEnabled || hasWideningDualMono) && stereoOutput;
-  const balanceActive = stereoEnabled || (spreadEnabled && stereoOutput);
-  const monoSum = stereoEnabled && !stereoOutput;
+  // count (see runDualMono, Processor.cpp). Conservative on purpose: any
+  // Dual Mono block in the chain counts, not only once its two sides
+  // actually diverge - showing L/R needles that happen to move together is
+  // harmless, hiding a channel that can carry real content isn't.
+  const hasWideningDualMono = chain.some(
+    (item) => !isInsertSlot(item) && item.blockType === 'dualMono'
+  );
+  const stereoImage = hasWideningDualMono && stereoOutput;
 
   const setTunerEnabled = useNativeFunction<boolean>('setTunerEnabled');
   const copyToClipboard = useNativeFunction<boolean>('copyToClipboard');
@@ -142,19 +127,22 @@ export const Plugin: React.FC = () => {
     [audioDevice.actions, openSettings]
   );
 
-  // Toggle the tuner screen; native only feeds the pitch detector while it's on.
-  const handleToggleTuner = useCallback(
-    async (show: boolean) => {
-      setShowTuner(show);
-      await setTunerEnabled(show);
-    },
-    [setTunerEnabled]
-  );
+  // Native pitch detection runs continuously (the always-on MiniTuner in the
+  // header needs a reading regardless of whether the full screen is open),
+  // enabled once at startup rather than toggled with the screen.
+  useEffect(() => {
+    void setTunerEnabled(true);
+  }, [setTunerEnabled]);
+
+  // Toggle the full tuner screen; detection itself is always on (see above).
+  const handleToggleTuner = useCallback((show: boolean) => {
+    setShowTuner(show);
+  }, []);
   const closeTuner = useCallback(() => handleToggleTuner(false), [handleToggleTuner]);
 
-  // Top-bar actions whose effect lands on the main screen (stereo mode,
-  // undo/redo, loading or saving a preset) leave the tuner first, so the
-  // result is visible instead of hidden behind the tuner takeover.
+  // Top-bar actions whose effect lands on the main screen (undo/redo,
+  // loading or saving a preset) leave the tuner first, so the result is
+  // visible instead of hidden behind the tuner takeover.
   const closeTunerThen = useCallback(
     <A extends unknown[], R>(fn: (...args: A) => R) =>
       (...args: A): R => {
@@ -162,10 +150,6 @@ export const Plugin: React.FC = () => {
         return fn(...args);
       },
     [showTuner, handleToggleTuner]
-  );
-  const handleStereoToggle = useMemo(
-    () => closeTunerThen(actions.setStereoMode),
-    [closeTunerThen, actions]
   );
   const handleUndo = useMemo(() => closeTunerThen(actions.undo), [closeTunerThen, actions]);
   const handleRedo = useMemo(() => closeTunerThen(actions.redo), [closeTunerThen, actions]);
@@ -204,7 +188,6 @@ export const Plugin: React.FC = () => {
   // The add/swap browse flows and their pending targets.
   const loadFlow = useToneLoadFlow({
     actions,
-    stereoEnabled,
     requireConnection,
     setShowToneBrowser,
   });
@@ -382,9 +365,6 @@ export const Plugin: React.FC = () => {
       duplicateBlock: actions.duplicateBlock,
       copyBlock: actions.copyBlock,
       pasteBlock: actions.pasteBlock,
-      swapChains: actions.swapChains,
-      setBranch: actions.setBranch,
-      clearBranch: actions.clearBranch,
       switchModel: handleSwitchModel,
       retryLoad: handleRetryLoad,
       listToneModels: session.listToneModels,
@@ -480,8 +460,6 @@ export const Plugin: React.FC = () => {
           activePreset={activePreset}
           atDefault={atDefault}
           onReset={handleReset}
-          stereoEnabled={stereoEnabled}
-          onStereoToggle={handleStereoToggle}
           showTuner={showTuner}
           onToggleTuner={handleToggleTuner}
           canUndo={canUndo}
@@ -568,9 +546,6 @@ export const Plugin: React.FC = () => {
                 <ChainActionsProvider value={chainActions}>
                   <ChainView
                     chain={chain}
-                    chainRight={stereoEnabled ? (chainRight ?? []) : null}
-                    branch={stereoEnabled ? branch : null}
-                    monoSum={monoSum}
                     canPaste={canPaste}
                     sampleRate={sampleRate}
                     namSlimSizeDefault={namSlimSizeDefault}
@@ -603,11 +578,7 @@ export const Plugin: React.FC = () => {
         {/* Pinned faceplate at the bottom (gains, gate, tone stack), with the
           hint strip under it (hidden entirely when hints are off). */}
         <Faceplate
-          balanceActive={balanceActive}
-          stereoOutput={stereoOutput}
-          stereoChains={stereoEnabled}
           stereoInput={stereoInput}
-          branched={branch != null}
           inputMode={inputMode}
           onInputModeChange={actions.setInputMode}
         />
@@ -628,7 +599,6 @@ export const Plugin: React.FC = () => {
             multiCore={multiCore}
             onMultiCoreChange={actions.setMultiCore}
             chain={chain}
-            chainRight={chainRight}
           />
         )}
 

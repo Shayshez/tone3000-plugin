@@ -13,9 +13,6 @@
  *   `{ revision, unchanged: true }` reply when nothing changed.
  */
 
-/** Which chain is being edited in stereo mode. */
-export type ChainSide = 'left' | 'right';
-
 /**
  * Per-block 6-band EQ. Runs on the block's wet signal after its model by
  * default (before the dry/wet mix), or between the block's
@@ -419,20 +416,6 @@ export interface ActivePreset {
   name: string;
 }
 
-/**
- * Active chain branch (stereo mode only). The *branch* lane taps its input
- * from the *trunk* lane's signal after one of the trunk's tone blocks,
- * instead of from its own channel input. At most one branch exists; native
- * clears it automatically when the tapped block leaves the trunk lane or
- * stereo mode turns off.
- */
-export interface ChainBranch {
-  /** The trunk lane: the side the other lane branches off. */
-  side: ChainSide;
-  /** Tone block in the trunk lane whose output feeds the other lane. */
-  afterBlockId: string;
-}
-
 export interface ChainState {
   revision: number;
   /** Chain edit history (undo/redo). Native flips these together with a
@@ -449,8 +432,6 @@ export interface ChainState {
   atDefault: boolean;
   /** Active preset, absent when none is loaded. Changes with revision bumps. */
   preset?: ActivePreset;
-  stereoEnabled: boolean;
-  activeSide: ChainSide;
   /** True when a real stereo source feeds the plugin (stereo host bus or a
       stereo standalone input device). Drives the faceplate input-mode button
       and the dual input meters. */
@@ -470,21 +451,15 @@ export interface ChainState {
       setting; existing blocks keep their own `params.slimSize`). Set via
       `setNamSlimSizeDefault`. */
   namSlimSizeDefault: number;
-  /** Multi-core processing (machine-wide user setting). When true, stereo
-      mode processes the two chains on separate CPU cores and oversampled NAM
-      models split their phase instances across cores; set via
+  /** Multi-core processing (machine-wide user setting). When true, oversampled
+      NAM models split their phase instances across cores; set via
       `setMultiCore`. */
   multiCore: boolean;
   /** The chain-domain processing rate (fixed 48000: the whole chain runs at
       48 kHz behind one resampling boundary). The EQ curve math needs it to
       mirror the audio exactly. */
   sampleRate: number;
-  /** Left lane (the only lane in mono mode). */
   chain: ChainItem[];
-  /** Right lane; present only while stereo mode is on. */
-  chainRight?: ChainItem[];
-  /** Active branch; absent when the chains are independent (or mono). */
-  branch?: ChainBranch;
 }
 
 /** Input channel mode (mirrors Processor::InputMode). */
@@ -519,6 +494,4 @@ export interface MeterLevels {
   blocks: Record<string, { in: number; out: number; alignCorrelation?: number }>;
   /** Audio-callback load, 0..1 proportion of the real-time budget. */
   cpu: number;
-  /** Spread output correlation, -1..1 (1 when spread is idle). */
-  correlation: number;
 }

@@ -1,8 +1,8 @@
 #pragma once
-// Chain-level test rig shared by branch_tests.cpp and duplicate_tests.cpp:
-// a processor with state-restore access, block-tree builders with model
-// bytes embedded (cache-first loads, no network), and stereo drive/compare
-// helpers for asserting on the audible output.
+// Chain-level test rig shared across several test files: a processor with
+// state-restore access, block-tree builders with model bytes embedded
+// (cache-first loads, no network), and stereo drive/compare helpers for
+// asserting on the audible output.
 
 #include "Processor.h"
 #include "test_helpers.h"
@@ -12,10 +12,10 @@
 #include <utility>
 #include <vector>
 
-// Tests describe a rig as a bare ChainSnapshot tree (lanes + stereo/branch
-// properties). restoreFromTree wraps it in a TONE3000State root and frames it
-// exactly like getStateInformation does (T3KB magic + binary ValueTree
-// stream), so restoring through it pins the real state format.
+// Tests describe a rig as a bare ChainSnapshot tree (a ChainBlocks list).
+// restoreFromTree wraps it in a TONE3000State root and frames it exactly
+// like getStateInformation does (T3KB magic + binary ValueTree stream), so
+// restoring through it pins the real state format.
 struct ChainTestProcessor : TONE3000Processor {
   void restoreFromTree(const juce::ValueTree& snapshot) {
     juce::ValueTree state("TONE3000State");
@@ -104,31 +104,24 @@ inline juce::ValueTree makeNamBlockTree(const juce::String& blockId, int toneId,
   return block;
 }
 
-// Seed stereo mode with the given IR blocks per lane (ids only; tones/models
-// are synthesized). Restores through the real state path, so lanes come back
-// normalized (insert slots padded) and loads are queued cache-first.
-inline void seedStereoChains(ChainTestProcessor& proc, const std::vector<juce::String>& leftIds,
-                             const std::vector<juce::String>& rightIds) {
+// Seed the chain with the given IR blocks (ids only; tones/models are
+// synthesized). Restores through the real state path, so the chain comes
+// back normalized (insert slots padded) and loads are queued cache-first.
+inline void seedChain(ChainTestProcessor& proc, const std::vector<juce::String>& ids) {
   juce::ValueTree state("ChainSnapshot");
-  state.setProperty("stereoEnabled", true, nullptr);
 
   int toneId = 1, modelId = 100;
   juce::ValueTree left("ChainBlocks");
-  for (const auto& id : leftIds)
+  for (const auto& id : ids)
     left.appendChild(makeIrBlockTree(id, toneId++, modelId++), nullptr);
   state.appendChild(left, nullptr);
-
-  juce::ValueTree right("RightChainBlocks");
-  for (const auto& id : rightIds)
-    right.appendChild(makeIrBlockTree(id, toneId++, modelId++), nullptr);
-  state.appendChild(right, nullptr);
 
   proc.restoreFromTree(state);
 }
 
-// Wait until every tone block in both lanes reports loaded AND the chain-edit
-// mute has released. Restores hold the mute until their loads settle (plus a
-// grace period) on a *wall-clock* waiter; tests pump audio much faster than
+// Wait until every tone block reports loaded AND the chain-edit mute has
+// released. Restores hold the mute until their loads settle (plus a grace
+// period) on a *wall-clock* waiter; tests pump audio much faster than
 // realtime, so without this second condition a test can burn through seconds
 // of "audio" while the rig is still (correctly) muted.
 inline bool waitForChainLoaded(TONE3000Processor& proc, int timeoutMs = 20000) {
@@ -136,9 +129,7 @@ inline bool waitForChainLoaded(TONE3000Processor& proc, int timeoutMs = 20000) {
   while (juce::Time::getMillisecondCounter() < deadline) {
     const juce::var state = proc.getChainState(-1);
     bool allLoaded = true;
-    for (const auto* lane : {state["chain"].getArray(), state["chainRight"].getArray()}) {
-      if (lane == nullptr)
-        continue;
+    if (const auto* lane = state["chain"].getArray()) {
       for (const auto& item : *lane)
         if (item["kind"].toString() == "tone" && !static_cast<bool>(item["loaded"]))
           allLoaded = false;

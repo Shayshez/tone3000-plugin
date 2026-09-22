@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAudioBackend } from './useAudioBackend';
 import type {
   BlockParamName,
-  ChainSide,
   ChainState,
   ChainStateResponse,
   EqBand,
@@ -24,8 +23,6 @@ const EMPTY_STATE: ChainState = {
   canUndo: false,
   canRedo: false,
   atDefault: true,
-  stereoEnabled: false,
-  activeSide: 'left',
   stereoInput: false,
   stereoOutput: true,
   standalone: false,
@@ -84,7 +81,6 @@ export function useChainState() {
       setBlockEqEnabled: backend.getPluginFunction('setBlockEqEnabled'),
       setBlockEqPre: backend.getPluginFunction('setBlockEqPre'),
       resetBlockEq: backend.getPluginFunction('resetBlockEq'),
-      setStereoMode: backend.getPluginFunction('setStereoMode'),
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setBlockIrDecay: backend.getPluginFunction('setBlockIrDecay'),
@@ -97,10 +93,6 @@ export function useChainState() {
       convertBlockType: backend.getPluginFunction('convertBlockType'),
       setNamSlimSizeDefault: backend.getPluginFunction('setNamSlimSizeDefault'),
       setMultiCore: backend.getPluginFunction('setMultiCore'),
-      setActiveEditChain: backend.getPluginFunction('setActiveEditChain'),
-      swapChains: backend.getPluginFunction('swapChains'),
-      setChainBranch: backend.getPluginFunction('setChainBranch'),
-      clearChainBranch: backend.getPluginFunction('clearChainBranch'),
       undoChain: backend.getPluginFunction('undoChain'),
       redoChain: backend.getPluginFunction('redoChain'),
       resetToDefault: backend.getPluginFunction('resetToDefault'),
@@ -281,28 +273,23 @@ export function useChainState() {
         run('removeChainBlock', () => native.removeChainBlock(blockId)),
       reorderBlocks: (orderedIds: string[]) =>
         run('reorderChainBlocks', () => native.reorderChainBlocks(orderedIds)),
-      /** Move a block into the other lane at the given index (stereo drag). */
-      moveBlockToChain: (blockId: string, side: ChainSide, index: number) =>
-        run<boolean>('moveBlockToChain', () => native.moveBlockToChain(blockId, side, index)),
-      /** Clone a live tone block (all settings + model) into `side` at
-          `index` (alt-drag duplicate). Landing on an insert slot fills it;
-          anywhere else splices in. Resolves to the new blockId ('' on
-          failure). */
-      duplicateBlock: (sourceBlockId: string, side: ChainSide, index: number) =>
-        run<string>('duplicateChainBlock', () =>
-          native.duplicateChainBlock(sourceBlockId, side, index)
-        ),
+      /** Move a block to the given index within the chain (drag reorder). */
+      moveBlockToChain: (blockId: string, index: number) =>
+        run<boolean>('moveBlockToChain', () => native.moveBlockToChain(blockId, index)),
+      /** Clone a live tone block (all settings + model) into `index`
+          (alt-drag duplicate). Landing on an insert slot fills it; anywhere
+          else splices in. Resolves to the new blockId ('' on failure). */
+      duplicateBlock: (sourceBlockId: string, index: number) =>
+        run<string>('duplicateChainBlock', () => native.duplicateChainBlock(sourceBlockId, index)),
       /** Snapshot a block (tone + settings + model bytes) into the native
           block clipboard. Self-contained: paste keeps working after preset
           switches or deleting the source. `canPaste` flips via the resync. */
       copyBlock: (blockId: string) =>
         run<boolean>('copyChainBlock', () => native.copyChainBlock(blockId)),
-      /** Rebuild the copied block into `side` at `index` (an insert slot
-          there is filled). Resolves to the new blockId ('' on failure). */
-      pasteBlock: (side: ChainSide, index: number) =>
-        run<string>('pasteChainBlock', () => native.pasteChainBlock(side, index)),
-      setStereoMode: (enabled: boolean) =>
-        run('setStereoMode', () => native.setStereoMode(enabled)),
+      /** Rebuild the copied block into `index` (an insert slot there is
+          filled). Resolves to the new blockId ('' on failure). */
+      pasteBlock: (index: number) =>
+        run<string>('pasteChainBlock', () => native.pasteChainBlock(index)),
       /** Which channels of a stereo source feed the plugin (faceplate button). */
       setInputMode: (mode: InputMode) => run('setInputMode', () => native.setInputMode(mode)),
       /** The block's NAM A2 size (0 = lite, 1 = full; see BlockParams.
@@ -380,17 +367,6 @@ export function useChainState() {
       /** Multi-core processing (machine-wide). Pure scheduling: applies
           instantly and persists on disk. */
       setMultiCore: (enabled: boolean) => run('setMultiCore', () => native.setMultiCore(enabled)),
-      setActiveSide: (side: ChainSide) =>
-        run('setActiveEditChain', () => native.setActiveEditChain(side)),
-      /** Swap the Left and Right chains wholesale (stereo only). Undoable. */
-      swapChains: () => run<boolean>('swapChains', () => native.swapChains()),
-      /** Branch the other lane off `side` after one of its tone blocks
-          (stereo only). The other lane's input becomes the tapped signal.
-          Undoable; native forces the input mode off "stereo". */
-      setBranch: (side: ChainSide, afterBlockId: string) =>
-        run<boolean>('setChainBranch', () => native.setChainBranch(side, afterBlockId)),
-      /** Revert to two fully independent chains. Undoable. */
-      clearBranch: () => run<boolean>('clearChainBranch', () => native.clearChainBranch()),
       /**
        * Fire-and-forget param setter (safe at knob-drag rates). Booleans are
        * sent as 0/1; the revision bump on native makes pollers converge.
@@ -431,14 +407,11 @@ export function useChainState() {
 
   return {
     chain: state.chain,
-    chainRight: state.chainRight ?? null,
-    branch: state.branch ?? null,
     canUndo: state.canUndo ?? false,
     canRedo: state.canRedo ?? false,
     canPaste: state.canPasteBlock ?? false,
     atDefault: state.atDefault,
     activePreset: state.preset ?? null,
-    stereoEnabled: state.stereoEnabled,
     stereoInput: state.stereoInput ?? false,
     stereoOutput: state.stereoOutput ?? true,
     inputMode: state.inputMode ?? 'stereo',

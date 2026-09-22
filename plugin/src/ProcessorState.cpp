@@ -394,9 +394,7 @@ void TONE3000Processor::setStateInformation(const void* data, int sizeInBytes) {
   const juce::ValueTree snapshot = state.getChildWithName("ChainSnapshot");
   juce::Logger::writeToLog(
       "[Restore] Restoring state (" + juce::String(sizeInBytes) + " bytes, " +
-      juce::String(snapshot.getChildWithName("ChainBlocks").getNumChildren()) + " left / " +
-      juce::String(snapshot.getChildWithName("RightChainBlocks").getNumChildren()) +
-      " right blocks)");
+      juce::String(snapshot.getChildWithName("ChainBlocks").getNumChildren()) + " blocks)");
 
   juce::ValueTree parameterState = state.getChildWithName("PARAMETERS");
   if (parameterState.isValid()) {
@@ -435,7 +433,6 @@ void TONE3000Processor::setStateInformation(const void* data, int sizeInBytes) {
 
     retired = restoreChainSnapshot(snapshot);  // updates latency, bumps revision
 
-    pendingAddSide = ChainSide::Left;
     activePresetId = state.getProperty("activePresetId").toString();
     activePresetName = state.getProperty("activePresetName").toString();
     // A project/state load replaces the whole session; undoing across it

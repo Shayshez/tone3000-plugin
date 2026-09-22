@@ -137,28 +137,7 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
       .withOptionsFrom(editor->controlParameterIndexReceiver)
       .withOptionsFrom(editor->inputLevelRelay)
       .withOptionsFrom(editor->outputLevelRelay)
-      .withOptionsFrom(editor->outputBalanceRelay)
-      .withOptionsFrom(editor->spreadEnabledRelay)
-      .withOptionsFrom(editor->spreadOffsetRelay)
-      .withOptionsFrom(editor->spreadWobbleRelay)
-      .withOptionsFrom(editor->spreadWobbleEnabledRelay)
-      .withOptionsFrom(editor->spreadCrossoverRelay)
-      .withOptionsFrom(editor->spreadCrossoverEnabledRelay)
-      .withOptionsFrom(editor->spreadDiffuseEnabledRelay)
-      .withOptionsFrom(editor->alignEnabledRelay)
-      .withOptionsFrom(editor->alignOffsetRelay)
-      .withOptionsFrom(editor->alignWobbleRelay)
-      .withOptionsFrom(editor->alignWobbleEnabledRelay)
-      .withOptionsFrom(editor->alignCrossoverRelay)
-      .withOptionsFrom(editor->alignCrossoverEnabledRelay)
-      .withOptionsFrom(editor->alignDiffuseEnabledRelay)
-      .withOptionsFrom(editor->chainPanLeftRelay)
-      .withOptionsFrom(editor->chainPanRightRelay)
-      .withOptionsFrom(editor->chainPanLinkedRelay)
-      .withOptionsFrom(editor->chainSoloLeftRelay)
-      .withOptionsFrom(editor->chainSoloRightRelay)
-      .withOptionsFrom(editor->chainInvertLeftRelay)
-      .withOptionsFrom(editor->chainInvertRightRelay)
+      .withOptionsFrom(editor->outputPanRelay)
       .withOptionsFrom(editor->bassRelay)
       .withOptionsFrom(editor->midRelay)
       .withOptionsFrom(editor->trebleRelay)
@@ -384,19 +363,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.reorderChainBlocks(newOrder));
           }))
       .withNativeFunction(
-          // (blockId, "left" | "right", targetIndex): drag across lanes.
-          "moveBlockToChain", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
-            return juce::var(editor->processor.moveBlockToChain(
-                args[0].toString().toStdString(), args[1].toString(), static_cast<int>(args[2])));
-          }))
-      .withNativeFunction(
-          // (sourceBlockId, "left" | "right", targetIndex): clone a live tone
-          // block with all its settings (alt-drag duplicate). Returns the new
-          // block id, "" on failure.
+          // (sourceBlockId, targetIndex): clone a live tone block with all
+          // its settings (alt-drag duplicate). Returns the new block id, ""
+          // on failure.
           "duplicateChainBlock",
-          guarded(3, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+          guarded(2, juce::var(""), [editor](const juce::Array<juce::var>& args) {
             return juce::var(juce::String(editor->processor.duplicateChainBlock(
-                args[0].toString().toStdString(), args[1].toString(), static_cast<int>(args[2]))));
+                args[0].toString().toStdString(), static_cast<int>(args[1]))));
           }))
       .withNativeFunction(
           // (blockId): snapshot the block (tone + settings + model bytes)
@@ -406,34 +379,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.copyChainBlock(args[0].toString().toStdString()));
           }))
       .withNativeFunction(
-          // ("left" | "right", targetIndex): rebuild the copied block there
-          // (an insert slot at the index is filled). Returns the new block
-          // id, "" on failure (empty clipboard, right lane while mono).
+          // (targetIndex): rebuild the copied block there (an insert slot at
+          // the index is filled). Returns the new block id, "" on failure
+          // (empty clipboard).
           "pasteChainBlock",
-          guarded(2, juce::var(""), [editor](const juce::Array<juce::var>& args) {
-            return juce::var(juce::String(editor->processor.pasteChainBlock(
-                args[0].toString(), static_cast<int>(args[1]))));
-          }))
-      .withNativeFunction(
-          "swapChains", guarded(0, false, [editor](const juce::Array<juce::var>&) {
-            return juce::var(editor->processor.swapChains());
-          }))
-      .withNativeFunction(
-          // ("left" | "right", afterBlockId): branch the other lane off the
-          // named lane after one of its tone blocks (stereo mode only).
-          "setChainBranch", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
-            return juce::var(editor->processor.setChainBranch(
-                args[0].toString(), args[1].toString().toStdString()));
-          }))
-      .withNativeFunction(
-          // Revert to two fully independent chains.
-          "clearChainBranch", guarded(0, false, [editor](const juce::Array<juce::var>&) {
-            return juce::var(editor->processor.clearChainBranch());
-          }))
-      .withNativeFunction(
-          "setStereoMode", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
-            editor->processor.setStereoMode(coerceBool(args[0]));
-            return juce::var(true);
+          guarded(1, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                juce::String(editor->processor.pasteChainBlock(static_cast<int>(args[0]))));
           }))
       .withNativeFunction(
           // ("stereo" | "left" | "right"): which channels of a stereo
@@ -441,11 +393,6 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           "setInputMode", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
             editor->processor.setInputMode(
                 TONE3000Processor::inputModeFromString(args[0].toString()));
-            return juce::var(true);
-          }))
-      .withNativeFunction(
-          "setActiveEditChain", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
-            editor->processor.setActiveEditChain(args[0].toString());
             return juce::var(true);
           }))
       .withNativeFunction(
@@ -874,43 +821,16 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return editor->processor.getTunerReading();
           }))
       .withNativeFunction(
-          // Arm a one-shot chain energy measurement; the UI polls
-          // pollAutoBalance for progress/result (see Processor.h).
-          "startAutoBalance", guarded(0, false, [editor](const juce::Array<juce::var>&) {
-            editor->processor.startAutoBalance();
-            return juce::var(true);
-          }))
-      .withNativeFunction(
-          "cancelAutoBalance", guarded(0, false, [editor](const juce::Array<juce::var>&) {
-            editor->processor.cancelAutoBalance();
-            return juce::var(true);
-          }))
-      .withNativeFunction(
-          "pollAutoBalance", guarded(0, juce::var(), [editor](const juce::Array<juce::var>&) {
-            return editor->processor.pollAutoBalance();
-          }))
-      .withNativeFunction(
-          // Arm a one-shot Align probe (stereo chain mode; output mutes for
-          // ~half a second); the UI polls pollAutoOffset for progress and
-          // the result (see Processor.h / AutoOffset.h).
-          "startAutoOffset", guarded(0, false, [editor](const juce::Array<juce::var>&) {
-            editor->processor.startAutoOffset();
-            return juce::var(true);
-          }))
-      .withNativeFunction(
           "cancelAutoOffset", guarded(0, false, [editor](const juce::Array<juce::var>&) {
             editor->processor.cancelAutoOffset();
             return juce::var(true);
           }))
       .withNativeFunction(
-          "pollAutoOffset", guarded(0, juce::var(), [editor](const juce::Array<juce::var>&) {
-            return editor->processor.pollAutoOffset();
-          }))
-      .withNativeFunction(
-          // Same Align probe, rescoped to a single Dual Mono block's own
-          // two sides (works in mono chain mode, unlike startAutoOffset) -
-          // (blockId): arm; poll with pollDualAutoAlign; cancelAutoOffset
-          // above cancels either kind interchangeably.
+          // Arm a one-shot Align probe for a single Dual Mono block's own
+          // two sides (output mutes for ~half a second); the UI polls
+          // pollDualAutoAlign for progress/result, cancelAutoOffset above
+          // cancels an in-flight measurement.
+          // (blockId): arm; poll with pollDualAutoAlign.
           "armDualAutoAlign", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
             return juce::var(
                 editor->processor.armDualAutoAlign(args[0].toString().toStdString()));

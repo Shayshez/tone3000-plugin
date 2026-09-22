@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import type { useChainState } from './useChainState';
 import { DETAIL_BLOCK_STORAGE_KEY } from '../components/ChainView';
-import type { ChainSide } from '../types/chain';
 import type { Model, Tone } from '../types/tone';
 
 type ChainStateActions = ReturnType<typeof useChainState>['actions'];
@@ -87,7 +86,6 @@ const readDirectoryFiles = async (root: FileSystemDirectoryEntry): Promise<File[
 
 interface UseToneLoadFlowOptions {
   actions: ChainStateActions;
-  stereoEnabled: boolean;
   /** The connection gate's action wrapper (see useConnectionGate). */
   requireConnection: (action: () => void | Promise<void>) => void;
   /** Open or close the in-plugin tone browser. */
@@ -101,7 +99,6 @@ interface UseToneLoadFlowOptions {
  */
 export function useToneLoadFlow({
   actions,
-  stereoEnabled,
   requireConnection,
   setShowToneBrowser,
 }: UseToneLoadFlowOptions) {
@@ -162,11 +159,7 @@ export function useToneLoadFlow({
       // `navigateToDetail: true`).
       if (dualTarget) {
         const [dualBlockId, sideFlag] = dualTarget.split(':');
-        const childId = await actions.loadToneIntoDualSlot(
-          dualBlockId,
-          sideFlag === 'L',
-          toneJson
-        );
+        const childId = await actions.loadToneIntoDualSlot(dualBlockId, sideFlag === 'L', toneJson);
         if (!childId) console.error('Dual Mono slot target no longer exists');
         else sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, dualBlockId);
         setShowToneBrowser(false);
@@ -185,28 +178,23 @@ export function useToneLoadFlow({
     [actions, setShowToneBrowser]
   );
 
-  // Add: remember the clicked insert slot, then open the browser. The active
-  // side also goes to native state (it has to survive the OAuth redirect) as
-  // the fallback for when the slot id goes stale, e.g. undone away mid-flow.
+  // Add: remember the clicked insert slot, then open the browser.
   const handleAddModel = useCallback(
-    (side: ChainSide, insertBlockId: string, options?: { navigateToDetail?: boolean }) => {
+    (insertBlockId: string, options?: { navigateToDetail?: boolean }) => {
       requireConnection(async () => {
         sessionStorage.removeItem(SWAP_STORAGE_KEY);
         sessionStorage.setItem(INSERT_TARGET_STORAGE_KEY, insertBlockId);
         if (options?.navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_PICK_KEY, '1');
         else sessionStorage.removeItem(NAVIGATE_ON_PICK_KEY);
-        if (stereoEnabled) await actions.setActiveSide(side);
         setShowToneBrowser(true);
       });
     },
-    [actions, requireConnection, setShowToneBrowser, stereoEnabled]
+    [requireConnection, setShowToneBrowser]
   );
 
   // Dual Mono slot: remember which block + side, then run the same browse
-  // flow as add/swap. No side/stereo bookkeeping to survive the OAuth
-  // redirect (unlike handleAddModel's stereoEnabled/setActiveSide) - a dual
-  // slot's own side (left/right child) is independent of the chain's
-  // stereo mode.
+  // flow as add/swap. A dual slot's own side (left/right child) is
+  // independent of the rest of the chain.
   const handleAddToDualSlot = useCallback(
     (dualBlockId: string, isLeftSide: boolean) => {
       requireConnection(() => {

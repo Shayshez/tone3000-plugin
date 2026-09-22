@@ -1666,10 +1666,9 @@ void TONE3000Processor::releaseChainEditFadeWhenLoadsSettle() {
   bool loadsQueued = false;
   {
     juce::ScopedLock lock(chainMutex);
-    for (const auto& l : lanes)
-      for (const auto& b : l)
-        if (b->modelLoading)
-          loadsQueued = true;
+    for (const auto& b : chain)
+      if (b->modelLoading)
+        loadsQueued = true;
   }
 
   struct ReleaseJob : public juce::ThreadPoolJob {
@@ -1696,10 +1695,9 @@ void TONE3000Processor::releaseChainEditFadeWhenLoadsSettle() {
             return jobHasFinished;  // a newer fade session owns the release
 
           int loadingCount = 0;
-          for (const auto& l : processor.lanes)
-            for (const auto& b : l)
-              if (b->modelLoading)
-                ++loadingCount;
+          for (const auto& b : processor.chain)
+            if (b->modelLoading)
+              ++loadingCount;
 
           // Progress restarts the stall clock: each landed load buys the
           // remaining ones another window, so the hold scales with the

@@ -29,7 +29,7 @@ TEST(IrContentLengthTest, CabIrLengthIsPositiveAndWithinRawDuration) {
   proc.setPlayConfigDetails(2, 2, kFs, 512);
   proc.prepareToPlay(kFs, 512);
 
-  seedStereoChains(proc, {"blk-a"}, {});
+  seedChain(proc, {"blk-a"});
   ASSERT_TRUE(waitForChainLoaded(proc));
 
   const double lengthMs = contentLengthMsFor(proc, "blk-a");

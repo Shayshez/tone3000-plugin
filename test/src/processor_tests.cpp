@@ -10,10 +10,10 @@
 //   - toggling oversampling never changes reported latency (no PDC churn),
 //   - without a stereo output the spread parameter is inert (plain mono out)
 //     and getChainState reports the capability to the UI,
-//   - without a stereo output stereo chains keep running and are summed to
-//     mono, ½(L+R) with solo/polarity live inside the sum,
 //   - parameter state survives a save/restore round trip,
 //   - garbage, legacy-format, and newer-schema state blobs are ignored,
+//   - a legacy two-lane stereo-mode/branch snapshot silently folds to its
+//     Left lane's content on restore,
 //   - the tail report covers the DC blocker floor.
 //
 // Model tests use embedded local fixtures, so nothing touches the network.
@@ -76,21 +76,20 @@ TEST(ProcessorTest, EmptyChainAt48kIsTransparentWithZeroLatency) {
   EXPECT_EQ(bestCorrelationLag(out, in, 16384, 4096, 32), 0) << "48k path must add no delay";
 }
 
-TEST(ProcessorTest, SpreadStaysIdleWithoutAStereoOutput) {
+TEST(ProcessorTest, PanStaysIdentityWithoutAStereoOutput) {
   // A rig that can't reproduce two distinct channels (mono host track, or a
   // standalone one-channel output device that still hands us a stereo
-  // buffer but plays only channel 0) must never run the spread double: the
-  // output stays the plain mono chain even when a preset arrives with
-  // spreadEnabled on. The parameter keeps its value; the UI greys the group
-  // out via the stereoOutput capability flag. Emulated with a mono main
-  // output bus, which drives the same detection.
+  // buffer but plays only channel 0) must never apply the output Pan tilt:
+  // both channels must stay bit-identical even with outputPan dialed hard
+  // to one side. The parameter keeps its value; the UI greys the knob out
+  // via the stereoOutput capability flag. Emulated with a mono main output
+  // bus, which drives the same detection.
   TONE3000Processor proc;
   proc.setPlayConfigDetails(2, 1, kFs, 512);
   proc.prepareToPlay(kFs, 512);
   EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["stereoOutput"]));
 
-  proc.parameters.getParameter("spreadEnabled")->setValueNotifyingHost(1.0f);
-  proc.parameters.getParameter("spreadOffset")->setValueNotifyingHost(1.0f);  // +24 ms lag
+  proc.parameters.getParameter("outputPan")->setValueNotifyingHost(1.0f);  // hard right
 
   const int total = 93 * 512;
   const auto in = makeNoise(total, 4242, 0.25f);
@@ -102,83 +101,29 @@ TEST(ProcessorTest, SpreadStaysIdleWithoutAStereoOutput) {
     proc.processBlock(buffer, midi);
     for (int i = 0; i < 512; ++i)
       ASSERT_EQ(buffer.getReadPointer(0)[i], buffer.getReadPointer(1)[i])
-          << "spread ran on a mono rig at sample " << off + i;
+          << "pan tilted a mono rig at sample " << off + i;
   }
 
-  // A stereo bus reports the capability back.
+  // A stereo bus reports the capability back, and the same hard-right pan
+  // now genuinely tilts the two channels apart (Pan is always-on once the
+  // rig can reproduce it - no more spreadEnabled gate to hide behind).
   TONE3000Processor stereoProc;
   stereoProc.setPlayConfigDetails(2, 2, kFs, 512);
   stereoProc.prepareToPlay(kFs, 512);
   EXPECT_TRUE(static_cast<bool>(stereoProc.getChainState(-1)["stereoOutput"]));
-}
 
-TEST(ProcessorTest, StereoChainsFoldToMonoWithoutAStereoOutput) {
-  // Stereo chains on a rig that can't reproduce stereo (a mono host track
-  // here) keep running and are summed at the output: ½(balL·L + balR·R),
-  // the same fold a host applies when it sums a stereo bus to mono, so a
-  // rig keeps its level when moved between track types. With two identical
-  // (empty) lanes the sum is transparent; polarity and solo keep acting
-  // inside it, which also pins that the Right lane really processes
-  // (before this, a mono track silently played the Left lane alone).
-  TONE3000Processor proc;
-  proc.setPlayConfigDetails(1, 1, kFs, 512);
-  proc.setStereoMode(true);
-  proc.prepareToPlay(kFs, 512);
-  EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["stereoOutput"]));
-
-  const int total = 93 * 512;
-  const auto in = makeSine(total, 997.0, 0.5f);
-  juce::MidiBuffer midi;
-  const auto run = [&] {
-    std::vector<float> out(in.size(), 0.0f);
-    juce::AudioBuffer<float> buffer(1, 512);
-    for (int off = 0; off < total; off += 512) {
-      buffer.copyFrom(0, 0, in.data() + off, 512);
-      proc.processBlock(buffer, midi);
-      std::copy(buffer.getReadPointer(0), buffer.getReadPointer(0) + 512, out.begin() + off);
-    }
-    return out;
-  };
-
-  // Identical lanes at centered balance: ½(in + in) = in, transparent.
-  EXPECT_NEAR(settledGainDb(run(), in, 997.0, kFs), 0.0, 0.05);
-
-  // Flipping one lane's polarity cancels the sum: lane R is really in there.
-  proc.parameters.getParameter("chainInvertRight")->setValueNotifyingHost(1.0f);
-  {
-    const auto out = run();
-    float peak = 0.0f;
-    for (int i = 16384; i < total; ++i)
-      peak = std::max(peak, std::abs(out[i]));
-    EXPECT_LT(peak, 1.0e-4f) << "inverted lane failed to cancel: the fold is broken";
-  }
-
-  // Solo auditions one lane, at the fold's ½ share.
-  proc.parameters.getParameter("chainInvertRight")->setValueNotifyingHost(0.0f);
-  proc.parameters.getParameter("chainSoloLeft")->setValueNotifyingHost(1.0f);
-  EXPECT_NEAR(settledGainDb(run(), in, 997.0, kFs), -6.02, 0.1);
-
-  // The same fold covers a stereo buffer on a mono rig (standalone
-  // one-channel output device: the buffer is stereo but only channel 0 is
-  // audible). Both channels carry the sum, so the listener hears the whole
-  // rig; the polarity null proves the fold ran here too.
-  TONE3000Processor monoOutProc;
-  monoOutProc.setPlayConfigDetails(2, 1, kFs, 512);
-  monoOutProc.setStereoMode(true);
-  monoOutProc.prepareToPlay(kFs, 512);
-  monoOutProc.parameters.getParameter("chainInvertRight")->setValueNotifyingHost(1.0f);
-  juce::AudioBuffer<float> buffer(2, 512);
-  float peak = 0.0f;
+  stereoProc.parameters.getParameter("outputPan")->setValueNotifyingHost(1.0f);
+  juce::AudioBuffer<float> stereoBuffer(2, 512);
   for (int off = 0; off < total; off += 512) {
-    buffer.copyFrom(0, 0, in.data() + off, 512);
-    buffer.copyFrom(1, 0, in.data() + off, 512);
-    monoOutProc.processBlock(buffer, midi);
-    if (off >= 16384)
-      for (int ch = 0; ch < 2; ++ch)
-        for (int i = 0; i < 512; ++i)
-          peak = std::max(peak, std::abs(buffer.getReadPointer(ch)[i]));
+    stereoBuffer.copyFrom(0, 0, in.data() + off, 512);
+    stereoBuffer.copyFrom(1, 0, in.data() + off, 512);
+    stereoProc.processBlock(stereoBuffer, midi);
   }
-  EXPECT_LT(peak, 1.0e-4f) << "a 2-channel buffer on a mono rig must fold both channels";
+  bool diverged = false;
+  for (int i = 0; i < 512; ++i)
+    if (stereoBuffer.getReadPointer(0)[i] != stereoBuffer.getReadPointer(1)[i])
+      diverged = true;
+  EXPECT_TRUE(diverged) << "hard-right pan left the channels identical on a stereo rig";
 }
 
 TEST(ProcessorTest, BoundaryReportedLatencyMatchesMeasuredDelay) {
@@ -352,6 +297,69 @@ TEST(ProcessorTest, IgnoresGarbageLegacyAndNewerSchemaState) {
   }
   proc.setStateInformation(reframed.getData(), static_cast<int>(reframed.getSize()));
   EXPECT_NEAR(inputLevel(), 0.7f, 1e-5f) << "state from a newer schema must be ignored";
+}
+
+// Captures every juce::Logger line while alive (RAII-installed/restored),
+// thread-safe since the model loader logs from a background thread.
+class LogCapture : public juce::Logger {
+ public:
+  LogCapture() { juce::Logger::setCurrentLogger(this); }
+  ~LogCapture() override { juce::Logger::setCurrentLogger(nullptr); }
+  void logMessage(const juce::String& message) override {
+    const juce::ScopedLock lock(cs);
+    messages.add(message);
+  }
+  juce::StringArray snapshot() const {
+    const juce::ScopedLock lock(cs);
+    return messages;
+  }
+
+ private:
+  juce::CriticalSection cs;
+  juce::StringArray messages;
+};
+
+TEST(ProcessorTest, LegacyStereoLaneSnapshotSilentlyFoldsToLeftLane) {
+  // A save from before the stereo-lane/branch removal: two lanes, a branch
+  // tap, and (in a real old save) chainSolo/chainInvert/align param values
+  // riding along in the surrounding APVTS XML. Restoring it today must not
+  // crash or warn - the removed fields are simply never read - and must
+  // keep exactly the old Left lane's content, since there's only one chain
+  // left to restore into.
+  ChainTestProcessor proc;
+
+  juce::ValueTree state("ChainSnapshot");
+  state.setProperty("stereoEnabled", true, nullptr);
+  state.setProperty("branchSide", "left", nullptr);
+  state.setProperty("branchAfterBlockId", "blk-left", nullptr);
+
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(makeIrBlockTree("blk-left", 1, 100), nullptr);
+  state.appendChild(left, nullptr);
+
+  juce::ValueTree right("RightChainBlocks");
+  right.appendChild(makeIrBlockTree("blk-right", 2, 200), nullptr);
+  state.appendChild(right, nullptr);
+
+  LogCapture log;
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc)) << "left lane never finished loading from cache";
+
+  const juce::var chainState = proc.getChainState(-1);
+  const auto* chain = chainState["chain"].getArray();
+  ASSERT_NE(chain, nullptr);
+  bool foundLeft = false;
+  for (const auto& item : *chain) {
+    EXPECT_NE(item["blockId"].toString(), juce::String("blk-right"))
+        << "the old right lane's content must not leak into the single chain";
+    if (item["blockId"].toString() == "blk-left")
+      foundLeft = true;
+  }
+  EXPECT_TRUE(foundLeft) << "the old left lane's content must survive the restore";
+
+  for (const auto& message : log.snapshot())
+    EXPECT_FALSE(message.containsIgnoreCase("error"))
+        << "unexpected error-level log during legacy restore: " << message;
 }
 
 TEST(ProcessorTest, TailReportCoversDcBlockerWithEmptyChain) {

@@ -35,7 +35,7 @@ std::pair<std::vector<float>, std::vector<float>> runWithEq(double mix, bool sha
   proc.setPlayConfigDetails(2, 2, kFs, kBlock);
   proc.prepareToPlay(kFs, kBlock);
 
-  seedStereoChains(proc, {"blk-a"}, {});
+  seedChain(proc, {"blk-a"});
   EXPECT_TRUE(waitForChainLoaded(proc)) << "IR block never finished loading from cache";
 
   EXPECT_TRUE(proc.setBlockParam("blk-a", "mix", mix));

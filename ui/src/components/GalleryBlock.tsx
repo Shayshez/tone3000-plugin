@@ -17,7 +17,7 @@ import { RetryLoadBadge } from './RetryLoadBadge';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
-import type { ChainSide, ChainItem, ToneBlock } from '../types/chain';
+import type { ChainItem, ToneBlock } from '../types/chain';
 import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
@@ -804,10 +804,10 @@ const TileSurface: React.FC<{
 
 interface GalleryBlockProps {
   block: ToneBlock;
-  /** Position within the lane; keeps the sortable registry in sync. */
+  /** Position within the chain; keeps the sortable registry in sync. */
   index: number;
-  /** The lane this tile sorts in. */
-  group: ChainSide;
+  /** The sortable group this tile belongs to (drag-and-drop registry key). */
+  group: string;
   /** Tile edge, px. */
   size: number;
   /** Open the detail takeover for this block. */
@@ -818,8 +818,9 @@ interface GalleryBlockProps {
   /** Dual Mono only: open the detail takeover with its Stereo Processing
       panel already showing - the gallery's quick-access Stereo button. */
   onOpenStereo: (blockId: string) => void;
-  /** Stereo chain mode (two lanes) - drives an ordinary block's own
-      Mono/Stereo channel badge (see TileChannelBadge). */
+  /** True when this block is carrying a real stereo signal (a Dual Mono
+      block, or downstream of one/a stereo IR) - drives an ordinary block's
+      own Mono/Stereo channel badge (see TileChannelBadge). */
   stereo: boolean;
 }
 
@@ -992,10 +993,10 @@ const addTileFaceStyle = (size: number): React.CSSProperties => ({
 interface AddTileProps {
   /** Insert slot block id. */
   id: string;
-  /** Position within the lane; keeps the sortable registry in sync. */
+  /** Position within the chain; keeps the sortable registry in sync. */
   index: number;
-  /** The lane this tile sorts in. */
-  group: ChainSide;
+  /** The sortable group this tile belongs to (drag-and-drop registry key). */
+  group: string;
   size: number;
   routing: AddTileRouting;
   onClick: () => void;
