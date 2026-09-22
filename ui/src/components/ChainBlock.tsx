@@ -581,7 +581,14 @@ const DualSideCard: React.FC<{
 }) => {
   const actions = useChainActions();
   const toast = useToast();
-  const boxSize = 80;
+  // Smaller than an ordinary card's own 80rem thumbnail - the compact card
+  // stacks a lot more into the same card budget than a single block's card
+  // does (its own icon row, model picker, and Pan/Mix/Vol on top of the
+  // thumbnail+title row), and at a minimized window that stack ran past the
+  // card's own bottom edge. Text column height (title + gear/badge + the
+  // meta row) still exceeds this, so the row's real height is unchanged by
+  // shrinking further below it - this is the floor with no extra cost.
+  const boxSize = 64;
   // Noticeably bigger than the filled thumbnail's own 80rem - an empty
   // side's "+" square used to be a fixed 80rem regardless of how much
   // taller the OTHER side's filled card was, which (even after the
@@ -711,7 +718,9 @@ const DualSideCard: React.FC<{
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: '12rem',
+        // 8rem, not the usual 12rem - see boxSize's own comment on why this
+        // card is tighter than an ordinary block's.
+        gap: '8rem',
         width: '340rem',
         minWidth: 0,
       }}
@@ -780,7 +789,7 @@ const DualSideCard: React.FC<{
           audibility, so muting shouldn't block them. */}
       <div
         className={uiOffClass(muted)}
-        style={{ display: 'flex', flexDirection: 'column', gap: '12rem', minWidth: 0 }}
+        style={{ display: 'flex', flexDirection: 'column', gap: '8rem', minWidth: 0 }}
       >
         <div style={{ display: 'flex', flexDirection: 'row', gap: '12rem', minWidth: 0 }}>
           <button
@@ -882,7 +891,7 @@ const DualSideCard: React.FC<{
             value={String(child.activeModelId)}
             onChange={handleModelSelect}
             onOpen={handleModelsOpen}
-            height={28}
+            height={24}
             disabled={!isLocal && !actions.authenticated}
             loading={modelsLoading}
             totalCount={isLocal ? tone.models.length : modelsTotal}
@@ -2049,13 +2058,20 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   if (isEq) {
     return (
       <div
+        className="hide-scrollbar"
         style={{
           display: 'flex',
           flexDirection: 'column',
           width: `${CARD_WIDTH}rem`,
           height: '100%',
           boxSizing: 'border-box',
-          overflowY: 'hidden',
+          // Auto, not hidden: at a minimized window (1x UI scale, the
+          // floor setResizeLimits allows - see Editor.cpp) this card's own
+          // content can run past the design box's fixed height with no
+          // more room for the window to grow into, same overflow this
+          // component's showInfo view already handles by scrolling rather
+          // than silently clipping the bottom.
+          overflowY: 'auto',
           overflowX: 'hidden',
         }}
       >
@@ -2350,13 +2366,20 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
     return (
       <div
+        className="hide-scrollbar"
         style={{
           display: 'flex',
           flexDirection: 'column',
           width: `${CARD_WIDTH}rem`,
           height: '100%',
           boxSizing: 'border-box',
-          overflowY: 'hidden',
+          // Auto, not hidden - this card's own content (two per-side
+          // compact cards, each taller than the plain 3-knob row a normal
+          // block's card budgets for - see minHeight's own comment below)
+          // can run past the design box's fixed height at a minimized
+          // window, same as isEq/showInfo already handle by scrolling
+          // rather than clipping the bottom silently.
+          overflowY: 'auto',
           overflowX: 'hidden',
         }}
       >
@@ -3151,7 +3174,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   alignItems: 'stretch',
                   justifyContent: 'center',
                   gap: '32rem',
-                  padding: `${BODY_PADDING}rem`,
+                  // Tighter top/bottom than BODY_PADDING's usual 16rem -
+                  // this row's own two side cards are the tallest content
+                  // any card body carries (see DualSideCard's own comment),
+                  // so the same inset an ordinary block affords itself here
+                  // was what pushed the card past the window's bottom edge
+                  // at a minimized size. Horizontal stays BODY_PADDING so
+                  // the row still lines up with the header above it.
+                  padding: `12rem ${BODY_PADDING}rem`,
                   boxSizing: 'border-box',
                   transition: 'opacity 0.2s ease',
                 }}
@@ -3257,14 +3287,18 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
   return (
     <div
-      className={showInfo ? 'hide-scrollbar' : undefined}
+      className="hide-scrollbar"
       style={{
         display: 'flex',
         flexDirection: 'column',
         width: `${CARD_WIDTH}rem`,
         height: '100%',
         boxSizing: 'border-box',
-        overflowY: showInfo ? 'auto' : 'hidden',
+        // Auto (not just for showInfo): at a minimized window this card's
+        // content can still run past the design box's fixed height - see
+        // the isEq/isDualMono wrappers' own comment on why scrolling beats
+        // silently clipping the bottom.
+        overflowY: 'auto',
         overflowX: 'hidden',
       }}
     >

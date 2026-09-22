@@ -1,8 +1,10 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, FolderClosed } from './icons';
 import { useDismissable } from '../hooks/useDismissable';
 import { LoadingDots } from './LoadingDots';
 import { DISABLED_OPACITY } from './theme';
+import { getUiScale } from '../hooks/useUiScale';
 
 interface Option {
   id: string;
@@ -46,6 +48,76 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const activeOptionRef = useRef<HTMLDivElement | null>(null);
 
+  // Fixed-position (viewport px), computed fresh each open: the trigger can
+  // sit anywhere in the card - a Dual Mono side card in particular has far
+  // less headroom above it than an ordinary block's bottom-anchored picker
+  // (see the call site's own "opens upward" comment) - so a dropdown that
+  // always opens up and always assumes 5 rows' worth of clearance can run
+  // past the top of the window with nothing below it to scroll to (issue:
+  // the top options become permanently unreachable). Flips direction and
+  // clamps to whichever side actually has more room, in real (unscaled) px
+  // since position:fixed coordinates are viewport-relative regardless of the
+  // rem-per-design-px UI scale.
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen || !containerRef.current) {
+      setDropdownStyle(null);
+      return;
+    }
+    const scale = getUiScale();
+    const rowPx = OPTION_ROW_HEIGHT * scale;
+    const fullListPx =
+      (MAX_VISIBLE_OPTIONS * OPTION_ROW_HEIGHT + (MAX_VISIBLE_OPTIONS - 1)) * scale;
+    const marginPx = 4 * scale;
+
+    const place = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceAbove = rect.top - marginPx;
+      const spaceBelow = window.innerHeight - rect.bottom - marginPx;
+      // Prefer up (matches every call site's own card layout) whenever it
+      // can fit the whole list or simply has more room than down; only
+      // flip when down is genuinely roomier - a tight-but-usable "up" stays
+      // put rather than flipping over a marginal difference.
+      const openUp = spaceAbove >= fullListPx || spaceAbove >= spaceBelow;
+      const available = Math.max(rowPx, openUp ? spaceAbove : spaceBelow);
+      setDropdownStyle({
+        position: 'fixed',
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.min(fullListPx, available),
+        ...(openUp
+          ? { bottom: window.innerHeight - rect.top + marginPx }
+          : { top: rect.bottom + marginPx }),
+      });
+    };
+
+    place();
+    // A scroll (now that the card itself can scroll - see the "bottom gets
+    // cut off" fix) or a window resize both invalidate the trigger's
+    // measured rect; just close rather than track it live, same as every
+    // other floating panel in this app (see TileMenu's own resize handler).
+    // Scrolling the option list itself is exempt - that's a scroll event
+    // too (capture:true sees it), but it isn't the trigger moving.
+    const onInvalidate = (e: Event) => {
+      if (
+        dropdownRef.current &&
+        e.target instanceof Node &&
+        dropdownRef.current.contains(e.target)
+      ) {
+        return;
+      }
+      setIsOpen(false);
+    };
+    window.addEventListener('resize', onInvalidate);
+    document.addEventListener('scroll', onInvalidate, true);
+    return () => {
+      window.removeEventListener('resize', onInvalidate);
+      document.removeEventListener('scroll', onInvalidate, true);
+    };
+  }, [isOpen, options]);
+
   const currentIndex = options.findIndex((opt) => opt.id === value);
   const selectedOption = options[currentIndex];
 
@@ -56,9 +128,14 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
   // handleModelsOpen) resolves *after* the dropdown opens, so the first
   // render only has the stored single-item fallback - this re-fires once
   // the real list lands and the active row actually exists to scroll to.
+  // Also keyed on `dropdownStyle`: the portaled list itself (and so
+  // activeOptionRef) doesn't exist yet on the render where `isOpen` first
+  // flips true - it only mounts once the position effect above computes a
+  // style, one render later - so this must re-fire on that render too, or
+  // it fires early against a still-empty ref and silently does nothing.
   useEffect(() => {
     if (isOpen) activeOptionRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [isOpen, options]);
+  }, [isOpen, options, dropdownStyle]);
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -205,73 +282,76 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
         </span>
       </div>
 
-      {/* Dropdown opens upward: the select sits at the bottom of the card,
-          so a downward list would render past the card edge and get clipped. */}
-      {isOpen && (
-        <div
-          ref={dropdownRef}
-          className="hide-scrollbar"
-          style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: 0,
-            right: 0,
-            marginBottom: '4rem',
-            borderRadius: '8rem',
-            background: '#39393D',
-            // 6 rows + their 1px dividers; anything longer scrolls.
-            maxHeight: `${MAX_VISIBLE_OPTIONS * OPTION_ROW_HEIGHT + (MAX_VISIBLE_OPTIONS - 1)}rem`,
-            overflowY: 'auto',
-            zIndex: 1000,
-          }}
-        >
-          {options.map((option, index) => (
-            <div
-              key={option.id}
-              ref={option.id === value ? activeOptionRef : undefined}
-              onClick={() => handleSelect(option.id)}
-              style={{
-                padding: '12rem 16rem',
-                cursor: 'pointer',
-                color: 'white',
-                fontSize: '14rem',
-                lineHeight: '17rem',
-                fontWeight: '400',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                background: option.id === value ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                borderBottom:
-                  index < options.length - 1 ? '1rem solid rgba(84, 84, 88, 0.65)' : 'none',
-              }}
-              onMouseEnter={(e) => {
-                if (option.id !== value) {
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (option.id !== value) {
-                  e.currentTarget.style.background = 'transparent';
-                }
-              }}
-            >
-              {option.name}
-            </div>
-          ))}
-          {loading && (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'center',
-                padding: '10rem 16rem',
-                borderTop: '1rem solid rgba(84, 84, 88, 0.65)',
-              }}
-            >
-              <LoadingDots />
-            </div>
-          )}
-        </div>
-      )}
+      {/* Portaled to document.body, fixed at the trigger's own viewport
+          rect (see dropdownStyle above): any ancestor card - a Dual Mono
+          side card especially - can clip an absolutely-positioned child
+          with overflow: hidden, which made the top rows of a long list
+          unreachable when there wasn't enough room above. Escaping to
+          document.body sidesteps every such ancestor; the position/
+          direction/height are all computed fresh per open instead. */}
+      {isOpen &&
+        dropdownStyle &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            className="hide-scrollbar"
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              borderRadius: '8rem',
+              background: '#39393D',
+              overflowY: 'auto',
+              zIndex: 1000,
+              ...dropdownStyle,
+            }}
+          >
+            {options.map((option, index) => (
+              <div
+                key={option.id}
+                ref={option.id === value ? activeOptionRef : undefined}
+                onClick={() => handleSelect(option.id)}
+                style={{
+                  padding: '12rem 16rem',
+                  cursor: 'pointer',
+                  color: 'white',
+                  fontSize: '14rem',
+                  lineHeight: '17rem',
+                  fontWeight: '400',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  background: option.id === value ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                  borderBottom:
+                    index < options.length - 1 ? '1rem solid rgba(84, 84, 88, 0.65)' : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (option.id !== value) {
+                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (option.id !== value) {
+                    e.currentTarget.style.background = 'transparent';
+                  }
+                }}
+              >
+                {option.name}
+              </div>
+            ))}
+            {loading && (
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  padding: '10rem 16rem',
+                  borderTop: '1rem solid rgba(84, 84, 88, 0.65)',
+                }}
+              >
+                <LoadingDots />
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
