@@ -284,8 +284,8 @@ const Ir = ({ size = 40, color = GRAY }: Props) => (
 // Not a real TONE3000 gear category (unlike every other key below, which
 // mirrors the web's own ICON_MAP) - only ever reached through blockType's
 // own 'eq' branch in ToneImage, for the standalone EQ block's fallback
-// glyph (see ChainBlockType::EQ). Three fader tracks, same graphic-EQ
-// language as ChainBlock.tsx's own EqSlidersIcon (the view-mode switcher).
+// glyph (see ChainBlockType::EQ). Three fader tracks - a generic EQ glyph,
+// unrelated to the (now removed) graphic-EQ Sliders view.
 const Eq = ({ size = 40, color = GRAY }: Props) => (
   <svg viewBox="0 0 40 40" fill="none" aria-label="Equalizer" style={svgStyle(size)}>
     <path d="M10 8V32" stroke={color} strokeWidth="3" strokeLinecap="round" />

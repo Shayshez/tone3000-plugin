@@ -50,7 +50,6 @@ import { RetryLoadBadge } from './RetryLoadBadge';
 import { BlockMeter } from './BlockMeter';
 import { BlockEqView } from './BlockEqView';
 import { DualGoniometerScope } from './DualGoniometerScope';
-import type { EqViewMode } from './BlockEqView';
 import { BlockInfoPanel } from './BlockInfoPanel';
 import { meterId, useBlockCorrelation } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
@@ -395,37 +394,6 @@ function useModelPicker(block: ToneBlock | null) {
 
   return { modelOptions, modelsLoading, modelsTotal, handleModelSelect, handleModelsOpen };
 }
-
-/** EQ view glyphs: 16×16, stroke inherits selected/muted color. */
-const EqSlidersIcon: React.FC = () => (
-  <svg
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.33333}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    style={{ width: rem(16), height: rem(16), display: 'block', flexShrink: 0 }}
-  >
-    <path d="M11.3333 6.66669V12.6667" />
-    <path d="M4.66675 3.33331V9.33331" />
-    <path d="M13.3333 4.66669C13.3333 3.56212 12.4378 2.66669 11.3333 2.66669C10.2287 2.66669 9.33325 3.56212 9.33325 4.66669C9.33325 5.77126 10.2287 6.66669 11.3333 6.66669C12.4378 6.66669 13.3333 5.77126 13.3333 4.66669Z" />
-    <path d="M6.66675 11.3333C6.66675 10.2287 5.77132 9.33331 4.66675 9.33331C3.56218 9.33331 2.66675 10.2287 2.66675 11.3333C2.66675 12.4379 3.56218 13.3333 4.66675 13.3333C5.77132 13.3333 6.66675 12.4379 6.66675 11.3333Z" />
-  </svg>
-);
-
-const EqCurveIcon: React.FC = () => (
-  <svg
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.5}
-    strokeLinecap="round"
-    style={{ width: rem(16), height: rem(16), display: 'block', flexShrink: 0 }}
-  >
-    <path d="M1 13.5C5 13.5 5.5 2.5 8 2.5C10.5 2.5 11 13.5 15 13.5" />
-  </svg>
-);
 
 /** NAM A2 size chrome next to the power button. With the Settings "choose
     per block" preference on, the LITE/FULL segmented toggle; off, a
@@ -1203,7 +1171,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     count: number;
   } | null>(null);
   const favoriteBusyRef = useRef(false);
-  const [eqView, setEqView] = useState<EqViewMode>('sliders');
   // Optimistic EQ power/position state (native converges via polling, like
   // `enabled`).
   const [eqOn, setEqOn] = useState(params.eq?.enabled ?? true);
@@ -1947,11 +1914,33 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   }, [tone.id]);
 
   // Select Tone pattern: drop the meter-band bottom pad while info is open
-  // so the card can scroll to the faceplate; restore it on close/unmount.
+  // so the card can fill to the faceplate instead of sitting inside the
+  // chain gallery's 24rem top/bottom pad; restore it on close/unmount. EQ
+  // does NOT get this: it keeps the same standard 24rem top/bottom margin
+  // every other card (including a plain knobs/info view) has - the EQ card
+  // is meant to look consistent with the rest of the app's cards, not sit
+  // flush against the "← BLOCK" row and the faceplate the way Info does.
   useEffect(() => {
     onFillToFaceplate?.(showInfo);
     return () => onFillToFaceplate?.(false);
   }, [showInfo, onFillToFaceplate]);
+
+  // ChainBlock isn't remounted when ChainMapStrip's onSelectEq jumps
+  // straight from one block's EQ into another's (same instance, new props -
+  // see initialShowEq's own comment) - so the outer overflowY:'auto' card
+  // root (one of the three "hide-scrollbar" divs below) keeps whatever
+  // scrollTop the *previous* block left it at. If that block's content
+  // needed to scroll and this one doesn't, the browser clamps to the old
+  // scrollTop, showing this block's content already scrolled down (top
+  // clearance scrolled out of view, bottom pinned to the max scroll
+  // position) - exactly the "chips flush to top, card flush to the
+  // faceplate" look reported only on that jump path, never on a fresh
+  // open (which always starts at scrollTop 0). Reset on every block
+  // change so this card always starts at the top, matching a fresh open.
+  const scrollRootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRootRef.current?.scrollTo(0, 0);
+  }, [blockId]);
 
   // Native persists only the block's *active* model; the full catalog (tones
   // max out at 300 models) is fetched client-side in one call per tone.
@@ -2055,6 +2044,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   if (isEq) {
     return (
       <div
+        ref={scrollRootRef}
         className="hide-scrollbar"
         style={{
           display: 'flex',
@@ -2072,7 +2062,16 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           overflowX: 'hidden',
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            flex: 1,
+            height: '100%',
+            minHeight: 0,
+          }}
+        >
           <div
             style={{
               display: 'flex',
@@ -2161,8 +2160,23 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               display: 'flex',
               flexDirection: 'column',
               width: '100%',
-              height: `${CARD_HEIGHT}rem`,
+              // Grows to fill whatever the "← BLOCK" detail column actually
+              // has available (same standard 24rem top/bottom gallery pad
+              // every other card sits inside - no fillToFaceplate here)
+              // instead of sitting at a guessed fixed size. The floor is
+              // the same CARD_HEIGHT every other card uses, so a small
+              // window never renders this any smaller than a normal card;
+              // flex:1 grows it bigger when the column genuinely has more
+              // room to give, which it usually does for a graph with no
+              // knobs competing for space.
+              flex: 1,
               minHeight: `${CARD_HEIGHT}rem`,
+              // A little extra clearance below the card specifically (not
+              // above - the top gap already matches every other card
+              // exactly) since flex:1 otherwise fills the column's full
+              // remaining height right to its bottom edge, past the same
+              // standard bottom pad other cards leave before the faceplate.
+              marginBottom: '12rem',
               boxSizing: 'border-box',
               border: BORDER,
               borderRadius: `${CARD_RADIUS}rem`,
@@ -2209,33 +2223,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 >
                   FLAT
                 </ChromeTextButton>
-                <div
-                  style={{
-                    ...segmentedGroupStyle(),
-                    backgroundColor: 'rgba(118, 118, 128, 0.24)',
-                  }}
-                >
-                  <button
-                    onClick={() => setEqView('sliders')}
-                    {...helpProps(HELP.eqSlidersView)}
-                    style={{
-                      ...segmentedCellStyle(true),
-                      color: eqView === 'sliders' ? WHITE : GRAY,
-                    }}
-                  >
-                    <EqSlidersIcon />
-                  </button>
-                  <button
-                    onClick={() => setEqView('graph')}
-                    {...helpProps(HELP.eqCurveView)}
-                    style={{
-                      ...segmentedCellStyle(true),
-                      color: eqView === 'graph' ? WHITE : GRAY,
-                    }}
-                  >
-                    <EqCurveIcon />
-                  </button>
-                </div>
                 <ChromeIconButton
                   help={HELP.removeBlock}
                   onClick={() => actions.removeBlock(blockId)}
@@ -2248,8 +2235,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             <div
               className={uiOffClass(!enabled)}
               style={{
-                height: `${BODY_HEIGHT}rem`,
-                flexShrink: 0,
+                flex: 1,
+                height: '100%',
+                minHeight: `${BODY_HEIGHT}rem`,
                 display: 'flex',
                 flexDirection: 'row',
                 alignItems: 'stretch',
@@ -2257,11 +2245,21 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               }}
             >
               <BlockEqView
+                // Keyed on blockId: ChainBlock isn't remounted when
+                // ChainMapStrip's onSelectEq jumps straight from one
+                // block's EQ into another's (same ChainBlock instance, new
+                // props) - a plain prop update left this component's own
+                // internal layout in whatever state it resolved to for the
+                // *previous* block until an unrelated reflow happened to
+                // fix it. The key forces a genuinely fresh mount on every
+                // cross-block jump; opening a block fresh and clicking its
+                // own EQ tab never hits this at all, which is exactly the
+                // path that already worked correctly.
+                key={blockId}
                 blockId={blockId}
                 bands={params.eq?.bands ?? []}
                 eqEnabled
                 sampleRate={sampleRate}
-                view={eqView}
                 onSetBand={actions.setBlockEqBand}
               />
               <div
@@ -2363,6 +2361,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
     return (
       <div
+        ref={scrollRootRef}
         className="hide-scrollbar"
         style={{
           display: 'flex',
@@ -2380,7 +2379,16 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           overflowX: 'hidden',
         }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            flex: 1,
+            height: '100%',
+            minHeight: 0,
+          }}
+        >
           <div
             style={{
               display: 'flex',
@@ -2472,8 +2480,17 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               // Auto, not the shared CARD_HEIGHT: this card's content (two
               // per-side compact cards) is taller than the plain 3-knob row
               // it replaces - same reasoning showInfo already uses to drop
-              // the fixed height elsewhere in this component.
+              // the fixed height elsewhere in this component. The EQ view
+              // instead grows to fill the available column (flex:1), same
+              // as every other EQ-hosting card - within the same standard
+              // 24rem top/bottom gallery pad every card sits inside (no
+              // fillToFaceplate for EQ), so it ends up the same size as a
+              // plain card, not a special larger or flush one.
+              flex: showEq ? 1 : undefined,
               minHeight: `${CARD_HEIGHT}rem`,
+              // See the isEq branch's identical comment: a little extra
+              // clearance below the card only, while showEq.
+              marginBottom: showEq ? '12rem' : undefined,
               boxSizing: 'border-box',
               border: BORDER,
               borderRadius: `${CARD_RADIUS}rem`,
@@ -2518,7 +2535,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     scoped EQ alongside each side's own (see DualSideCard's
                     own EQ button). No PRE here (unlike an ordinary block,
                     this wrapper has no model stage of its own to sit in
-                    front of) - reuses the exact same showEq/eqOn/eqView/
+                    front of) - reuses the exact same showEq/eqOn/
                     eqActive state and handlers every other block's EQ
                     pill already does, since params.eq here is this
                     wrapper's own BlockEq (every ChainBlock carries one). */}
@@ -2545,33 +2562,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       >
                         <Power />
                       </ChromeIconButton>
-                      <div
-                        style={{
-                          ...segmentedGroupStyle(),
-                          backgroundColor: 'rgba(118, 118, 128, 0.24)',
-                        }}
-                      >
-                        <button
-                          onClick={() => setEqView('sliders')}
-                          {...helpProps(HELP.eqSlidersView)}
-                          style={{
-                            ...segmentedCellStyle(true),
-                            color: eqView === 'sliders' ? WHITE : GRAY,
-                          }}
-                        >
-                          <EqSlidersIcon />
-                        </button>
-                        <button
-                          onClick={() => setEqView('graph')}
-                          {...helpProps(HELP.eqCurveView)}
-                          style={{
-                            ...segmentedCellStyle(true),
-                            color: eqView === 'graph' ? WHITE : GRAY,
-                          }}
-                        >
-                          <EqCurveIcon />
-                        </button>
-                      </div>
                       <span
                         className={uiOffClass(!eqOn)}
                         style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
@@ -2693,14 +2683,21 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             {showEq ? (
               <div
                 className={uiOffClass(!enabled)}
-                style={{ height: `${BODY_HEIGHT}rem`, display: 'flex', flexShrink: 0 }}
+                style={{
+                  flex: 1,
+                  height: '100%',
+                  minHeight: `${BODY_HEIGHT}rem`,
+                  display: 'flex',
+                }}
               >
                 <BlockEqView
+                  // See the isEq branch's identical key comment: forces a
+                  // fresh mount on a cross-block ChainMapStrip EQ jump.
+                  key={blockId}
                   blockId={blockId}
                   bands={params.eq?.bands ?? []}
                   eqEnabled={eqOn}
                   sampleRate={sampleRate}
-                  view={eqView}
                   onSetBand={actions.setBlockEqBand}
                 />
               </div>
@@ -3280,6 +3277,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
   return (
     <div
+      ref={scrollRootRef}
       className="hide-scrollbar"
       style={{
         display: 'flex',
@@ -3303,6 +3301,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           flexDirection: 'column',
           alignItems: 'stretch',
           padding: showInfo ? '24rem 0' : 0,
+          flex: 1,
+          height: '100%',
+          minHeight: 0,
         }}
       >
         {/* ← BLOCK (Figma: 16px mono, gap 16) shares its row with the
@@ -3467,8 +3468,21 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             flexDirection: 'column',
             position: 'relative',
             width: '100%',
-            height: showInfo ? undefined : `${CARD_HEIGHT}rem`,
+            // EQ drops the fixed height and grows to fill the column
+            // (flex:1), same as the isEq/isDualMono branches above - it has
+            // no knobs/model-select competing for space, same reasoning
+            // showInfo already uses to drop the fixed height in the other
+            // direction. Same standard CARD_HEIGHT floor and the same
+            // standard 24rem top/bottom gallery pad as every other card
+            // (no fillToFaceplate for EQ) - it grows bigger via flex:1 when
+            // the column has room, but never sits flush or gets a special
+            // size of its own.
+            height: showEq ? undefined : showInfo ? undefined : `${CARD_HEIGHT}rem`,
+            flex: showEq ? 1 : undefined,
             minHeight: `${CARD_HEIGHT}rem`,
+            // See the isEq branch's identical comment: a little extra
+            // clearance below the card only, while showEq.
+            marginBottom: showEq ? '12rem' : undefined,
             boxSizing: 'border-box',
             border: BORDER,
             borderRadius: `${CARD_RADIUS}rem`,
@@ -3601,34 +3615,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         PRE
                       </ChromeTextButton>
                     </span>
-                    <div
-                      style={{
-                        ...segmentedGroupStyle(),
-                        // Nested track, slightly quieter than the outer pill.
-                        backgroundColor: 'rgba(118, 118, 128, 0.24)',
-                      }}
-                    >
-                      <button
-                        onClick={() => setEqView('sliders')}
-                        {...helpProps(HELP.eqSlidersView)}
-                        style={{
-                          ...segmentedCellStyle(true),
-                          color: eqView === 'sliders' ? WHITE : GRAY,
-                        }}
-                      >
-                        <EqSlidersIcon />
-                      </button>
-                      <button
-                        onClick={() => setEqView('graph')}
-                        {...helpProps(HELP.eqCurveView)}
-                        style={{
-                          ...segmentedCellStyle(true),
-                          color: eqView === 'graph' ? WHITE : GRAY,
-                        }}
-                      >
-                        <EqCurveIcon />
-                      </button>
-                    </div>
                     <span
                       className={uiOffClass(!eqOn)}
                       style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
@@ -3732,8 +3718,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           <div
             className={uiOffClass(!enabled)}
             style={{
-              height: showInfo ? undefined : `${BODY_HEIGHT}rem`,
-              flexShrink: 0,
+              height: showEq ? '100%' : showInfo ? undefined : `${BODY_HEIGHT}rem`,
+              flex: showEq ? 1 : undefined,
+              minHeight: showEq ? `${BODY_HEIGHT}rem` : undefined,
+              flexShrink: showEq ? undefined : 0,
               display: 'flex',
               flexDirection: 'row',
               alignItems: 'stretch',
@@ -3773,11 +3761,13 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           >
             {showEq ? (
               <BlockEqView
+                // See the isEq branch's identical key comment: forces a
+                // fresh mount on a cross-block ChainMapStrip EQ jump.
+                key={blockId}
                 blockId={blockId}
                 bands={params.eq?.bands ?? []}
                 eqEnabled={eqOn}
                 sampleRate={sampleRate}
-                view={eqView}
                 onSetBand={actions.setBlockEqBand}
               />
             ) : (

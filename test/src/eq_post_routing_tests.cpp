@@ -17,7 +17,6 @@ constexpr int kBlock = 512;
 // unambiguously active. Same shape as duplicate_tests.cpp's shaped-band case.
 juce::var shapedBand() {
   auto* band = new juce::DynamicObject();
-  band->setProperty("type", "bell");
   band->setProperty("freqHz", 1500.0);
   band->setProperty("gainDb", 12.0);
   band->setProperty("q", 1.2);

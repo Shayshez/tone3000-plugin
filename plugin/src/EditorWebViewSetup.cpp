@@ -533,7 +533,7 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 editor->processor.resetBlockIrShape(args[0].toString().toStdString()));
           }))
       .withNativeFunction(
-          // (blockId, bandIndex, { type, freqHz, gainDb, q }). Whole-band
+          // (blockId, bandIndex, { freqHz, gainDb, q, poles, on }). Whole-band
           // updates keep drags atomic and give undo/redo a clean unit later.
           "setBlockEqBand", guarded(3, false, [editor](const juce::Array<juce::var>& args) {
             if (!args[2].isObject())

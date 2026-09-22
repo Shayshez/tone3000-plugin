@@ -14,18 +14,28 @@
  */
 
 /**
- * Per-block 6-band EQ. Runs on the block's wet signal after its model by
+ * Per-block 8-band EQ. Runs on the block's wet signal after its model by
  * default (before the dry/wet mix), or between the block's
  * input gain and its model when `pre` is on.
- * Band curve types match BlockEq::BandType on the native side.
+ *
+ * Fixed channel-strip roles by index, no user-facing type selector (see
+ * `roleForBandIndex`): band 0 is always Low Cut, band 1 Low Shelf, the last
+ * two bands are High Shelf then High Cut, everything between is a Bell.
+ * Low/High Cut get a discrete Pole count (see `EQ_POLE_OPTIONS`) instead of
+ * Gain. Mirrors `BlockEq::Band`/`BlockEq::roleForIndex` on the native side.
  */
-export type EqBandType = 'lowcut' | 'lowshelf' | 'bell' | 'highshelf' | 'highcut';
+export type EqBandRole = 'lowcut' | 'lowshelf' | 'bell' | 'highshelf' | 'highcut';
 
 export interface EqBand {
-  type: EqBandType;
   freqHz: number;
   gainDb: number;
   q: number;
+  /** Pole count (1/3/4/6/8, see `EQ_POLE_OPTIONS`), meaningful only for
+      Low/High Cut bands; present on every band for a uniform shape. */
+  poles: number;
+  /** Per-band bypass (the band's own icon doubles as this toggle). Low/High
+      Cut default off; every other band defaults on. */
+  on: boolean;
 }
 
 export interface BlockEqParams {
@@ -37,33 +47,38 @@ export interface BlockEqParams {
   bands: EqBand[];
 }
 
-export const EQ_NUM_BANDS = 6;
+export const EQ_NUM_BANDS = 8;
 export const EQ_MIN_FREQ_HZ = 20;
 export const EQ_MAX_FREQ_HZ = 20000;
-export const EQ_MAX_ABS_GAIN_DB = 15;
+export const EQ_MAX_ABS_GAIN_DB = 24;
 export const EQ_MIN_Q = 0.1;
-export const EQ_MAX_Q = 10;
+export const EQ_MAX_Q = 20;
 
-/** A bell/shelf band at ~0 dB is inert; cuts shape by nature. */
-export function isEqBandActive(band: EqBand): boolean {
-  if (band.type === 'lowcut' || band.type === 'highcut') return true;
-  return Math.abs(band.gainDb) >= 0.05;
+/** Supported Low/High Cut pole counts and their dB/oct slope. */
+export const EQ_POLE_OPTIONS = [1, 3, 4, 6, 8] as const;
+export const EQ_POLE_DB_PER_OCT: Record<number, number> = { 1: 6, 3: 18, 4: 24, 6: 36, 8: 48 };
+
+/** Fixed channel-strip role by position (mirrors native `roleForIndex`). */
+export function roleForBandIndex(index: number, numBands: number = EQ_NUM_BANDS): EqBandRole {
+  if (index === 0) return 'lowcut';
+  if (index === 1) return 'lowshelf';
+  if (index === numBands - 2) return 'highshelf';
+  if (index === numBands - 1) return 'highcut';
+  return 'bell';
 }
 
-/**
- * Fixed channel-strip band roles (enforced natively too): the first band is
- * a low cut or low shelf, the last a high cut or high shelf, everything in
- * between is a bell.
- */
-export function eqBandTypeOptions(index: number): EqBandType[] {
-  if (index === 0) return ['lowcut', 'lowshelf'];
-  if (index === EQ_NUM_BANDS - 1) return ['highshelf', 'highcut'];
-  return ['bell'];
+/** A bell/shelf band at ~0 dB is inert; cuts shape by nature once on. A band
+    with `on === false` is always inert regardless of its other settings. */
+export function isEqBandActive(band: EqBand, index: number): boolean {
+  if (!band.on) return false;
+  const role = roleForBandIndex(index);
+  if (role === 'lowcut' || role === 'highcut') return true;
+  return Math.abs(band.gainDb) >= 0.05;
 }
 
 /** True when the EQ has no audible effect (all bands inert). */
 export function isEqFlat(eq: BlockEqParams): boolean {
-  return !eq.bands.some(isEqBandActive);
+  return !eq.bands.some((band, i) => isEqBandActive(band, i));
 }
 
 /**
@@ -183,7 +198,7 @@ export interface BlockParams {
       blocks only. Set via `setBlockIrReverse`, same off-thread rebuild
       shape as `trimInit` - a plain toggle, not a drag gesture. */
   reverse: boolean;
-  /** Per-block 6-band EQ. Flat = skipped entirely on the audio thread. */
+  /** Per-block 8-band EQ. Flat = skipped entirely on the audio thread. */
   eq: BlockEqParams;
   /** DUAL_MONO only: recombine controls for the block's two fixed child
       slots (see ToneBlock.dualLeft/dualRight). Normalized 0..1, constant-

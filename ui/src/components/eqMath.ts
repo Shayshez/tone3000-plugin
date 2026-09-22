@@ -1,5 +1,5 @@
-import type { EqBand } from '../types/chain';
-import { EQ_MAX_FREQ_HZ, EQ_MIN_FREQ_HZ, isEqBandActive } from '../types/chain';
+import type { EqBand, EqBandRole } from '../types/chain';
+import { EQ_MAX_FREQ_HZ, EQ_MIN_FREQ_HZ, isEqBandActive, roleForBandIndex } from '../types/chain';
 
 /**
  * Exact TypeScript mirror of the native biquad math (plugin/src/BlockEq.cpp,
@@ -15,7 +15,8 @@ interface BiquadCoeffs {
   a2: number;
 }
 
-function computeCoeffs(band: EqBand, sampleRate: number): BiquadCoeffs {
+/** Single RBJ biquad for Bell/Low Shelf/High Shelf - one stage, as before. */
+function computeCoeffs(band: EqBand, role: EqBandRole, sampleRate: number): BiquadCoeffs {
   const freq = Math.min(
     Math.max(band.freqHz, EQ_MIN_FREQ_HZ),
     Math.min(EQ_MAX_FREQ_HZ, sampleRate * 0.49)
@@ -34,23 +35,7 @@ function computeCoeffs(band: EqBand, sampleRate: number): BiquadCoeffs {
   let a1 = 0;
   let a2 = 0;
 
-  switch (band.type) {
-    case 'lowcut': // highpass
-      b0 = (1 + cs) * 0.5;
-      b1 = -(1 + cs);
-      b2 = (1 + cs) * 0.5;
-      a0 = 1 + alpha;
-      a1 = -2 * cs;
-      a2 = 1 - alpha;
-      break;
-    case 'highcut': // lowpass
-      b0 = (1 - cs) * 0.5;
-      b1 = 1 - cs;
-      b2 = (1 - cs) * 0.5;
-      a0 = 1 + alpha;
-      a1 = -2 * cs;
-      a2 = 1 - alpha;
-      break;
+  switch (role) {
     case 'bell':
       b0 = 1 + alpha * A;
       b1 = -2 * cs;
@@ -75,9 +60,83 @@ function computeCoeffs(band: EqBand, sampleRate: number): BiquadCoeffs {
       a1 = 2 * (A - 1 - (A + 1) * cs);
       a2 = A + 1 - (A - 1) * cs - 2 * sqrtA * alpha;
       break;
+    case 'lowcut':
+    case 'highcut':
+      // Handled by computeCutStages instead.
+      break;
   }
 
   return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+
+const REFERENCE_Q = Math.SQRT1_2; // 1/sqrt(2)
+
+/**
+ * Cascaded Low/High Cut: `band.poles` poles = ceil(poles/2) stages in
+ * series (an odd leftover first-order section plus one 2nd-order RBJ
+ * highpass/lowpass section per pole pair, each Q following the standard
+ * Butterworth pole-angle formula scaled by band.q/0.7071). Exact mirror of
+ * native `BlockEq::updateCutBand` - keep both in sync.
+ */
+export function computeCutStages(
+  band: EqBand,
+  role: EqBandRole,
+  sampleRate: number
+): BiquadCoeffs[] {
+  const freq = Math.min(
+    Math.max(band.freqHz, EQ_MIN_FREQ_HZ),
+    Math.min(EQ_MAX_FREQ_HZ, sampleRate * 0.49)
+  );
+  const omega = (2 * Math.PI * freq) / sampleRate;
+  const sn = Math.sin(omega);
+  const cs = Math.cos(omega);
+  const isHighpass = role === 'lowcut';
+
+  const poles = band.poles;
+  const numSecondOrder = Math.floor(poles / 2);
+  const hasFirstOrder = poles % 2 !== 0;
+  const stages: BiquadCoeffs[] = [];
+
+  if (hasFirstOrder) {
+    const K = Math.tan(omega * 0.5);
+    const b0 = isHighpass ? 1 / (1 + K) : K / (1 + K);
+    const b1 = isHighpass ? -b0 : b0;
+    const a1 = (K - 1) / (1 + K);
+    stages.push({ b0, b1, b2: 0, a1, a2: 0 });
+  }
+
+  const qScale = band.q / REFERENCE_Q;
+  for (let k = 1; k <= numSecondOrder; ++k) {
+    const qBase = 1 / (2 * Math.sin(((2 * k - 1) * Math.PI) / (2 * poles)));
+    const alpha = sn / (2 * qBase * qScale);
+
+    let b0: number;
+    let b1: number;
+    let b2: number;
+    if (isHighpass) {
+      b0 = (1 + cs) * 0.5;
+      b1 = -(1 + cs);
+      b2 = (1 + cs) * 0.5;
+    } else {
+      b0 = (1 - cs) * 0.5;
+      b1 = 1 - cs;
+      b2 = (1 - cs) * 0.5;
+    }
+    const a0 = 1 + alpha;
+    const a1 = -2 * cs;
+    const a2 = 1 - alpha;
+
+    stages.push({ b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 });
+  }
+
+  return stages;
+}
+
+/** Every stage of a band, in processing order (1 for Bell/Shelf, 1-4 for
+    Low/High Cut). */
+function stagesForBand(band: EqBand, role: EqBandRole, sampleRate: number): BiquadCoeffs[] {
+  if (role === 'lowcut' || role === 'highcut') return computeCutStages(band, role, sampleRate);
+  return [computeCoeffs(band, role, sampleRate)];
 }
 
 /** |H(e^jω)| in dB of a normalized biquad at a single frequency. */
@@ -99,12 +158,18 @@ function biquadMagnitudeDb(c: BiquadCoeffs, freqHz: number, sampleRate: number):
 /**
  * Combined EQ magnitude response (dB) at each of `freqsHz`. Inert bands are
  * skipped, matching the audio thread, which doesn't process them either.
+ * Sums every stage of every active band (Low/High Cut can have 1-4 stages).
  */
 export function eqResponseDb(bands: EqBand[], sampleRate: number, freqsHz: number[]): number[] {
-  const active = bands.filter(isEqBandActive).map((band) => computeCoeffs(band, sampleRate));
+  const activeStages: BiquadCoeffs[] = [];
+  bands.forEach((band, i) => {
+    if (!isEqBandActive(band, i)) return;
+    const role = roleForBandIndex(i, bands.length);
+    activeStages.push(...stagesForBand(band, role, sampleRate));
+  });
   return freqsHz.map((f) => {
     let db = 0;
-    for (const coeffs of active) db += biquadMagnitudeDb(coeffs, f, sampleRate);
+    for (const coeffs of activeStages) db += biquadMagnitudeDb(coeffs, f, sampleRate);
     return db;
   });
 }
@@ -124,9 +189,8 @@ export function normToFreq(norm: number): number {
   return Math.exp(LOG_MIN + t * (LOG_MAX - LOG_MIN));
 }
 
-/** "251 Hz" / "1.6k" style display. */
+/** Always the full number in Hz, never a "1.31k" abbreviation - the strip
+    is dense enough already without also asking the reader to convert units. */
 export function formatFreq(freqHz: number): string {
-  if (freqHz >= 10000) return `${(freqHz / 1000).toFixed(1)}k`;
-  if (freqHz >= 1000) return `${(freqHz / 1000).toFixed(2)}k`;
   return `${Math.round(freqHz)} Hz`;
 }

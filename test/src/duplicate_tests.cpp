@@ -49,7 +49,6 @@ TEST(ChainDuplicateTest, PasteFillsInsertSlotAndCarriesEverySetting) {
 
   // A shaped EQ band on the source (through the real setter).
   auto* band = new juce::DynamicObject();
-  band->setProperty("type", "bell");
   band->setProperty("freqHz", 1500.0);
   band->setProperty("gainDb", 4.5);
   band->setProperty("q", 1.2);

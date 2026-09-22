@@ -5,7 +5,7 @@
 #include <array>
 
 /**
- * Six-band parametric EQ, one per chain block. Runs on the block's wet
+ * Eight-band parametric EQ, one per chain block. Runs on the block's wet
  * signal by default (after the model, before the dry/wet mix, so the dry
  * share of Mix stays untouched); the `pre` flag moves it between the
  * block's input gain and its model instead, shaping the signal
@@ -14,50 +14,70 @@
  * ui/src/components/eqMath.ts so the drawn curve is the audio truth),
  * processing, and (de)serialization.
  *
+ * Fixed channel-strip roles by index, no user-facing type selector: band 0
+ * is always Low Cut, band 1 Low Shelf, the last two bands are High Shelf
+ * then High Cut, everything between is a Bell (see roleForIndex()). Low/High
+ * Cut get a discrete Pole count (1/3/4/6/8 = 6/18/24/36/48 dB/oct) instead of
+ * Gain, cascading that many biquad/first-order stages in series; every other
+ * band is a single RBJ biquad as before.
+ *
  * Threading model: setters run on the message thread while `chainMutex` is
  * held (the audio thread holds the same lock during processing), so plain
  * members are safe and all transcendental math happens off the audio thread.
  * process() does zero allocation.
  *
- * Flat-skip: every band precomputes an `active` flag when its params change.
- * Bell/shelf bands with ~0 dB gain are inert; cut bands are active by
- * their nature the moment that type is selected. When no band is active,
- * isActive() is false and callers skip process() entirely; a flat EQ costs
- * one branch per audio block.
+ * Per-band bypass: each band carries its own `on` flag (the UI's band icon
+ * doubles as this toggle) alongside the EQ-wide `enabled` power button.
+ * Flat-skip: every band precomputes an `active` flag when its params change -
+ * `on == false` is always inert; a Bell/shelf band with ~0 dB gain is inert
+ * even while `on`; a Low/High Cut is active whenever it's on (it has no
+ * "trivial" setting to auto-detect, unlike gain). When no band is active,
+ * isActive() is false and callers skip process() entirely; a flat/bypassed
+ * EQ costs one branch per audio block.
  *
  * Bypass: `enabled` (the EQ power button) gates isActive() the same way, so a
  * bypassed EQ keeps its band settings but costs nothing on the audio thread.
  */
 class BlockEq {
 public:
-  static constexpr int kNumBands = 6;
+  static constexpr int kNumBands = 8;
   static constexpr float kMinFreqHz = 20.0f;
   static constexpr float kMaxFreqHz = 20000.0f;
-  static constexpr float kMaxAbsGainDb = 15.0f;
+  static constexpr float kMaxAbsGainDb = 24.0f;
   static constexpr float kMinQ = 0.1f;
-  static constexpr float kMaxQ = 10.0f;
+  static constexpr float kMaxQ = 20.0f;
+  /** Biquad stages a Low/High Cut band can cascade (ceil(8/2)). */
+  static constexpr int kMaxCutStages = 4;
+  /** Supported pole counts (6/18/24/36/48 dB/oct). */
+  static constexpr std::array<int, 5> kPoleOptions{1, 3, 4, 6, 8};
 
-  enum class BandType { LowCut, LowShelf, Bell, HighShelf, HighCut };
+  enum class BandRole { LowCut, LowShelf, Bell, HighShelf, HighCut };
+
+  /** Fixed channel-strip role by position (mirrored by the UI). */
+  static BandRole roleForIndex(int index);
+
+  /** Nearest supported pole count to `requested`. */
+  static int snapPoles(int requested);
 
   struct Band {
-    BandType type{BandType::Bell};
     float freqHz{1000.0f};
     float gainDb{0.0f};
-    float q{1.0f};
+    float q{0.71f};
+    /** Pole count, meaningful only for Low/High Cut bands (see
+        roleForIndex()); kept on every band for a uniform struct shape. */
+    int poles{4};
+    /** Per-band bypass: the UI's band icon doubles as this toggle. Low/High
+        Cut default off (a cut is an active choice, not a baseline state, so
+        it stays out of the way until the user reaches for it); every other
+        band defaults on (matches its own already-inert-at-0dB default). */
+    bool on{true};
   };
 
-  /** Guitar/bass-voiced defaults, all flat (0 dB): low shelf 100 Hz, bells at
-      250 (mud) / 650 (boxiness) / 1.6k (presence) / 3.5k (bite, tighter Q),
-      high shelf 8 kHz (fizz/air). */
+  /** Guitar/bass-voiced defaults, all flat (0 dB) and every band left on
+      except the two cuts (see Band::on): low cut 80 Hz, low shelf 100 Hz,
+      bells at 250 (mud) / 650 (boxiness) / 1.6k (presence) / 3.5k (bite,
+      tighter Q), high shelf 8 kHz (fizz/air), high cut 12 kHz. */
   static std::array<Band, kNumBands> defaultBands();
-
-  /**
-   * Fixed channel-strip band roles (mirrored by the UI's type selector):
-   * band 0 is low cut or low shelf, the last band is high cut or high shelf,
-   * everything in between is a bell. Out-of-role types (including anything in
-   * older saved state) coerce to the band's shelf/bell.
-   */
-  static BandType coerceTypeForBand(int index, BandType type);
 
   BlockEq();
 
@@ -69,7 +89,7 @@ public:
       coefficients and activity. Returns false for an out-of-range index. */
   bool setBand(int index, const Band& band);
 
-  /** Message thread (under chainMutex). Parses { type, freqHz, gainDb, q }. */
+  /** Message thread (under chainMutex). Parses { freqHz, gainDb, q, poles, on }. */
   bool setBandFromVar(int index, const juce::var& bandVar);
 
   /** Message thread (under chainMutex). Back to flat defaults (and enabled). */
@@ -93,15 +113,13 @@ public:
       Only call when isActive(). */
   void process(juce::AudioBuffer<float>& buffer);
 
-  /** { enabled, pre, bands: [{ type, freqHz, gainDb, q } x6] } for the UI chain state. */
+  /** { enabled, pre, bands: [{ freqHz, gainDb, q, poles } x8] } for the UI
+      chain state. */
   juce::var toVar() const;
 
   /** ValueTree persistence (plugin state save/restore). */
   juce::ValueTree toValueTree() const;
   void restoreFromValueTree(const juce::ValueTree& tree);
-
-  static juce::String bandTypeToString(BandType type);
-  static BandType bandTypeFromString(const juce::String& s);
 
 private:
   struct Biquad {
@@ -117,13 +135,18 @@ private:
     void resetState() { z1[0] = z1[1] = z2[0] = z2[1] = 0.0f; }
   };
 
-  static bool isBandActive(const Band& band);
+  static bool isBandActive(int index, const Band& band);
   static Band clampBand(Band band);
+  /** Bell/Low Shelf/High Shelf: single RBJ biquad, unchanged math. */
   void updateBand(int index);
+  /** Low/High Cut: cascades `band.poles` worth of stages (an odd leftover
+      first-order section plus Butterworth-Q second-order sections). */
+  void updateCutBand(int index);
   void updateActivity();
 
   std::array<Band, kNumBands> bands;
-  std::array<Biquad, kNumBands> filters;
+  std::array<std::array<Biquad, kMaxCutStages>, kNumBands> stages;
+  std::array<int, kNumBands> numStages{};
   std::array<bool, kNumBands> bandActive{};
   bool anyBandActive{false};
   bool enabled{true};

@@ -224,7 +224,7 @@ const HELP_DESKTOP = {
   pasteBlock: 'Paste: add a copy of the copied block in this slot.',
   addCabTile: 'Cab: load a local .wav as a cabinet IR - hover for Load File / Load Folder.',
   addIrTile: 'IR: load a local .wav as an impulse response - hover for Load File / Load Folder.',
-  addEqTile: 'EQ: add a standalone 6-band EQ block here - no model, always 100% wet.',
+  addEqTile: 'EQ: add a standalone 8-band EQ block here - no model, always 100% wet.',
   addDualMonoTile:
     'Dual Mono: a fixed pair of two blocks, one per channel - pick each side’s tone from its own detail view.',
   convertToDualMono:
@@ -357,7 +357,7 @@ const HELP_DESKTOP = {
     'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 25% mix by default.',
   blockCalibrated: 'Calibration: active \u2014 levels set from this model\u2019s calibration data.',
   blockUncalibrated: 'Calibration: inactive \u2014 this model has no calibration data.',
-  eqToggle: 'EQ: 6-band EQ editor. Outline: EQ shaping the sound.',
+  eqToggle: 'EQ: 8-band EQ editor. Outline: EQ shaping the sound.',
   blockResetShape:
     'Reset: restores Init/Attack/Decay, Size, Width, Trim Init and Reverse to default. Not EQ.',
   toneInfo: 'Info: tone description, makes, and tags from TONE3000.',
@@ -365,8 +365,6 @@ const HELP_DESKTOP = {
   viewOnT3k: 'View on TONE3000: open this tone in your browser.',
   favoriteTone: 'Favorite: save this tone to your TONE3000 favorites.',
   unfavoriteTone: 'Favorited: click to remove from your TONE3000 favorites.',
-  eqSlidersView: 'Sliders: gain-only fader view.',
-  eqCurveView: 'Curve: parametric freq/gain/Q editor.',
   eqReset: 'Reset EQ: all bands flat, position post.',
   eqPre: 'PRE: EQ before the model. Off: after the model (wet only).',
   eqPower: 'EQ Power: bypass EQ, keep settings.',
@@ -376,19 +374,22 @@ const HELP_DESKTOP = {
   backToDual: 'Back: this Dual Mono block.',
 
   // EQ editor
-  eqFader: IS_COARSE_POINTER
-    ? 'Band Fader: gain, ±15 dB. drag: adjust · double tap: reset.'
-    : `Band Fader: gain, ±15 dB. ${shift('drag')}: fine · double-click / ${alt('click')}: reset.`,
-  eqFaderPass: 'Pass Band: no gain. Shape it in Curve view.',
+  eqBandBypass: 'Band: click the icon to bypass/enable. Low/High Cut start off.',
+  eqPoleControl: IS_COARSE_POINTER
+    ? 'Slope: drag: step 6/18/24/36/48 dB/oct.'
+    : `Slope: drag: step 6/18/24/36/48 dB/oct · ${shift('drag')}: fine.`,
   eqDot: IS_COARSE_POINTER
-    ? 'Band Dot: drag: freq + gain · double tap: reset. Q: use the Q chip.'
+    ? 'Band Dot: drag: freq + gain · double tap: reset. Q: use the strip below.'
     : `Band Dot: drag: freq + gain · scroll: Q · ${shift('drag')}: fine · ${alt('click')}: reset.`,
-  eqFreqChip:
-    'Freq: click to type (\u201c800\u201d, \u201c1.2k\u201d). Enter: commit · Esc: cancel.',
-  eqGainChip: 'Gain: click to type, ±15 dB. Enter: commit · Esc: cancel.',
+  eqFreqChip: IS_COARSE_POINTER
+    ? 'Freq: drag: adjust · tap: type (\u201c800\u201d, \u201c1.2k\u201d).'
+    : `Freq: drag: adjust (${shift('drag')}: fine) · click: type (\u201c800\u201d, \u201c1.2k\u201d).`,
+  eqGainChip: IS_COARSE_POINTER
+    ? 'Gain: drag: adjust, ±24 dB · tap: type.'
+    : `Gain: drag: adjust, ±24 dB (${shift('drag')}: fine) · click: type.`,
   eqQChip: IS_COARSE_POINTER
-    ? 'Q: tap to type. Enter: commit · Esc: cancel.'
-    : `Q: scroll the graph (${shift('scroll')}: fine) or click to type.`,
+    ? 'Q: drag: adjust · tap: type.'
+    : `Q: drag: adjust (${shift('drag')}: fine) · click: type.`,
 
   // Meters
   clipDot: 'Clip: latches on clipping. Click: clear.',
@@ -432,6 +433,3 @@ export const toneTileHelp = (title: string, blockType: ToneBlock['blockType']) =
   IS_COARSE_POINTER
     ? `${title} · ${BLOCK_TYPE_LABEL[blockType]}. Tap: open · drag: reorder · touch and hold: menu.`
     : `${title} · ${BLOCK_TYPE_LABEL[blockType]}. Click: open · drag: reorder · ${alt('drag')}: duplicate · right-click: copy / load file.`;
-
-/** Curve-type selector buttons in the EQ editor. */
-export const bandTypeHelp = (label: string) => `${label}: band curve shape.`;

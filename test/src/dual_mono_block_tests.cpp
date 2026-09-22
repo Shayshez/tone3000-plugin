@@ -564,7 +564,6 @@ TEST(DualMonoBlockTest, RemovalTearsDownBothChildrenAtomically) {
   // leaked, via the same generic per-block lookup every setter routes
   // through (findBlockById): it must no longer resolve either id.
   auto* band = new juce::DynamicObject();
-  band->setProperty("type", "bell");
   band->setProperty("freqHz", 1000.0);
   band->setProperty("gainDb", 3.0);
   band->setProperty("q", 1.0);
@@ -849,7 +848,6 @@ TEST(DualMonoBlockTest, SetBlockEqBandWorksOnADualChildViaRecursiveLookup) {
   ASSERT_TRUE(waitForDualMonoLoaded(proc));
 
   auto* band = new juce::DynamicObject();
-  band->setProperty("type", "bell");
   band->setProperty("freqHz", 1500.0);
   band->setProperty("gainDb", 12.0);
   band->setProperty("q", 1.2);
@@ -1078,7 +1076,6 @@ namespace {
 // eq_post_routing_tests.cpp's own shapedBand().
 juce::var shapedMasterBand() {
   auto* band = new juce::DynamicObject();
-  band->setProperty("type", "bell");
   band->setProperty("freqHz", 1500.0);
   band->setProperty("gainDb", 12.0);
   band->setProperty("q", 1.2);
