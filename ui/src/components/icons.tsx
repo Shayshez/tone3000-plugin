@@ -25,6 +25,7 @@ import {
   Gauge as LGauge,
   GripVertical as LGripVertical,
   Headphones as LHeadphones,
+  Home as LHome,
   Info as LInfo,
   Laptop as LLaptop,
   Link as LLink,
@@ -38,6 +39,7 @@ import {
   Redo2 as LRedo2,
   RotateCcw as LRotateCcw,
   Save as LSave,
+  Scale as LScale,
   Search as LSearch,
   Settings as LSettings,
   Share as LShare,
@@ -95,6 +97,7 @@ export const FolderClosed = scaled(LFolderClosed, 'FolderClosed');
 export const Gauge = scaled(LGauge, 'Gauge');
 export const GripVertical = scaled(LGripVertical, 'GripVertical');
 export const Headphones = scaled(LHeadphones, 'Headphones');
+export const Home = scaled(LHome, 'Home');
 export const Info = scaled(LInfo, 'Info');
 export const Laptop = scaled(LLaptop, 'Laptop');
 export const Link = scaled(LLink, 'Link');
@@ -108,6 +111,7 @@ export const Power = scaled(LPower, 'Power');
 export const Redo2 = scaled(LRedo2, 'Redo2');
 export const RotateCcw = scaled(LRotateCcw, 'RotateCcw');
 export const Save = scaled(LSave, 'Save');
+export const Scale = scaled(LScale, 'Scale');
 export const Search = scaled(LSearch, 'Search');
 export const Settings = scaled(LSettings, 'Settings');
 export const Share = scaled(LShare, 'Share');

@@ -180,9 +180,9 @@ export const knobHelp = (name: string, desc: string) => `${name}: ${desc} ${KNOB
  */
 const HELP_DESKTOP = {
   // Faceplate: gains
-  inputLevel: knobHelp('Input', 'chain input level, ±24 dB.'),
+  inputLevel: knobHelp('Input', 'chain input level, up to +24 dB, mutes at zero.'),
   inputMode: 'Input Mode: source channels. Stereo: both · L/R: one. Click: choose.',
-  outputLevel: knobHelp('Output', 'master output level, ±24 dB.'),
+  outputLevel: knobHelp('Output', 'master output level, up to +24 dB, mutes at zero.'),
   outputPan: knobHelp('Pan', 'output stereo position. Center: off.'),
 
   // Faceplate: gate, tone stack
@@ -255,6 +255,8 @@ const HELP_DESKTOP = {
   dualInvertRight: 'Ø Right: flip this side’s polarity.',
   dualAutoAlign:
     'Auto Align: a ½ s internal sweep time-aligns this block’s two sides and fixes inverted polarity. Click again: cancel.',
+  dualAutoBalance:
+    'Auto Balance: a ½ s internal sweep matches this block’s two sides to the same loudness. Click again: cancel.',
   dualAlignToggle:
     'Stereo: Align/phase controls between the two sides. Outline: Align shaping the sound.',
   dualStereoProcessingPower:
@@ -273,9 +275,12 @@ const HELP_DESKTOP = {
   dualAlignDiffuse: 'Diffuse Power: phase-decorrelates the delayed side for width.',
 
   // Block card
-  blockIn: knobHelp('In', 'block input gain, ±24 dB.'),
-  blockOut: knobHelp('Out', 'block output gain, ±24 dB.'),
-  blockOutIr: knobHelp('Out', 'block output gain, ±24 dB (IR pre-trimmed -18 dB).'),
+  blockIn: knobHelp('In', 'block input gain, up to +24 dB, mutes at zero.'),
+  blockOut: knobHelp('Out', 'block output gain, up to +24 dB, mutes at zero.'),
+  blockOutIr: knobHelp(
+    'Out',
+    'block output gain (IR pre-trimmed -18 dB), up to +24 dB, mutes at zero.'
+  ),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
   // Not `blockSize`/`blockWidth` - those names are taken by the NAM A2
@@ -372,6 +377,7 @@ const HELP_DESKTOP = {
   modelSelectSignedOut: 'Models: sign in to TONE3000 to switch models.',
   backToChain: 'Back: chain overview.',
   backToDual: 'Back: this Dual Mono block.',
+  chainMapHome: 'Gallery: jump straight back, from any depth.',
 
   // EQ editor
   eqBandBypass: 'Band: click the icon to bypass/enable. Low/High Cut start off.',

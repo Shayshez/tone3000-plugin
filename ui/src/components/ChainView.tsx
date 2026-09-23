@@ -8,6 +8,7 @@ import { arrayMove } from '@dnd-kit/helpers';
 import { ChainBlock } from './ChainBlock';
 import { EdgeFade, GalleryLane, EDGE_FADE_WIDTH, TILE_SIZE, TILE_GAP } from './GalleryLane';
 import { useChainActions } from '../hooks/useChainActions';
+import type { DetailView } from '../hooks/useDetailViewStack';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
 import { FONT_MONO, WHITE } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
@@ -145,22 +146,17 @@ export const ChainView: React.FC<ChainViewProps> = ({
   useEffect(() => {
     if (returnToGallery) setDetailBlockId(null);
   }, [returnToGallery]);
-  // Set alongside detailBlockId only by the gallery tile's own EQ shortcut
-  // (GalleryBlock's onOpenEq) - ChainBlock reads it once, as its showEq's
-  // *initial* state, the moment it mounts fresh for that block (it's
-  // conditionally rendered, so opening from the gallery is always a fresh
-  // mount - see the render guard below). A plain onOpen always sets this
-  // false first, so a stale true from a previous EQ-shortcut open can never
-  // leak into an unrelated later open. Not persisted like detailBlockId
-  // above - surviving an OAuth-swap round trip with EQ still showing isn't
-  // worth the complexity for what's a one-shot navigation hint.
-  const [openBlockEq, setOpenBlockEq] = useState(false);
-  // Same idea, for a Dual Mono tile's own Stereo Processing shortcut
-  // (GalleryBlock's onOpenStereo) - mutually exclusive with openBlockEq
-  // (both cleared whenever the other's own entry point is used), same
-  // "initial state only, not persisted" reasoning as openBlockEq's own
-  // comment.
-  const [openBlockStereo, setOpenBlockStereo] = useState(false);
+  // Set alongside detailBlockId only by the gallery tile's own EQ/Stereo
+  // shortcuts (GalleryBlock's onOpenEq/onOpenStereo) - ChainBlock reads it
+  // once, as its detail-view stack's *initial* seed, the moment it mounts
+  // fresh for that block (it's conditionally rendered, so opening from the
+  // gallery is always a fresh mount - see the render guard below). A plain
+  // onOpen always resets this to 'main' first, so a stale shortcut from a
+  // previous open can never leak into an unrelated later one. Not
+  // persisted like detailBlockId above - surviving an OAuth-swap round
+  // trip with a sub-view still showing isn't worth the complexity for
+  // what's a one-shot navigation hint.
+  const [initialDetailView, setInitialDetailView] = useState<DetailView>('main');
   /** The item under drag; drives the DragOverlay ghost. */
   const [activeDrag, setActiveDrag] = useState<ChainItem | null>(null);
 
@@ -405,6 +401,14 @@ export const ChainView: React.FC<ChainViewProps> = ({
           item.params.enabled
       );
 
+    // Shared by the back arrow's onBack prop and the breadcrumb's "Gallery"
+    // segment, so there's only one "return to the gallery" implementation
+    // rather than two copies that could drift.
+    const goToGallery = () => {
+      pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
+      setDetailBlockId(null);
+    };
+
     return (
       <div
         style={{
@@ -424,12 +428,8 @@ export const ChainView: React.FC<ChainViewProps> = ({
           namDownstream={namDownstream}
           sampleRate={sampleRate}
           namSlimSizeDefault={namSlimSizeDefault}
-          initialShowEq={openBlockEq}
-          initialShowStereo={openBlockStereo}
-          onBack={() => {
-            pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
-            setDetailBlockId(null);
-          }}
+          initialView={initialDetailView}
+          onBack={goToGallery}
           chainStripItems={chain}
           onJumpToBlock={setDetailBlockId}
           onAddBlockAt={(insertBlockId) =>
@@ -511,18 +511,15 @@ export const ChainView: React.FC<ChainViewProps> = ({
                 items={items}
                 tileSize={TILE_SIZE}
                 onOpen={(blockId) => {
-                  setOpenBlockEq(false);
-                  setOpenBlockStereo(false);
+                  setInitialDetailView('main');
                   setDetailBlockId(blockId);
                 }}
                 onOpenEq={(blockId) => {
-                  setOpenBlockEq(true);
-                  setOpenBlockStereo(false);
+                  setInitialDetailView('eq');
                   setDetailBlockId(blockId);
                 }}
                 onOpenStereo={(blockId) => {
-                  setOpenBlockStereo(true);
-                  setOpenBlockEq(false);
+                  setInitialDetailView('stereo');
                   setDetailBlockId(blockId);
                 }}
                 onAdd={(insertBlockId) => actions.addModel(insertBlockId)}

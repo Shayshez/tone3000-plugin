@@ -86,6 +86,28 @@ public:
     float confidence = 0.0f;
     /** Winning |peak| over the best |peak| more than 1 ms away, >= 1. */
     float peakSharpness = 0.0f;
+    /** Auto Balance: loudness ratio between the two sides at the winning
+        lag, in dB, always >= 0 - how much the quieter side (see
+        boostRight) needs raised to match the louder one. Derived from the
+        same energyL/energyR sums the confidence score already computes
+        (see analyze()), so this costs nothing extra to measure - it's a
+        second consumer of Align's own probe capture, not a second probe.
+        0 when either side reads below the silence floor (see
+        kAutoBalanceSilenceFloor) - an empty/muted side isn't "quiet", it's
+        not a valid measurement, so the caller checks silent below rather
+        than trusting a near-infinite ratio. */
+    float gainDeltaDb = 0.0f;
+    /** True when the right side is the quieter one (needs gainDeltaDb added
+        to its Vol); false when the left side does. Meaningless when
+        silent is true. */
+    bool boostRight = false;
+    /** Either side's average energy over the measurement window was below
+        the silence floor - the probe never actually reached that side (an
+        empty Dual Mono slot passes the raw sweep through unprocessed,
+        which reads as present but is not a real level to balance against),
+        so gainDeltaDb/boostRight carry no meaning and the caller should
+        reject the measurement instead of applying it. */
+    bool silent = false;
   };
 
   /** Lag search half-window: what the Offset knob can express. */
@@ -143,6 +165,11 @@ private:
   static constexpr float kRampBackSeconds = 0.010f;
   static constexpr float kPhatRho = 0.8f;  // soft PHAT exponent, see class comment
   static constexpr int kFineStepsPerSample = 8;
+  /** Auto Balance silence floor: mean-square below this over the
+      measurement window means that side isn't a real level to balance
+      against (same -100 dBFS idea as DeckCorrelation::kFloor, ImageDeck.h).
+      1.0e-10 in mean-square terms is (1e-5)^2, i.e. -100 dBFS RMS. */
+  static constexpr double kAutoBalanceSilenceFloor = 1.0e-10;
 
   void buildSweep();
   void setState(State s) { stateFlag.store(static_cast<int>(s), std::memory_order_release); }

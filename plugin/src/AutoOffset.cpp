@@ -298,5 +298,19 @@ AutoOffset::Result AutoOffset::analyze() {
                                  static_cast<float>(fineTau * 1000.0 / sampleRate));
   result.inverted = inverted;
   result.confidence = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::abs(dot) / denom));
+
+  // Auto Balance: same energyL/energyR this confidence score already
+  // computed above, read as a loudness ratio instead - a second consumer
+  // of the one capture, not a second probe (see Result::gainDeltaDb).
+  const int measured = to - from;
+  const double meanSqL = measured > 0 ? energyL / measured : 0.0;
+  const double meanSqR = measured > 0 ? energyR / measured : 0.0;
+  if (meanSqL < kAutoBalanceSilenceFloor || meanSqR < kAutoBalanceSilenceFloor) {
+    result.silent = true;
+  } else {
+    result.boostRight = meanSqR < meanSqL;
+    const double ratio = std::max(meanSqL, meanSqR) / std::min(meanSqL, meanSqR);
+    result.gainDeltaDb = static_cast<float>(10.0 * std::log10(ratio));
+  }
   return result;
 }

@@ -3,6 +3,7 @@
 #include "Editor.h"
 #endif
 #include <cmath>
+#include <limits>
 #include <random>
 #include <cstring>
 #include <tuple>
@@ -475,9 +476,45 @@ static float bufferPeak(const juce::AudioBuffer<float>& buffer, int numChannels,
   return peak;
 }
 
-// Main-stage level as a linear gain: 0.5 = unity, full range ±24 dB.
+// Volume-style knob taper shared by every gain/level control (main In/Out
+// Level, per-block In/Out gain, Dual Mono's per-side Vol - anything using
+// gainDbScale on the UI side, which mirrors this exactly): 0.5 = unity
+// (0 dB), 1.0 = +24 dB, unchanged from the old plain ±24 dB linear map.
+// Below unity, though, the curve is logarithmic (40 dB per decade of knob
+// travel toward zero) rather than linear, so it reaches true silence
+// (-inf dB, exact zero gain) as the knob approaches fully closed instead of
+// flooring at a still-audible -24 dB - closed should mean muted, not just
+// quiet. The last fraction of a percent of travel is treated as fully
+// closed outright so an exactly-zero knob value (and float rounding near
+// it) always reads as true silence, not a very large but finite negative
+// dB value.
+static constexpr float kGainKnobSilenceThreshold = 0.001f;
+static float gainKnobDb(float norm) {
+  if (norm <= kGainKnobSilenceThreshold)
+    return -std::numeric_limits<float>::infinity();
+  if (norm >= 0.5f)
+    return (norm - 0.5f) * 48.0f;
+  return 40.0f * std::log10(norm / 0.5f);
+}
+
+// Main-stage level as a linear gain: 0.5 = unity, +24 dB at max, true
+// silence at/near fully closed - see gainKnobDb.
 static float mainStageGain(float level) {
-  return juce::Decibels::decibelsToGain((level - 0.5f) * 48.0f);
+  return juce::Decibels::decibelsToGain(gainKnobDb(level));
+}
+
+// Inverse of gainKnobDb: what knob position reads as this many dB. Mirrors
+// gainDbScale.fromDisplay in knobScale.ts exactly, same as gainKnobDb
+// mirrors that file's own toDisplay - used by Auto Balance to turn "raise
+// this side by N dB" into a new outputGainNormalized. Non-finite (-inf,
+// silence) maps to fully closed; the caller clamps to [0, 1] the same way
+// pollDualAutoAlign already clamps its own ms-to-knob-position inverse.
+static float gainKnobNormFromDb(float db) {
+  if (!std::isfinite(db))
+    return 0.0f;
+  if (db >= 0.0f)
+    return 0.5f + db / 48.0f;
+  return 0.5f * std::pow(10.0f, db / 40.0f);
 }
 
 // Per-channel pan gain: 0.5 = centered, unity on both channels. Sweeping
@@ -1144,13 +1181,14 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       dryScratch.copyFrom(1, 0, buffer, 1, 0, numSamples);
     }
 
-    // Per-block input gain (0.5 == unity, ±24 dB), applied after the dry copy
-    // so Mix still blends against the untouched signal; this drives the
-    // block's DSP harder/softer like a drive control. The block input meter
-    // reads the post-gain signal (what the model actually receives).
+    // Per-block input gain (0.5 == unity, +24 dB at max, true silence at/near
+    // fully closed - see gainKnobDb), applied after the dry copy so Mix
+    // still blends against the untouched signal; this drives the block's
+    // DSP harder/softer like a drive control. The block input meter reads
+    // the post-gain signal (what the model actually receives).
     {
-      const float inputGainDbBlock = (block->inputGainNormalized - 0.5f) * 48.0f;
-      block->inputGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(inputGainDbBlock));
+      block->inputGainSmoother.setTargetValue(
+          juce::Decibels::decibelsToGain(gainKnobDb(block->inputGainNormalized)));
 
       float blockInputPeak = 0.0f;
       auto* left = buffer.getWritePointer(0);
@@ -1404,8 +1442,12 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
                                  ? -18.0f
                                  : 0.0f;
     block->irPadGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(irOffsetDb));
-    const float gainDb = (block->outputGainNormalized - 0.5f) * 48.0f;
-    block->outputGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(gainDb));
+    // 0.5 == unity, +24 dB at max, true silence at/near fully closed - see
+    // gainKnobDb. Also drives Dual Mono's per-side Vol knobs, which write
+    // this same outputGain param (see handleDualChildVolChange in
+    // ChainBlock.tsx).
+    block->outputGainSmoother.setTargetValue(
+        juce::Decibels::decibelsToGain(gainKnobDb(block->outputGainNormalized)));
     block->mixSmoother.setTargetValue(juce::jlimit(0.0f, 1.0f, block->mixNormalized));
 
     float blockOutputPeak = 0.0f;
@@ -1834,14 +1876,18 @@ constexpr float kAutoOffsetSilentMs = 0.05f;
 
 void TONE3000Processor::cancelAutoOffset() { autoOffset.cancel(); }
 
-bool TONE3000Processor::armDualAutoAlign(const std::string& blockId) {
+// Shared by armDualAutoAlign and armDualAutoBalance - both just need "is
+// this a real DUAL_MONO block, is the engine free" before claiming it and
+// starting the identical sweep; only what the poll applies afterward
+// differs between the two.
+bool TONE3000Processor::armAutoOffsetFor(const std::string& blockId) {
   // Offline renders must never print the probe's silence into the bounce.
   if (isNonRealtime())
     return false;
   juce::ScopedLock lock(chainMutex);
   ChainBlock* block = findBlockById(blockId);
   if (block == nullptr || block->type != ChainBlockType::DUAL_MONO) {
-    DBG("armDualAutoAlign: not a DUAL_MONO block: " << blockId);
+    DBG("armAutoOffsetFor: not a DUAL_MONO block: " << blockId);
     return false;
   }
   // Only claim the engine if it's actually free - arm() itself also no-ops
@@ -1852,6 +1898,14 @@ bool TONE3000Processor::armDualAutoAlign(const std::string& blockId) {
   autoOffsetTargetBlockId = blockId;
   autoOffset.arm();
   return true;
+}
+
+bool TONE3000Processor::armDualAutoAlign(const std::string& blockId) {
+  return armAutoOffsetFor(blockId);
+}
+
+bool TONE3000Processor::armDualAutoBalance(const std::string& blockId) {
+  return armAutoOffsetFor(blockId);
 }
 
 // Message thread (UI poll). The analysis (a one-shot FFT over the capture)
@@ -1937,6 +1991,93 @@ juce::var TONE3000Processor::pollDualAutoAlign(const std::string& blockId) {
           juce::String(result.offsetMs, 3) + " ms, confidence " +
           juce::String(result.confidence, 3) + ", sharpness " +
           juce::String(result.peakSharpness, 1) + (polarityFlipped ? ", polarity flipped)" : ")"));
+      break;
+    }
+    case AutoOffset::State::RampBack:
+    case AutoOffset::State::Idle:
+      obj->setProperty("state", "idle");
+      break;
+  }
+  return juce::var(obj.get());
+}
+
+// Loudness reads below this gap are already even for any practical
+// purpose; skip the param write/history entry rather than nudging a knob
+// by a fraction of a dB.
+constexpr float kAutoBalanceSilentDb = 0.1f;
+
+juce::var TONE3000Processor::pollDualAutoBalance(const std::string& blockId) {
+  juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+
+  if (blockId != autoOffsetTargetBlockId) {
+    obj->setProperty("state", "idle");
+    return juce::var(obj.get());
+  }
+
+  switch (autoOffset.state()) {
+    case AutoOffset::State::FadeOut:
+    case AutoOffset::State::Probing:
+    case AutoOffset::State::Tail:
+    case AutoOffset::State::Analyzing:
+      obj->setProperty("state", "listening");
+      obj->setProperty("progress", static_cast<double>(autoOffset.progress()));
+      break;
+    case AutoOffset::State::Captured: {
+      juce::ScopedLock lock(chainMutex);
+      ChainBlock* block = findBlockById(blockId);
+      if (block == nullptr) {
+        // Same "target vanished mid-measurement" fallback pollDualAutoAlign
+        // takes - drop the result rather than leaving the output muted
+        // forever waiting for a poll that can never apply anywhere.
+        autoOffset.analyze();
+        autoOffset.resume();
+        obj->setProperty("state", "timeout");
+        break;
+      }
+
+      const auto result = autoOffset.analyze();
+      if (result.silent) {
+        autoOffset.resume();
+        obj->setProperty("state", "timeout");
+        juce::Logger::writeToLog("[AutoBalance] Rejected (block " + juce::String(blockId) +
+                                 "): one side read silent");
+        break;
+      }
+
+      // The quieter side's own child - Balance never touches the Dual
+      // block's own fields, only whichever side needs raising (see
+      // Result::boostRight).
+      ChainBlock* target = result.boostRight
+                               ? (block->dualRight.empty() ? nullptr : block->dualRight.front().get())
+                               : (block->dualLeft.empty() ? nullptr : block->dualLeft.front().get());
+      if (target == nullptr) {
+        // The side vanished mid-measurement (removed while probing) - same
+        // "nothing left to apply to" fallback as the null-block case above.
+        autoOffset.resume();
+        obj->setProperty("state", "timeout");
+        break;
+      }
+
+      if (result.gainDeltaDb >= kAutoBalanceSilentDb) {
+        pushChainHistory("param:" + juce::String(target->id) + ":outputGain");
+        // currentDb can't actually be -inf here: a side sitting at true
+        // silence (Vol knob fully closed) would have measured silent
+        // itself and been rejected above, before reaching this branch. If
+        // it somehow were, targetDb stays -inf and gainKnobNormFromDb
+        // floors to fully closed - a safe no-op, not a wrong value.
+        const float targetDb = gainKnobDb(target->outputGainNormalized) + result.gainDeltaDb;
+        target->outputGainNormalized = juce::jlimit(0.0f, 1.0f, gainKnobNormFromDb(targetDb));
+        deferredRevisionBump();
+      }
+
+      autoOffset.resume();
+      obj->setProperty("state", "done");
+      obj->setProperty("gainDeltaDb", result.gainDeltaDb);
+      obj->setProperty("boostedSide", result.boostRight ? "R" : "L");
+      juce::Logger::writeToLog(
+          "[AutoBalance] Balanced Dual Mono block " + juce::String(blockId) + " (" +
+          juce::String(result.boostRight ? "R" : "L") + " +" +
+          juce::String(result.gainDeltaDb, 2) + " dB)");
       break;
     }
     case AutoOffset::State::RampBack:

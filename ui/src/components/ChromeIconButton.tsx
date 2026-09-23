@@ -182,10 +182,10 @@ ChromeIconButton.displayName = 'ChromeIconButton';
  * - idle: BORDER + MUTED.
  */
 interface ChromeTextButtonProps {
-  onClick: () => void;
-  /** e.g. the chain-map strip's chip: double-click bypasses the block
-      instead of navigating (see ChainMapStrip.tsx). */
-  onDoubleClick?: () => void;
+  /** Takes the event (rather than `() => void`) so a caller can branch on a
+      held modifier - e.g. the chain-map strip's chip: Alt/Option-click
+      bypasses the block instead of navigating (see ChainMapStrip.tsx). */
+  onClick: (e: React.MouseEvent) => void;
   help: string;
   children: React.ReactNode;
   armed?: boolean;
@@ -219,12 +219,11 @@ const textChrome = (
 };
 
 export const ChromeTextButton = React.forwardRef<HTMLButtonElement, ChromeTextButtonProps>(
-  ({ onClick, onDoubleClick, help, children, armed = false, open = false, style }, ref) => (
+  ({ onClick, help, children, armed = false, open = false, style }, ref) => (
     <button
       ref={ref}
       type="button"
       onClick={onClick}
-      onDoubleClick={onDoubleClick}
       {...helpProps(help)}
       style={{
         ...textBoxStyle(),

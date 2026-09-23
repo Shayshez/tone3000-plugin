@@ -609,9 +609,18 @@ public:
   // the result to the block's own dualAlignOffsetNormalized/dualAlignEnabled/
   // dualLeftInvert/dualRightInvert when it's trustworthy. cancelAutoOffset()
   // cancels an in-flight measurement (state-agnostic).
+  //
+  // Auto balance shares this same engine (one probe, two independent
+  // consumers - see AutoOffset::Result's gainDeltaDb/boostRight/silent):
+  // armDualAutoBalance(blockId) arms the identical sweep; pollDualAutoBalance
+  // (blockId) writes the quieter side's own child outputGainNormalized
+  // instead of the align/Ø fields, and never touches them. cancelAutoOffset()
+  // cancels either one, whichever is in flight.
   void cancelAutoOffset();
   bool armDualAutoAlign(const std::string& blockId);
   juce::var pollDualAutoAlign(const std::string& blockId);
+  bool armDualAutoBalance(const std::string& blockId);
+  juce::var pollDualAutoBalance(const std::string& blockId);
 
   // Location of the on-disk diagnostic log. Single source of truth shared by the
   // FileLogger setup and the UI's "copy/reveal logs" actions so they never drift.
@@ -1334,6 +1343,11 @@ private:
   // mid-measurement, so a stray audio-thread read between Captured and Idle
   // can't misfire against an in-flight probe.
   std::string autoOffsetTargetBlockId;
+  // Shared guard/arm logic for armDualAutoAlign and armDualAutoBalance: both
+  // just need "is this a real DUAL_MONO block, is the engine free" before
+  // claiming it for blockId and calling autoOffset.arm() - factored out so
+  // the two public entry points don't duplicate it.
+  bool armAutoOffsetFor(const std::string& blockId);
 
   // Post-chain pan gain, one per output channel (see imageMatrixGains in
   // Processor.cpp), smoothed so pan moves don't zipper. At the centered

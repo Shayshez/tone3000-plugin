@@ -4,7 +4,7 @@ import { useSortable, isSortable } from '@dnd-kit/react/sortable';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import type { DragEndEvent, Sensors } from '@dnd-kit/dom';
 import { arrayMove } from '@dnd-kit/helpers';
-import { ClipboardPaste, Plus } from './icons';
+import { ClipboardPaste, Home, Plus } from './icons';
 import { ChromeIconButton, ChromeTextButton } from './ChromeIconButton';
 import { HELP, helpProps } from './helpText';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
@@ -14,6 +14,7 @@ import { blockTypeMenuItems, useTileMenu } from './GalleryBlock';
 import { TileMenu } from './TileMenu';
 import { useToast } from './Toast';
 import {
+  BLACK,
   BORDER,
   BRAND_ORANGE,
   BRAND_YELLOW,
@@ -21,6 +22,7 @@ import {
   GRAY,
   HIGHLIGHT,
   MUTED,
+  WHITE,
 } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
 import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
@@ -115,6 +117,45 @@ interface ChainMapStripProps {
       canPaste/actions.pasteBlock(index) gating GalleryLane's own "+"
       tiles use, threaded down from ChainView via ChainBlock. */
   onPasteBlockAt: ((index: number) => void) | null;
+  /** The strip's own persistent Home chip: jumps straight to the gallery
+      from anywhere, regardless of navigation depth - unlike a chip's own
+      jump (which only ever lands on that block), this always leaves the
+      whole detail view. */
+  onGoHome: () => void;
+  /** L/R child tabs that expand the currently-open chip inline (see
+      ChainMapChildTab) - omitted/undefined for a block with no children of
+      its own. Today only a Dual Mono block populates this. */
+  currentChildTabs?: ChainMapChildTab[];
+}
+
+/** One tab in a Dual Mono chip's inline-expanded state (see
+    currentChildTabs) - a mini version of the ordinary chip + EQ-mark
+    pattern above, reused rather than a separate "L·EQ" label so this stays
+    as compact as the rest of the strip. A side (L/R) carries `eq`; a plain
+    target with no shortcut of its own (Stereo Processing) omits it. */
+export interface ChainMapChildTab {
+  /** Also this tab's accessible name (aria-label/help) when `icon` replaces
+      it visually. */
+  label: string;
+  /** Rendered in place of `label`'s text when present - the Stereo tab uses
+      this for the same two-overlapping-rings glyph the gallery tile's own
+      Stereo shortcut and TileChannelBadge use (GalleryBlock's StereoGlyph),
+      since "Stereo" spelled out read as heavier than a single-letter L/R
+      side by side. */
+  icon?: React.ReactNode;
+  /** This tab's own view is currently showing. */
+  active: boolean;
+  onSelect: () => void;
+  eq?: {
+    /** This side's EQ view is currently showing - colors the mark GRAY
+        instead of the idle dark tint, same convention as an ordinary
+        chip's own mark colors it GRAY instead of MUTED. */
+    active: boolean;
+    /** This side's EQ is on and not flat - colors the mark BRAND_ORANGE,
+        same convention as eqModified above. */
+    modified: boolean;
+    onSelect: () => void;
+  };
 }
 
 /** The "+" insert-slot chip: sortable like every other chip (dragging a tone
@@ -182,6 +223,122 @@ const ChainMapAddChip: React.FC<{
   );
 };
 
+/** Persistent, always-first chip: jumps straight to the gallery from
+    anywhere, any depth - not sortable (it isn't a chain member), not part
+    of `localItems`. Doubles as the strip's own "home" - see
+    ChainBlockHeaderNav's onGoHome. */
+const ChainMapHomeChip: React.FC<{ onGoHome: () => void }> = ({ onGoHome }) => (
+  <div style={{ width: `${CHIP_WIDTH}rem`, height: `${CHIP_HEIGHT}rem`, flexShrink: 0 }}>
+    <ChromeIconButton
+      help={HELP.chainMapHome}
+      onClick={onGoHome}
+      style={{ width: '100%', height: '100%' }}
+    >
+      <Home />
+    </ChromeIconButton>
+  </div>
+);
+
+/** The row of L/R tabs appended inline when the current chip expands (see
+    ChainMapChildTab and ChainMapTile's `expanded`) - grows the chip into a
+    wider pill rather than floating a separate panel below it, so there's
+    exactly one shape to look at, not two. Each tab is a mini version of an
+    ordinary chip: a label (jumps to that side's plain view) plus the exact
+    same gray/orange EQ-mark underline every top-level chip already carries
+    (jumps straight to that side's EQ) - reusing that established mark
+    instead of a second labeled button per side keeps this compact. */
+const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) => (
+  <div style={{ display: 'flex', alignItems: 'stretch', gap: '2rem', padding: '0 4rem 0 2rem' }}>
+    {tabs.map((tab) => (
+      <div
+        key={tab.label}
+        style={{ position: 'relative', width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem` }}
+      >
+        <button
+          type="button"
+          onClick={tab.onSelect}
+          aria-label={tab.icon ? tab.label : undefined}
+          style={{
+            all: 'unset',
+            boxSizing: 'border-box',
+            cursor: 'pointer',
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '5rem',
+            fontFamily: 'inherit',
+            // Deliberately smaller/lighter than the chip's own "DUAL" label
+            // (CHIP_FONT_SIZE, weight 600) - these are secondary
+            // sub-navigation, not the block's name, and reading as equally
+            // heavy made the expanded pill feel bulkier than it needed to.
+            fontSize: `${CHIP_FONT_SIZE - 2}rem`,
+            fontWeight: 500,
+            color: tab.active ? BLACK : 'rgba(0, 0, 0, 0.6)',
+            backgroundColor: tab.active ? 'rgba(0, 0, 0, 0.08)' : 'transparent',
+          }}
+        >
+          {tab.icon ?? tab.label}
+        </button>
+        {tab.eq && (
+          <button
+            type="button"
+            className="chain-map-eq-btn"
+            onClick={tab.eq.onSelect}
+            {...helpProps(HELP.chainMapEqMark)}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: `${EQ_MARK_BOTTOM_INSET}rem`,
+              height: `${EQ_MARK_HIT_HEIGHT}rem`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+            }}
+          >
+            <span
+              className="chain-map-eq-pill"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem`,
+                height: `${EQ_MARK_HIT_HEIGHT}rem`,
+                borderRadius: `${EQ_MARK_HIT_HEIGHT / 2}rem`,
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: `${EQ_MARK_WIDTH}rem`,
+                  height: `${EQ_MARK_HEIGHT}rem`,
+                  borderRadius: `${EQ_MARK_HEIGHT / 2}rem`,
+                  // This tab always sits on the expanded pill's own WHITE
+                  // background (unlike an ordinary chip, which is only white
+                  // when it's the current one) - MUTED (near-white) would be
+                  // invisible here even at rest, so the idle state uses a
+                  // dark tint instead.
+                  backgroundColor: tab.eq.modified
+                    ? BRAND_ORANGE
+                    : tab.eq.active
+                      ? GRAY
+                      : 'rgba(0, 0, 0, 0.3)',
+                }}
+              />
+            </span>
+          </button>
+        )}
+      </div>
+    ))}
+  </div>
+);
+
 /** A tone/IR/CAB chip: navigable (main body), sortable (drag anywhere on the
     main body - see the handle note below), and carries the always-present EQ
     shortcut mark.
@@ -203,7 +360,10 @@ const ChainMapTile: React.FC<{
   isCurrent: boolean;
   onSelect: (blockId: string) => void;
   onSelectEq: (blockId: string) => void;
-}> = ({ item, index, isCurrent, onSelect, onSelectEq }) => {
+  /** Only ever passed (and only ever non-empty) for the current chip - see
+      ChainMapChildTab. */
+  childTabs?: ChainMapChildTab[];
+}> = ({ item, index, isCurrent, onSelect, onSelectEq, childTabs }) => {
   const { ref, handleRef, isDragging } = useSortable({
     id: item.blockId,
     index,
@@ -225,59 +385,109 @@ const ChainMapTile: React.FC<{
     });
   };
 
+  // Only the current chip ever expands, and only when it actually has
+  // child tabs to offer (see ChainMapChildTab) - a Dual Mono block's L/R
+  // today. Grows into a wider pill inline (pushing later chips right)
+  // rather than a floating panel: exactly one shape to read, and the
+  // strip's own horizontal scroll already exists to absorb the extra
+  // width instead of needing new layout machinery for it.
+  const expanded = isCurrent && !!childTabs && childTabs.length > 0;
+
   return (
-    // Positioning context for the EQ mark below (absolutely placed inside
-    // this same fixed CHIP_WIDTH × CHIP_HEIGHT box); also carries the
-    // bypass dimming (so a bypassed block with a modified EQ still shows
-    // both signals) and the drag-ghost dimming, combined.
+    // Carries the bypass dimming (so a bypassed block with a modified EQ
+    // still shows both signals) and the drag-ghost dimming, combined; when
+    // expanded, also the shared white pill background/radius the two
+    // segments (chip + tabs) sit inside - overflow:hidden so neither
+    // segment's own corners peek out past the pill's rounded ones.
     <div
       ref={ref}
       style={{
         position: 'relative',
-        width: `${CHIP_WIDTH}rem`,
+        display: expanded ? 'flex' : undefined,
+        alignItems: expanded ? 'stretch' : undefined,
+        width: expanded ? undefined : `${CHIP_WIDTH}rem`,
         height: `${CHIP_HEIGHT}rem`,
+        flexShrink: 0,
+        borderRadius: expanded ? '6rem' : undefined,
+        overflow: expanded ? 'hidden' : undefined,
+        backgroundColor: expanded ? WHITE : undefined,
         opacity: (enabled ? 1 : DISABLED_OPACITY) * (isDragging ? DRAG_GHOST_OPACITY : 1),
       }}
     >
-      <ChromeTextButton
-        ref={handleRef}
-        onClick={() => onSelect(item.blockId)}
-        // Double-click toggles bypass, reusing the exact same
-        // setBlockParam('enabled', ...) action the header's Power button
-        // uses. A double-click is two real click events before the browser
-        // recognizes a dblclick, so the single click's own onSelect fires
-        // first (navigating here if this wasn't already the open block) -
-        // deliberately not suppressed: swallowing that first click would
-        // need a timer delaying every ordinary single click's navigation
-        // (the far more common case) just to special-case a double-click,
-        // and "jump to this block, then bypass it" reads as one coherent
-        // action rather than a glitch. Distance-based drag activation can't
-        // misfire from this either: each click of a double-click is its own
-        // fresh near-zero-movement press/release, tracked independently by
-        // the sensor (confirmed from its source, not assumed).
-        onDoubleClick={handleToggleEnabled}
-        help={`${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
-          enabled ? '' : ' · Bypassed'
-        }${modified ? ' · EQ' : ''} · Double-click: bypass.`}
-        open={isCurrent}
-        style={{
-          width: '100%',
-          height: '100%',
-          fontSize: `${CHIP_FONT_SIZE}rem`,
-          // Active (non-bypassed), not the one currently open: a thin
-          // BRAND_YELLOW outline on the plain idle chrome (no fill) -
-          // enough to read as "on" at a glance without turning most of
-          // the strip solid yellow (a full armed fill, tried first,
-          // overwhelmed the row since most blocks in a chain are
-          // active and only a couple are usually bypassed). The
-          // currently-open chip already reads as unambiguously current
-          // via its own white `open` fill, so it skips this accent.
-          ...(enabled && !isCurrent ? { border: `1rem solid ${BRAND_YELLOW}` } : null),
-        }}
+      {/* Positioning context for the EQ mark below (absolutely placed
+          inside this same fixed CHIP_WIDTH × CHIP_HEIGHT box) - stays this
+          exact size even when the outer box above grows for the tabs
+          beside it. */}
+      <div
+        style={{ position: 'relative', width: `${CHIP_WIDTH}rem`, height: '100%', flexShrink: 0 }}
       >
-        {BLOCK_TYPE_LABEL[item.blockType]}
-      </ChromeTextButton>
-      {/* EQ shortcut: always present and always clickable (jumps in AND
+        {expanded ? (
+          <button
+            ref={handleRef}
+            type="button"
+            onClick={(e) => (e.altKey ? handleToggleEnabled() : onSelect(item.blockId))}
+            {...helpProps(
+              `${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
+                enabled ? '' : ' · Bypassed'
+              }${modified ? ' · EQ' : ''} · ⌥-click: bypass.`
+            )}
+            style={{
+              all: 'unset',
+              boxSizing: 'border-box',
+              cursor: 'pointer',
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'inherit',
+              fontSize: `${CHIP_FONT_SIZE}rem`,
+              fontWeight: 600,
+              color: BLACK,
+            }}
+          >
+            {BLOCK_TYPE_LABEL[item.blockType]}
+          </button>
+        ) : (
+          <ChromeTextButton
+            ref={handleRef}
+            onClick={(e) => (e.altKey ? handleToggleEnabled() : onSelect(item.blockId))}
+            // Alt/Option-click toggles bypass, reusing the exact same
+            // setBlockParam('enabled', ...) action the header's Power button
+            // uses - same convention as every other secondary action in this
+            // app (KnobControl/BlockEqView/IrEnvelopeGraph's own Alt-click
+            // resets). Used to be a double-click, but the strip's own
+            // navigation made that unreliable: clicking any OTHER chip first
+            // (the double-click's first of two real clicks) could make the
+            // currently-expanded chip collapse (see ChainMapTile's
+            // `expanded`), shifting every chip after it in the row before
+            // the second click landed - so a double-click meant to bypass
+            // one block could navigate to a different one instead. A single
+            // click with a held modifier has no second click to land
+            // anywhere, so it can't be disrupted by that shift at all.
+            help={`${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
+              enabled ? '' : ' · Bypassed'
+            }${modified ? ' · EQ' : ''} · ⌥-click: bypass.`}
+            open={isCurrent}
+            style={{
+              width: '100%',
+              height: '100%',
+              fontSize: `${CHIP_FONT_SIZE}rem`,
+              // Active (non-bypassed), not the one currently open: a thin
+              // BRAND_YELLOW outline on the plain idle chrome (no fill) -
+              // enough to read as "on" at a glance without turning most of
+              // the strip solid yellow (a full armed fill, tried first,
+              // overwhelmed the row since most blocks in a chain are
+              // active and only a couple are usually bypassed). The
+              // currently-open chip already reads as unambiguously current
+              // via its own white `open` fill, so it skips this accent.
+              ...(enabled && !isCurrent ? { border: `1rem solid ${BRAND_YELLOW}` } : null),
+            }}
+          >
+            {BLOCK_TYPE_LABEL[item.blockType]}
+          </ChromeTextButton>
+        )}
+        {/* EQ shortcut: always present and always clickable (jumps in AND
           opens the EQ view directly, unlike the rest of the chip), so it
           reads as a standing affordance rather than something that only
           appears once you've already gone looking for it. Color is the
@@ -291,51 +501,53 @@ const ChainMapTile: React.FC<{
           past the chip (overflowY: hidden). Not part of the sortable
           handle (see the component doc above), so it can never misfire as
           a drag-start. */}
-      <button
-        type="button"
-        className="chain-map-eq-btn"
-        onClick={() => onSelectEq(item.blockId)}
-        {...helpProps(HELP.chainMapEqMark)}
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: `${EQ_MARK_BOTTOM_INSET}rem`,
-          height: `${EQ_MARK_HIT_HEIGHT}rem`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 0,
-          border: 'none',
-          background: 'transparent',
-          cursor: 'pointer',
-        }}
-      >
-        <span
-          className="chain-map-eq-pill"
+        <button
+          type="button"
+          className="chain-map-eq-btn"
+          onClick={() => onSelectEq(item.blockId)}
+          {...helpProps(HELP.chainMapEqMark)}
           style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: `${EQ_MARK_BOTTOM_INSET}rem`,
+            height: `${EQ_MARK_HIT_HEIGHT}rem`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem`,
-            height: `${EQ_MARK_HIT_HEIGHT}rem`,
-            borderRadius: `${EQ_MARK_HIT_HEIGHT / 2}rem`,
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
           }}
         >
           <span
-            aria-hidden
+            className="chain-map-eq-pill"
             style={{
-              width: `${EQ_MARK_WIDTH}rem`,
-              height: `${EQ_MARK_HEIGHT}rem`,
-              borderRadius: `${EQ_MARK_HEIGHT / 2}rem`,
-              // MUTED (near-white) is invisible on this one chip's own
-              // WHITE `open` fill - GRAY instead, still reading as the
-              // same idle/unmodified signal everywhere else.
-              backgroundColor: modified ? BRAND_ORANGE : isCurrent ? GRAY : MUTED,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem`,
+              height: `${EQ_MARK_HIT_HEIGHT}rem`,
+              borderRadius: `${EQ_MARK_HIT_HEIGHT / 2}rem`,
             }}
-          />
-        </span>
-      </button>
+          >
+            <span
+              aria-hidden
+              style={{
+                width: `${EQ_MARK_WIDTH}rem`,
+                height: `${EQ_MARK_HEIGHT}rem`,
+                borderRadius: `${EQ_MARK_HEIGHT / 2}rem`,
+                // MUTED (near-white) is invisible on this one chip's own
+                // WHITE `open` fill - GRAY instead, still reading as the
+                // same idle/unmodified signal everywhere else.
+                backgroundColor: modified ? BRAND_ORANGE : isCurrent ? GRAY : MUTED,
+              }}
+            />
+          </span>
+        </button>
+      </div>
+      {expanded && <ChainMapChildTabRow tabs={childTabs} />}
     </div>
   );
 };
@@ -367,15 +579,23 @@ const ChainMapTile: React.FC<{
  * strip staying swipe-scrollable - a deliberate, accepted trade-off).
  *
  * Every chip is the same fixed size (uniform width/height regardless of
- * label) and the whole row centers itself within the header when it fits.
- * The centering is the classic flex "shrink-to-content, cap at the parent"
- * trick rather than a measured/JS toggle, so it degrades cleanly on old
- * WebKit too (see vite.config's build target note): the outer flex box
- * always centers; the inner scroller sizes to its content up to
- * `max-width: 100%` of that outer box, so once the chips overflow, the
- * inner fills the full available width (centering a full-width box is a
- * no-op) and scrolls internally from the left, exactly like the old
- * left-aligned behavior — no measurement, no resize listener.
+ * label), and the whole row is left-aligned rather than centered - it was
+ * centered once (the classic flex "shrink-to-content, cap at the parent"
+ * trick), but that meant ANY change to the row's total content width
+ * silently shifted every chip's on-screen position, including ones well to
+ * the left of whatever changed. The currently-open chip's inline expand/
+ * collapse (see ChainMapTile's `expanded`, driven by isCurrent) changes
+ * that total width on every navigation in or out of a block with childTabs
+ * (today, only Dual Mono) - centered, that recentered the *entire* row
+ * under the pointer the instant you clicked a different chip, which is
+ * exactly what made a double-click bypass gesture on some OTHER chip
+ * unreliable (see the bypass Alt-click note below - that's since moved off
+ * double-click for this same reason, but left-aligning the row is still the
+ * right fix for the underlying instability, not just a workaround for the
+ * gesture that exposed it). Left-aligned, collapsing/expanding a chip only
+ * shifts chips *after* it in the row, not the ones before it or the Home
+ * chip. The inner scroller still caps at `max-width: 100%` of the outer box
+ * and scrolls internally past that, unchanged.
  */
 export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
   items,
@@ -384,6 +604,8 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
   onSelectEq,
   onAdd,
   onPasteBlockAt,
+  onGoHome,
+  currentChildTabs,
 }) => {
   const wheelScrollRef = useHorizontalWheelScroll<HTMLDivElement>();
   const actions = useChainActions();
@@ -424,7 +646,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
     <div
       style={{
         display: 'flex',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
         flex: 1,
         minWidth: 0,
       }}
@@ -449,6 +671,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
             One rule for every chip's mark, same idiom as TileMenu's own
             hover row. */}
         <style>{`.chain-map-eq-btn:hover .chain-map-eq-pill { background-color: ${HIGHLIGHT}; }`}</style>
+        <ChainMapHomeChip onGoHome={onGoHome} />
         <DragDropProvider sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           {localItems.map((item, index) =>
             isInsertSlot(item) ? (
@@ -467,6 +690,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
                 isCurrent={item.blockId === currentBlockId}
                 onSelect={onSelect}
                 onSelectEq={onSelectEq}
+                childTabs={item.blockId === currentBlockId ? currentChildTabs : undefined}
               />
             )
           )}

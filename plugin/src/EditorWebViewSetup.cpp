@@ -840,6 +840,22 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           guarded(1, juce::var(), [editor](const juce::Array<juce::var>& args) {
             return editor->processor.pollDualAutoAlign(args[0].toString().toStdString());
           }))
+      .withNativeFunction(
+          // Same shared probe engine as Align above (one arm/cancel, two
+          // independent consumers) - arms the identical sweep, but
+          // pollDualAutoBalance applies a loudness match to the quieter
+          // side's own Vol instead of a delay/polarity correction.
+          // (blockId): arm; poll with pollDualAutoBalance;
+          // cancelAutoOffset above cancels either one.
+          "armDualAutoBalance", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.armDualAutoBalance(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
+          "pollDualAutoBalance",
+          guarded(1, juce::var(), [editor](const juce::Array<juce::var>& args) {
+            return editor->processor.pollDualAutoBalance(args[0].toString().toStdString());
+          }))
       // --- Misc ---------------------------------------------------------------
       .withNativeFunction(
           // Single source of truth is the CMake project version; the UI uses

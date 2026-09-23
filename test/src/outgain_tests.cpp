@@ -79,14 +79,19 @@ float maxAbsDiff(const std::vector<float>& a, const std::vector<float>& b, size_
   return m;
 }
 
-constexpr size_t kSkip = 0;  // no cross-run smoother drift here; see comment above
-constexpr double kUnityNorm = 0.5;    // 0 dB relative (gainDb formula's center)
-constexpr double kReducedNorm = 0.0;  // -24 dB relative: (0.0 - 0.5) * 48
+constexpr size_t kSkip = 0;  // no cross-null drift here; see comment above
+constexpr double kUnityNorm = 0.5;      // 0 dB relative (gainKnobDb's center)
+constexpr double kReducedNorm = 0.125;  // ~-24 dB relative (see kReducedDb below)
 constexpr double kMix = 0.5;
-// Ratio between the two outputGain settings' linear gain. Derived from the
-// documented normalized->dB mapping alone (0.5 span == 48 dB), not from the
-// short-IR cab pad offset, so it holds regardless of that constant.
-const double kGainRatio = std::pow(10.0, ((kReducedNorm - kUnityNorm) * 48.0) / 20.0);
+// Below kUnityNorm, gainKnobDb (Processor.cpp) is logarithmic rather than
+// the flat linear map used at/above it - true silence at fully closed
+// instead of flooring at a still-audible -24 dB. 0.125 lands at
+// 40*log10(0.125/0.5) = 40*log10(0.25) ~= -24.08 dB, deliberately chosen to
+// land close to the old fixed -24 dB point these tests were built around,
+// well clear of the near-zero dead zone (kGainKnobSilenceThreshold) where
+// the curve is intentionally not meant to be linear/predictable.
+const double kReducedDb = 40.0 * std::log10(kReducedNorm / 0.5);
+const double kGainRatio = std::pow(10.0, kReducedDb / 20.0);
 }  // namespace
 
 // At mix=0.5, pulling Out Gain down by 24 dB must measurably attenuate the
@@ -110,12 +115,13 @@ TEST(OutGainTest, OutGainAffectsFullSignal) {
   ASSERT_GT(rmsReduced, 0.0) << "reduced-gain run produced silence";
 
   const double measuredDropDb = 20.0 * std::log10(rmsUnity / rmsReduced);
-  std::printf("[OutGainTest] measured drop at mix=0.5, outputGain -24dB: %.2f dB\n", measuredDropDb);
+  std::printf("[OutGainTest] measured drop at mix=0.5, outputGain %.2fdB: %.2f dB\n", kReducedDb,
+              measuredDropDb);
 
   // A wet-only gain would attenuate roughly half the signal's energy (the
-  // wet share), landing well under half the requested 24 dB; the fixed,
+  // wet share), landing well under half the requested ~24 dB; the fixed,
   // post-mix gain scales the whole combined signal, landing close to it.
-  EXPECT_NEAR(measuredDropDb, 24.0, 3.0)
+  EXPECT_NEAR(measuredDropDb, -kReducedDb, 3.0)
       << "Out Gain isn't attenuating the full combined signal - looks wet-only again (issue #99)";
 }
 

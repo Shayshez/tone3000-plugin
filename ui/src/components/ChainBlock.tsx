@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft,
   ArrowLeftRight,
   Bookmark,
-  ChevronRight,
   Combine,
   Copy,
   Download,
@@ -15,18 +13,19 @@ import {
   Link,
   Plus,
   Power,
+  Scale,
   Share,
   Trash2,
   Volume2,
   VolumeX,
 } from './icons';
-import { ChainMapStrip } from './ChainMapStrip';
 import { GearIcon, ToneImage } from './GearIcon';
 import { WaveformDisplay } from './WaveformDisplay';
 import { IrEnvelopeGraph } from './IrEnvelopeGraph';
 import type { EnvelopePatch } from './IrEnvelopeGraph';
 import { useIrWaveform } from '../hooks/useIrWaveform';
 import { useDualAutoAlign } from '../hooks/useDualAutoAlign';
+import { useDualAutoBalance } from '../hooks/useDualAutoBalance';
 import { rem } from '../hooks/useUiScale';
 import { KnobControl } from './KnobControl';
 import { EditableChip, ToggleChip } from './EditableChip';
@@ -81,6 +80,10 @@ import { useBlockNormalizeControlEnabled, useBlockSizeControlEnabled } from './u
 import { useToast } from './Toast';
 import { ChromeIconButton, ChromeTextButton, chromeIcon } from './ChromeIconButton';
 import { T3K_API } from '../t3k/config';
+import { useDetailViewStack, type DetailView } from '../hooks/useDetailViewStack';
+import { ChainBlockHeaderNav } from './ChainBlockHeaderNav';
+import type { ChainMapChildTab } from './ChainMapStrip';
+import { StereoGlyph } from './GalleryBlock';
 import {
   BORDER,
   BRAND_RED,
@@ -947,38 +950,27 @@ interface ChainBlockProps {
   onPasteBlockAt: ((index: number) => void) | null;
   /** Info view fills the center column to the faceplate (Select Tone pattern). */
   onFillToFaceplate?: (fill: boolean) => void;
-  /** Show the EQ panel from the moment this card mounts - the gallery
-      tile's own EQ shortcut button (GalleryBlock's onOpenEq) opens straight
-      into it, the same destination ChainMapStrip's own EQ mark jumps to
-      from inside an already-open block. Read only as showEq's *initial*
-      state below: this component isn't remounted while jumping between
-      blocks via ChainMapStrip (see that component's onSelectEq, which sets
-      showEq directly instead), so this prop only ever matters for a fresh
-      mount - i.e. opening from the gallery, where the card was unmounted a
-      moment ago. */
-  initialShowEq?: boolean;
-  /** Same idea as `initialShowEq`, for a Dual Mono block's own Stereo
-      Processing panel - the gallery tile's own Stereo shortcut button
-      (GalleryBlock's onOpenStereo) opens straight into it. Only matters at
-      mount, same reasoning as `initialShowEq`; meaningless outside the
-      isDualMono branch. */
-  initialShowStereo?: boolean;
-  /** Same idea as `initialShowEq`, for the Info panel - the Dual Mono
-      compact card's per-side Info icon opens straight into a side's full
-      editor with this set (see DualSideCard below). Only matters at mount,
-      same reasoning as `initialShowEq`. */
-  initialShowInfo?: boolean;
-  /** True when this render is a Dual Mono side's own full editor (recursed
+  /** Seeds this card's detail-view stack (see useDetailViewStack) the
+      moment it mounts - 'main' for a plain open, or 'eq'/'stereo'/'info'
+      for a shortcut that opens straight into a sub-view (the gallery
+      tile's own EQ/Stereo buttons, or - for a Dual Mono side - its own
+      EQ/Info buttons via `openChildInitial` below), deliberately seeded
+      without a 'main' entry beneath it since that view was never actually
+      visited. Only matters at genuine mount time: this component isn't
+      remounted while jumping between blocks via ChainMapStrip (that jump
+      calls `view.reset` directly instead - see onSelect/onSelectEq below). */
+  initialView?: DetailView;
+  /** Fires whenever this card's own active sub-view changes (including the
+      initial mount). Only a Dual Mono wrapper actually reads this - it's
+      how the wrapper keeps its chain-strip popover's L/L·EQ/R/R·EQ
+      highlight accurate as a recursed child navigates itself further
+      (toggling its own EQ pill, say) without the wrapper needing to poll
+      or duplicate that state. */
+  onActiveViewChange?: (view: DetailView) => void;
+  /** Set when this render is a Dual Mono side's own full editor (recursed
       into by the isDualMono branch below, not reached through ChainView's
-      own detailBlockId - see that branch's own comment). A dual child has
-      no lane of its own to browse (each side is a fixed single socket, not
-      an insert-slot-bearing lane), so ChainMapStrip's onAdd/onPasteBlockAt
-      would be meaningless here; rather than invent lane semantics for a
-      child, this just swaps the strip for a plain spacer so the header row
-      stays balanced. */
-  hideChainStrip?: boolean;
-  /** Set alongside `hideChainStrip` for a Dual Mono side's own full editor:
-      which wrapper block/side this render actually belongs to. Swap and
+      own detailBlockId - see that branch's own comment): which wrapper
+      block/side this render actually belongs to. Swap and
       Trash in the header must route through the dual-aware actions
       (addToDualSlot/removeDualSlotContent) instead of the ordinary
       swapBlock/removeBlock a ChainBlock instance uses everywhere else -
@@ -990,6 +982,19 @@ interface ChainBlockProps {
       chain - a real bug this fixes: swapping a side's tone from inside its
       own full editor left the whole center panel permanently blank). */
   dualParent?: { blockId: string; isLeftSide: boolean };
+  /** Set alongside `dualParent` when recursing into a Dual Mono side's own
+      full editor: lets that child's ChainBlockHeaderNav render the
+      WRAPPER's own identity (chip id / childTabs / home target) instead of
+      its own, since a dual child has no chip of its own in the top-level
+      chain strip - its `blockId` would never match any chip there. This is
+      what keeps the same top-level strip (Home + the Dual Mono chip,
+      current + expanded with its L/R/Stereo tabs) visible even three levels
+      deep, instead of it disappearing behind a bare spacer. */
+  dualStripContext?: {
+    currentBlockId: string;
+    childTabs: ChainMapChildTab[];
+    onGoHome: () => void;
+  };
 }
 
 /** The detail card (full block view). All mutations come from the
@@ -1006,11 +1011,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   onAddBlockAt,
   onPasteBlockAt,
   onFillToFaceplate,
-  initialShowEq = false,
-  initialShowStereo = false,
-  initialShowInfo = false,
-  hideChainStrip = false,
+  initialView = 'main',
+  onActiveViewChange,
   dualParent,
+  dualStripContext,
 }) => {
   const { blockId, tone, params } = block;
   const actions = useChainActions();
@@ -1146,21 +1150,63 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // than going through ChainView's detailBlockId.
   const [openChildSide, setOpenChildSide] = useState<'left' | 'right' | null>(null);
   const [openChildInitial, setOpenChildInitial] = useState<'eq' | 'info' | null>(null);
+  // Mirrors the open child's own live view.activeView (via its
+  // onActiveViewChange prop below), so the chain-strip popover's
+  // L/L·EQ/R/R·EQ highlight stays correct even after the child navigates
+  // itself further (e.g. toggling its own EQ pill) instead of freezing at
+  // whatever it was first opened to.
+  const [childActiveView, setChildActiveView] = useState<DetailView>('main');
+  // This card's own detail-view stack (see useDetailViewStack) - 'main' is
+  // the plain view, and EQ/Info/(DUAL_MONO only) Stereo Processing are
+  // sub-views pushed onto it. `onBack` is what fires once popping empties
+  // the stack entirely - the top-level "go to gallery" closure ChainView
+  // passed in, or (for a Dual Mono child recursed into below) the parent's
+  // own "close this child" closure. Declared unconditionally, before either
+  // early return (isEq/isDualMono), same "hooks must run every render"
+  // rule already followed elsewhere in this component.
+  const view = useDetailViewStack(initialView, onBack);
+  const showEq = view.activeView === 'eq';
+  const showInfo = view.activeView === 'info';
+  useEffect(() => {
+    onActiveViewChange?.(view.activeView);
+  }, [view.activeView, onActiveViewChange]);
+  // useDetailViewStack only reads `initialView` once, as the seed for its
+  // own useState - it's a genuine "how did this card first open" value, not
+  // a controlled prop, so a normal re-render with a new initialView doesn't
+  // do anything on its own. That's fine for the top-level card (ChainView
+  // never changes initialView on an already-mounted instance - a lateral
+  // ChainMapStrip jump calls view.reset directly instead, see onSelect/
+  // onSelectEq below), but a Dual Mono child recursion (see the isDualMono
+  // branch) reuses the SAME already-mounted child instance whenever the
+  // wrapper's own openChildSide doesn't change - e.g. clicking that side's
+  // EQ-mark tab while its plain view is already open only changes
+  // openChildInitial, not openChildSide, so no mount/unmount happens and
+  // the new 'eq' seed would otherwise be silently ignored. Re-seeding here
+  // on every genuine change (skipping the mount render, which already got
+  // the right value from useState's own initial argument) covers that case
+  // without affecting the top-level path, where this never fires.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (mountedRef.current) {
+      view.reset([initialView]);
+    } else {
+      mountedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialView]);
   // DUAL_MONO only: Stereo Processing (Offset/Ø/Wobble/Crossover/Diffuse/
   // goniometer) - an inline body swap toggled from the header, exactly the
   // same "STEREO button always visible, click to open/close in place"
   // shape the EQ pill already has (an earlier separate-screen version read
   // as an unnecessary extra navigation hop once EQ's own pattern was right
   // there to match).
-  const [showStereo, setShowStereo] = useState(initialShowStereo);
+  const showStereo = view.activeView === 'stereo';
   const [dualStereoProcessingEnabled, setDualStereoProcessingEnabled] = useState(
     params.dualStereoProcessingEnabled ?? true
   );
   const [trimInit, setTrimInit] = useState(params.trimInit ?? false);
   const [trimRelaxed, setTrimRelaxed] = useState(params.trimRelaxed ?? false);
   const [reverse, setReverse] = useState(params.reverse ?? false);
-  const [showEq, setShowEq] = useState(initialShowEq);
-  const [showInfo, setShowInfo] = useState(initialShowInfo);
   const [infoTone, setInfoTone] = useState<Tone | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
@@ -1550,6 +1596,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // the shared useAutoMeasure.
   const { listening: dualAutoAlignListening, toggle: toggleDualAutoAlign } =
     useDualAutoAlign(blockId);
+  // Same shared probe engine, applied to Vol instead of Offset/Ø - see
+  // useDualAutoBalance's own doc comment.
+  const { listening: dualAutoBalanceListening, toggle: toggleDualAutoBalance } =
+    useDualAutoBalance(blockId);
   // Master bypass for the whole Stereo Processing screen (Align + Ø) -
   // does NOT touch any of the dialed-in values (offset, deck, Ø), just
   // forces them neutral at the native level and back - same "Power
@@ -1886,15 +1936,16 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     }
   }, [actions, favorited, favoritesCount, infoTone, tone.id]);
 
-  const handleToggleInfo = useCallback(() => {
-    if (showInfo) {
-      setShowInfo(false);
-      return;
+  // Toggling Info itself is just view.toggle('info') at the icon's own
+  // onClick now; this effect keeps the network fetch that toggle used to
+  // fire inline, reacting to the view actually landing on 'info' instead
+  // (covers both the icon click and a shortcut/breadcrumb jump straight
+  // into Info).
+  useEffect(() => {
+    if (view.activeView === 'info' && actions.authenticated && infoTone?.id !== tone.id) {
+      void fetchInfo(tone.id);
     }
-    setShowEq(false);
-    setShowInfo(true);
-    if (actions.authenticated && infoTone?.id !== tone.id) void fetchInfo(tone.id);
-  }, [actions.authenticated, fetchInfo, infoTone?.id, showInfo, tone.id]);
+  }, [view.activeView, actions.authenticated, fetchInfo, infoTone?.id, tone.id]);
 
   // Expand and swap both land here (mount / tone identity change): orphan
   // any in-flight fetch, drop the stale payload, then fetch the latest tone
@@ -1909,7 +1960,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     setInfoLoading(false);
     setFavoriteOverride(null);
     if (!isLocal && actions.authenticated) void fetchInfo(tone.id, !showInfo);
-    // Only the tone identity; opening/closing the panel is handleToggleInfo.
+    // Only the tone identity; opening/closing the panel is view.toggle('info').
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tone.id]);
 
@@ -1927,7 +1978,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
 
   // ChainBlock isn't remounted when ChainMapStrip's onSelectEq jumps
   // straight from one block's EQ into another's (same instance, new props -
-  // see initialShowEq's own comment) - so the outer overflowY:'auto' card
+  // see initialView's own comment) - so the outer overflowY:'auto' card
   // root (one of the three "hide-scrollbar" divs below) keeps whatever
   // scrollTop the *previous* block left it at. If that block's content
   // needed to scroll and this one doesn't, the browser clamps to the old
@@ -2031,7 +2082,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // across the rest of this component's giant NAM/IR/CAB-oriented return
   // below. Reached only after every hook above has already run (this
   // component isn't remounted while navigating between blocks via
-  // ChainMapStrip - see initialShowEq's own comment - so `isEq` can change
+  // ChainMapStrip - see initialView's own comment - so `isEq` can change
   // between renders of the *same* instance, and conditionally skipping
   // hooks based on it would violate the rules of hooks). Duplicates the
   // small ← BLOCK/ChainMapStrip header every card shares; everything below
@@ -2041,6 +2092,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // else in this block to toggle back to), and a single Output knob (no
   // In, no Mix - see ChainBlockType::EQ's own comment for why neither
   // exists here).
+
   if (isEq) {
     return (
       <div
@@ -2072,88 +2124,39 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             minHeight: 0,
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: '16rem',
-              marginBottom: '16rem',
-              flexShrink: 0,
+          <ChainBlockHeaderNav
+            onPop={view.pop}
+            onGoHome={dualStripContext?.onGoHome ?? onBack}
+            isDualChild={!!dualParent}
+            chainStripItems={chainStripItems}
+            blockId={dualStripContext?.currentBlockId ?? blockId}
+            onSelect={(id) => {
+              onJumpToBlock(id);
+              view.reset(['main']);
             }}
-          >
-            <button
-              type="button"
-              onClick={onBack}
-              {...helpProps(HELP.backToChain)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16rem',
-                flexShrink: 0,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                color: WHITE,
-              }}
-            >
-              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-              <span
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: '16rem',
-                  fontWeight: 400,
-                  textTransform: 'uppercase',
-                  lineHeight: 1.4,
-                }}
-              >
-                Block
-              </span>
-            </button>
-
-            <ChainMapStrip
-              items={chainStripItems}
-              currentBlockId={blockId}
-              onSelect={(id) => {
-                onJumpToBlock(id);
-                setShowEq(false);
-              }}
-              onSelectEq={(id) => {
-                onJumpToBlock(id);
-                setShowEq(true);
-                setShowInfo(false);
-              }}
-              onAdd={onAddBlockAt}
-              onPasteBlockAt={onPasteBlockAt}
-            />
-
-            <div
-              aria-hidden
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16rem',
-                flexShrink: 0,
-                visibility: 'hidden',
-                pointerEvents: 'none',
-              }}
-            >
-              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-              <span
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: '16rem',
-                  fontWeight: 400,
-                  textTransform: 'uppercase',
-                  lineHeight: 1.4,
-                }}
-              >
-                Block
-              </span>
-            </div>
-          </div>
+            onSelectEq={(id) => {
+              onJumpToBlock(id);
+              // ['main', 'eq'], not ['eq'] alone: unlike a gallery tile's own
+              // EQ shortcut (whose 'main' genuinely was never visited, by
+              // design - see ChainView's initialDetailView), this is a
+              // LATERAL jump between two blocks that are both already
+              // inside the detail experience. Seeding without 'main' meant
+              // toggling EQ off (view.toggle('eq') -> pop() with a
+              // single-entry stack) called this card's onExit - "leave the
+              // whole detail view" - landing all the way back on the
+              // gallery instead of this block's own compact view, even
+              // though the user never asked to leave. With 'main' beneath
+              // it, the first EQ-toggle-off (or back-arrow press) reveals
+              // this block's own main view, matching what happens when you
+              // reach the same EQ via a plain jump-then-toggle; a second
+              // back-arrow press still reaches the gallery, one level at a
+              // time, same as everywhere else in this stack.
+              view.reset(['main', 'eq']);
+            }}
+            onAddBlockAt={onAddBlockAt}
+            onPasteBlockAt={onPasteBlockAt}
+            currentChildTabs={dualStripContext?.childTabs}
+          />
 
           <div
             style={{
@@ -2312,6 +2315,77 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     const dualLeft = topDualLeftChild;
     const dualRight = topDualRightChild;
 
+    const openChild = (side: 'left' | 'right', initial: 'eq' | 'info' | null) => {
+      setOpenChildSide(side);
+      setOpenChildInitial(initial);
+      setChildActiveView(initial ?? 'main');
+    };
+
+    // Chain-strip tabs for this block's own chip (see ChainMapStrip's
+    // currentChildTabs): a direct L / R jump, each with the exact same
+    // gray/orange EQ-mark underline every ordinary chip already uses for
+    // its own EQ shortcut - reusing that established idiom here instead of
+    // a separate "L·EQ" label keeps this compact rather than doubling the
+    // tab count. Always available regardless of whether a child is
+    // currently open. Highlight tracks openChildSide + the live
+    // childActiveView (kept accurate by onActiveViewChange above), not
+    // just the side's initial seed. A side with nothing loaded has no
+    // target to jump to, so it's left out rather than offered as a dead
+    // click. Computed before the recursion return below since a recursed
+    // child needs this same tab list too (see dualStripContext).
+    const dualChildTabs: ChainMapChildTab[] = [
+      ...(dualLeft
+        ? [
+            {
+              label: 'L',
+              active: openChildSide === 'left' && childActiveView !== 'eq',
+              onSelect: () => openChild('left', null),
+              eq: {
+                active: openChildSide === 'left' && childActiveView === 'eq',
+                modified: (dualLeft.params.eq?.enabled ?? false) && !isEqFlat(dualLeft.params.eq),
+                onSelect: () => openChild('left', 'eq'),
+              },
+            },
+          ]
+        : []),
+      ...(dualRight
+        ? [
+            {
+              label: 'R',
+              active: openChildSide === 'right' && childActiveView !== 'eq',
+              onSelect: () => openChild('right', null),
+              eq: {
+                active: openChildSide === 'right' && childActiveView === 'eq',
+                modified: (dualRight.params.eq?.enabled ?? false) && !isEqFlat(dualRight.params.eq),
+                onSelect: () => openChild('right', 'eq'),
+              },
+            },
+          ]
+        : []),
+      // Plain tab, no per-side EQ mark - jumps straight to this block's own
+      // Stereo (Align) view, closing whichever child is open. Same closure
+      // whether clicked from the compact wrapper or from deep inside a
+      // recursed child (see dualStripContext below), since both render this
+      // same tab list. Icon, not text (see ChainMapChildTab.icon) - the same
+      // two-overlapping-rings glyph the gallery tile's own Stereo shortcut
+      // uses, so this reads as a match for that shortcut rather than a
+      // third differently-styled label next to L/R.
+      ...(dualLeft && dualRight
+        ? [
+            {
+              label: 'Stereo Processing',
+              icon: <StereoGlyph size={16} />,
+              active: openChildSide == null && view.activeView === 'stereo',
+              onSelect: () => {
+                setOpenChildSide(null);
+                setOpenChildInitial(null);
+                view.toggle('stereo');
+              },
+            },
+          ]
+        : []),
+    ];
+
     // Recurse into the exact same ChainBlock card every ordinary NAM/IR/CAB
     // block uses, for whichever side is open - "Navigate", not a second
     // rendering path (see this session's design discussion, recorded in
@@ -2323,7 +2397,12 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     // render blank forever for an id it can never confirm - see the
     // research this plan was built on). onBack here only clears this local
     // state - it never touches ChainView, sessionStorage, or gallery
-    // scroll-restore, because we never left this Dual Mono block.
+    // scroll-restore, because we never left this Dual Mono block. The
+    // child still gets the WRAPPER's real chainStripItems/onJumpToBlock/
+    // onAddBlockAt/onPasteBlockAt (not dummies) plus dualStripContext, so
+    // its own ChainBlockHeaderNav renders the exact same top-level strip -
+    // Home chip + this block's chip, current and expanded with these same
+    // L/R/Stereo tabs - instead of hiding it three levels deep.
     if (openChildSide != null) {
       const childToOpen = openChildSide === 'left' ? dualLeft : dualRight;
       if (childToOpen) {
@@ -2333,18 +2412,22 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             namDownstream={false}
             sampleRate={sampleRate}
             namSlimSizeDefault={namSlimSizeDefault}
-            initialShowEq={openChildInitial === 'eq'}
-            initialShowInfo={openChildInitial === 'info'}
-            hideChainStrip
+            initialView={openChildInitial ?? 'main'}
+            onActiveViewChange={setChildActiveView}
             dualParent={{ blockId, isLeftSide: openChildSide === 'left' }}
+            dualStripContext={{
+              currentBlockId: blockId,
+              childTabs: dualChildTabs,
+              onGoHome: onBack,
+            }}
             onBack={() => {
               setOpenChildSide(null);
               setOpenChildInitial(null);
             }}
-            chainStripItems={[]}
-            onJumpToBlock={() => {}}
-            onAddBlockAt={() => {}}
-            onPasteBlockAt={null}
+            chainStripItems={chainStripItems}
+            onJumpToBlock={onJumpToBlock}
+            onAddBlockAt={onAddBlockAt}
+            onPasteBlockAt={onPasteBlockAt}
           />
         );
       }
@@ -2353,11 +2436,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
       // restore could still do it) - fall back to the compact card instead
       // of rendering nothing.
     }
-
-    const openChild = (side: 'left' | 'right', initial: 'eq' | 'info' | null) => {
-      setOpenChildSide(side);
-      setOpenChildInitial(initial);
-    };
 
     return (
       <div
@@ -2389,88 +2467,26 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             minHeight: 0,
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: '16rem',
-              marginBottom: '16rem',
-              flexShrink: 0,
+          <ChainBlockHeaderNav
+            onPop={view.pop}
+            onGoHome={dualStripContext?.onGoHome ?? onBack}
+            currentChildTabs={dualStripContext?.childTabs ?? dualChildTabs}
+            isDualChild={!!dualParent}
+            chainStripItems={chainStripItems}
+            blockId={dualStripContext?.currentBlockId ?? blockId}
+            onSelect={(id) => {
+              onJumpToBlock(id);
+              view.reset(['main']);
             }}
-          >
-            <button
-              type="button"
-              onClick={onBack}
-              {...helpProps(HELP.backToChain)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16rem',
-                flexShrink: 0,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                color: WHITE,
-              }}
-            >
-              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-              <span
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: '16rem',
-                  fontWeight: 400,
-                  textTransform: 'uppercase',
-                  lineHeight: 1.4,
-                }}
-              >
-                Block
-              </span>
-            </button>
-
-            <ChainMapStrip
-              items={chainStripItems}
-              currentBlockId={blockId}
-              onSelect={(id) => {
-                onJumpToBlock(id);
-                setShowEq(false);
-              }}
-              onSelectEq={(id) => {
-                onJumpToBlock(id);
-                setShowEq(true);
-                setShowInfo(false);
-              }}
-              onAdd={onAddBlockAt}
-              onPasteBlockAt={onPasteBlockAt}
-            />
-
-            <div
-              aria-hidden
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '16rem',
-                flexShrink: 0,
-                visibility: 'hidden',
-                pointerEvents: 'none',
-              }}
-            >
-              <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-              <span
-                style={{
-                  fontFamily: FONT_MONO,
-                  fontSize: '16rem',
-                  fontWeight: 400,
-                  textTransform: 'uppercase',
-                  lineHeight: 1.4,
-                }}
-              >
-                Block
-              </span>
-            </div>
-          </div>
+            onSelectEq={(id) => {
+              onJumpToBlock(id);
+              // ['main', 'eq'], not ['eq'] alone - see the isDualMono
+              // branch's own onSelectEq comment below for why.
+              view.reset(['main', 'eq']);
+            }}
+            onAddBlockAt={onAddBlockAt}
+            onPasteBlockAt={onPasteBlockAt}
+          />
 
           <div
             style={{
@@ -2580,10 +2596,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     armed={eqActive}
                     open={showEq}
                     help={HELP.eqToggle}
-                    onClick={() => {
-                      setShowEq((prev) => !prev);
-                      setShowStereo(false);
-                    }}
+                    onClick={() => view.toggle('eq')}
                   >
                     EQ
                   </ChromeTextButton>
@@ -2637,10 +2650,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       }
                       open={showStereo}
                       help={HELP.dualAlignToggle}
-                      onClick={() => {
-                        setShowStereo((prev) => !prev);
-                        setShowEq(false);
-                      }}
+                      onClick={() => view.toggle('stereo')}
                     >
                       STEREO
                     </ChromeTextButton>
@@ -2886,14 +2896,31 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         }}
                       />
                       {dualLeft && dualRight && (
-                        <ChromeIconButton
-                          tone="link"
-                          on={dualLinked}
-                          help={HELP.dualLink}
-                          onClick={handleToggleDualLinked}
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '8rem',
+                          }}
                         >
-                          <Link size={ICON_SIZE} />
-                        </ChromeIconButton>
+                          <ChromeIconButton
+                            tone="link"
+                            on={dualLinked}
+                            help={HELP.dualLink}
+                            onClick={handleToggleDualLinked}
+                          >
+                            <Link size={ICON_SIZE} />
+                          </ChromeIconButton>
+                          <ChromeIconButton
+                            tone="armed"
+                            on={dualAutoBalanceListening}
+                            help={HELP.dualAutoBalance}
+                            onClick={toggleDualAutoBalance}
+                          >
+                            <Scale size={ICON_SIZE} />
+                          </ChromeIconButton>
+                        </div>
                       )}
                     </div>
                     <div
@@ -3201,10 +3228,15 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   treatment as the gallery tile's own split preview, see
                   DualMonoTileImage) keeps the row reading as one balanced
                   two-column block even when one side is a much bigger "+"
-                  placeholder than the other's filled card. The Link toggle
-                  itself only means anything once both sides actually have
-                  something to mirror/match - it's omitted otherwise rather
-                  than shown disabled. */}
+                  placeholder than the other's filled card. Link and Auto
+                  Balance both only mean anything once both sides actually
+                  have something to mirror/match/measure - omitted
+                  entirely rather than shown disabled. Auto Balance is also
+                  reachable from the Stereo Processing page (same
+                  toggleDualAutoBalance/dualAutoBalanceListening) - this
+                  copy exists so it's usable without drilling into that
+                  page first, same reasoning Vol/Pan/Mix are duplicated
+                  there too. */}
                 <div
                   style={{
                     position: 'relative',
@@ -3242,6 +3274,14 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         onClick={handleToggleDualLinked}
                       >
                         <Link size={ICON_SIZE} />
+                      </ChromeIconButton>
+                      <ChromeIconButton
+                        tone="armed"
+                        on={dualAutoBalanceListening}
+                        help={HELP.dualAutoBalance}
+                        onClick={toggleDualAutoBalance}
+                      >
+                        <Scale size={ICON_SIZE} />
                       </ChromeIconButton>
                     </div>
                   )}
@@ -3312,155 +3352,30 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             that pushed the card down far enough to clip its bottom controls
             (e.g. Spread) in a typical-height window. Back stays fixed-width;
             the strip takes the remaining width and scrolls internally. */}
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: '16rem',
-            marginBottom: '16rem',
-            flexShrink: 0,
+        <ChainBlockHeaderNav
+          onPop={view.pop}
+          onGoHome={dualStripContext?.onGoHome ?? onBack}
+          isDualChild={!!dualParent}
+          chainStripItems={chainStripItems}
+          blockId={dualStripContext?.currentBlockId ?? blockId}
+          onSelect={(id) => {
+            onJumpToBlock(id);
+            // Deterministic destination: a plain chip always lands on the
+            // block's main content, regardless of whatever view (EQ, Info)
+            // was active on screen before the click. Only onSelectEq below
+            // ever lands on EQ.
+            view.reset(['main']);
           }}
-        >
-          <button
-            type="button"
-            onClick={onBack}
-            {...helpProps(dualParent ? HELP.backToDual : HELP.backToChain)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16rem',
-              flexShrink: 0,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              padding: 0,
-              cursor: 'pointer',
-              color: WHITE,
-            }}
-          >
-            <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-            {/* A Dual Mono side's own full editor reads "DUAL > LEFT/RIGHT"
-                instead of the generic "BLOCK" - onBack still lands on the
-                wrapper's compact view either way (see dualParent's own
-                comment), this is purely which breadcrumb the button shows.
-                The invisible mirror below repeats the same markup so the
-                centering math (its own comment) stays correct. */}
-            <span
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: '16rem',
-                fontWeight: 400,
-                textTransform: 'uppercase',
-                lineHeight: 1.4,
-              }}
-            >
-              {dualParent ? 'Dual' : 'Block'}
-            </span>
-            {dualParent && (
-              <>
-                <ChevronRight size={12} style={{ display: 'block', flexShrink: 0, color: MUTED }} />
-                <span
-                  style={{
-                    fontFamily: FONT_MONO,
-                    fontSize: '16rem',
-                    fontWeight: 400,
-                    textTransform: 'uppercase',
-                    lineHeight: 1.4,
-                    color: MUTED,
-                  }}
-                >
-                  {dualParent.isLeftSide ? 'Left' : 'Right'}
-                </span>
-              </>
-            )}
-          </button>
-
-          {/* Every item in this block's lane, insert slots included, in
-              chain order — so any block is one click away and every gap in
-              the chain is a visible "+" at its real position, not just a
-              trailing add button. Omitted for a Dual Mono side's own editor
-              (hideChainStrip - see that prop's own comment): a side isn't a
-              lane, it's a fixed single socket, so a plain spacer takes its
-              place instead of inventing strip semantics for it. */}
-          {hideChainStrip ? (
-            <div style={{ flex: 1 }} />
-          ) : (
-            <ChainMapStrip
-              items={chainStripItems}
-              currentBlockId={blockId}
-              onSelect={(id) => {
-                onJumpToBlock(id);
-                // Deterministic destination: a plain chip always lands on the
-                // block's main content, regardless of whatever view (EQ,
-                // Info) was active on screen before the click. Only
-                // onSelectEq below ever turns showEq back on.
-                setShowEq(false);
-              }}
-              onSelectEq={(id) => {
-                onJumpToBlock(id);
-                // Same pair the header's own EQ toggle sets (line ~1216):
-                // showEq wins the body's render regardless of showInfo, but a
-                // stale showInfo would still leave the Info chip reading
-                // "open" underneath.
-                setShowEq(true);
-                setShowInfo(false);
-              }}
-              onAdd={onAddBlockAt}
-              onPasteBlockAt={onPasteBlockAt}
-            />
-          )}
-
-          {/* Invisible mirror of the ← BLOCK button: ChainMapStrip centers
-              itself within its own flex:1 slot, but that slot only starts
-              after the button, so without this the strip visually skews
-              right (centered in the row minus the button's width, not in
-              the row as a whole). A same-markup, visibility:hidden twin
-              claims exactly the button's own layout width on the other
-              side — self-maintaining if the label/icon ever changes,
-              unlike a hardcoded width that could silently drift out of
-              sync. */}
-          <div
-            aria-hidden
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16rem',
-              flexShrink: 0,
-              visibility: 'hidden',
-              pointerEvents: 'none',
-            }}
-          >
-            <ArrowLeft size={16} style={{ display: 'block', flexShrink: 0 }} />
-            <span
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: '16rem',
-                fontWeight: 400,
-                textTransform: 'uppercase',
-                lineHeight: 1.4,
-              }}
-            >
-              {dualParent ? 'Dual' : 'Block'}
-            </span>
-            {dualParent && (
-              <>
-                <ChevronRight size={12} style={{ display: 'block', flexShrink: 0 }} />
-                <span
-                  style={{
-                    fontFamily: FONT_MONO,
-                    fontSize: '16rem',
-                    fontWeight: 400,
-                    textTransform: 'uppercase',
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {dualParent.isLeftSide ? 'Left' : 'Right'}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
+          onSelectEq={(id) => {
+            onJumpToBlock(id);
+            // ['main', 'eq'], not ['eq'] alone - see the isDualMono
+            // branch's own onSelectEq comment for why.
+            view.reset(['main', 'eq']);
+          }}
+          onAddBlockAt={onAddBlockAt}
+          onPasteBlockAt={onPasteBlockAt}
+          currentChildTabs={dualStripContext?.childTabs}
+        />
 
         <div
           style={{
@@ -3633,10 +3548,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   armed={eqActive}
                   open={showEq}
                   help={HELP.eqToggle}
-                  onClick={() => {
-                    setShowEq((prev) => !prev);
-                    setShowInfo(false);
-                  }}
+                  onClick={() => view.toggle('eq')}
                 >
                   EQ
                 </ChromeTextButton>
@@ -3655,7 +3567,11 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               )}
 
               {!isLocal && (
-                <ChromeIconButton open={showInfo} help={HELP.toneInfo} onClick={handleToggleInfo}>
+                <ChromeIconButton
+                  open={showInfo}
+                  help={HELP.toneInfo}
+                  onClick={() => view.toggle('info')}
+                >
                   <Info />
                 </ChromeIconButton>
               )}

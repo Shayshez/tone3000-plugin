@@ -434,7 +434,7 @@ const DualGlyph: React.FC = () => (
     also works as a ChromeIconButton's child (see the gallery tile's own
     Stereo shortcut below) - chromeIcon() clones in a forced `size` prop,
     same as every Lucide icon in this app. */
-const StereoGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
+export const StereoGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
   <svg width={(size * 20) / 16} height={size} viewBox="0 0 20 16" fill="none">
     <circle cx="7" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />
     <circle cx="13" cy="8" r="5" stroke="currentColor" strokeWidth="1.5" />

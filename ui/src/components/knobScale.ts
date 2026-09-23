@@ -46,12 +46,47 @@ export const percentScale: KnobScale = makeScale(
   0
 );
 
-/** Main/per-block gain: normalized 0.5 = unity, full range ±24 dB.
-    Note: IR blocks read the same ±24 dB on their Out knob, but the DSP bakes
-    in an extra -18 dB (IR files are typically peak-normalized to 0 dBFS, far
-    too hot at unity); see irOffsetDb in Processor.cpp. The knob deliberately
-    shows relative dB (0 at center) to keep it simple. */
-export const gainDbScale = linearScale(-24, 24, 'dB', 1);
+/** Main/per-block gain (and Dual Mono's per-side Vol, which writes the same
+    outputGain param): normalized 0.5 = unity, +24 dB at max - unchanged
+    from a plain linear map. Below unity, though, the curve is logarithmic
+    (40 dB per decade of knob travel toward zero) rather than linear, so
+    fully closed reads as true silence (-Inf dB) instead of flooring at a
+    still-audible -24 dB; mirrors gainKnobDb in Processor.cpp exactly
+    (same 0.001 dead zone at the bottom, same 40*log10(n/0.5) curve) so the
+    knob's own display always agrees with what the DSP actually does.
+    Note: IR blocks read the same scale on their Out knob, but the DSP
+    bakes in an extra -18 dB (IR files are typically peak-normalized to
+    0 dBFS, far too hot at unity); see irOffsetDb in Processor.cpp. */
+const GAIN_KNOB_SILENCE_THRESHOLD = 0.001;
+export const gainDbScale: KnobScale = (() => {
+  const toDisplay = (n: number): number => {
+    if (n <= GAIN_KNOB_SILENCE_THRESHOLD) return -Infinity;
+    if (n >= 0.5) return (n - 0.5) * 48;
+    return 40 * Math.log10(n / 0.5);
+  };
+  const fromDisplay = (d: number): number => {
+    if (!Number.isFinite(d)) return 0; // -Infinity (fully closed)
+    if (d >= 0) return 0.5 + d / 48;
+    return 0.5 * Math.pow(10, d / 40);
+  };
+  return {
+    toDisplay,
+    fromDisplay,
+    format: (n) => {
+      const db = toDisplay(n);
+      return Number.isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+    },
+    // KnobControl's commitEdit rejects a non-finite parsed value outright
+    // (so a bare "-Infinity" could never be re-committed even if typed
+    // verbatim) - prefill a large-but-finite dB figure instead, close
+    // enough to silent that retyping the same text without changing it
+    // stays effectively muted.
+    editText: (n) => {
+      const db = toDisplay(n);
+      return Number.isFinite(db) ? db.toFixed(1) : '-100';
+    },
+  };
+})();
 
 /** Gate threshold: normalized spans -100..0 dB. */
 export const gateDbScale = linearScale(-100, 0, 'dB', 0);
