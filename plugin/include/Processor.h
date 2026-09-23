@@ -917,10 +917,17 @@ private:
   // run the whole lane (endIdx -1 = blocks.size()). Whole-chain context
   // (lastNamIndex) is always computed over the full lane regardless of the
   // range; the range is a routing split, not a different chain.
+  // `forceFullWet`: pins every processed block's Mix at 100% instead of its
+  // own mixNormalized, without touching that stored field - Auto Align/
+  // Balance's probe (runDualMono) uses this while capturing, so the
+  // measurement is the two models' own relationship and never gets diluted
+  // by raw dry sweep bleeding straight through a Mix knob left under 100%
+  // (that bleed always correlates at zero lag, non-inverted, by
+  // construction - see armAutoOffsetFor/AutoOffset.h).
   void processChainOnBuffer(std::vector<std::unique_ptr<ChainBlock>>& blocks,
                             juce::AudioBuffer<float>& buffer,
                             juce::AudioBuffer<float>& dryScratch, int beginIdx = 0,
-                            int endIdx = -1);
+                            int endIdx = -1, bool forceFullWet = false);
 
   // A Dual Mono block's own DSP: seeds two 1-channel scratch buffers from
   // `buffer` (2 channels present -> channel 0/1 feed left/right distinctly;

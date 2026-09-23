@@ -1,6 +1,7 @@
 #include "AutoOffset.h"
 
 #include <juce_dsp/juce_dsp.h>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -80,6 +81,23 @@ void AutoOffset::resume() {
 
 bool AutoOffset::renderProbeInput(float* probeOut, int numSamples) {
   const State s = state();
+
+  // FadeOut only ramps the plugin's own OUTPUT gain down (applyOutputGain);
+  // left alone, the chains being measured would keep chewing on whatever
+  // real audio was flowing right up until the sweep starts. For stateful
+  // models (NAM's recurrent/dilated-conv path) that leftover history biases
+  // the two sides' transient response differently, which the cross-
+  // correlation reads as a spurious secondary peak - occasionally strong
+  // enough to beat the true near-zero-lag peak, with an essentially random
+  // polarity sign. Feeding silence here (paired with the caller resetting
+  // both sides' model state to a matching baseline before arming - see
+  // TONE3000Processor::armAutoOffsetFor) gives both chains the same known
+  // starting point before the sweep proper begins.
+  if (s == State::FadeOut) {
+    std::fill(probeOut, probeOut + numSamples, 0.0f);
+    return true;
+  }
+
   if (s != State::Probing && s != State::Tail)
     return false;
 
@@ -217,28 +235,119 @@ AutoOffset::Result AutoOffset::analyze() {
     return specL[static_cast<size_t>(lag >= 0 ? lag : fftSize + lag)];
   };
 
-  // Peak search on the magnitude: a polarity-inverted chain correlates
-  // strongly negative, and that is a valid measurement (see the header).
-  int bestLag = 0;
-  float bestAbs = std::abs(corrAt(0));
+  // PHAT peak search: finds where the two sides PLAUSIBLY line up, immune
+  // to their voicing difference. bestLagPhat/bestAbsPhat is its own global
+  // argmax, kept only as the "is there any real feature here at all"
+  // reference below - the final pick is decided differently (next block).
+  int bestLagPhat = 0;
+  float bestAbsPhat = std::abs(corrAt(0));
   for (int lag = -maxLag; lag <= maxLag; ++lag) {
     const float a = std::abs(corrAt(lag));
-    if (a > bestAbs) {
-      bestAbs = a;
+    if (a > bestAbsPhat) {
+      bestAbsPhat = a;
+      bestLagPhat = lag;
+    }
+  }
+
+  // Raw time-domain agreement at an integer lag - what actually determines
+  // constructive vs. destructive summing when the two sides play together,
+  // the same thing an ear or a correlation meter reads. PHAT's per-bin
+  // equalization is excellent at surfacing CANDIDATE lags immune to
+  // voicing differences, but its aggregate magnitude/sign ranks candidates
+  // by phase-cleanliness, not by how much they actually agree - confirmed
+  // in the field: PHAT's global argmax kept winning over a nearby candidate
+  // that raw correlation (and a live correlation meter) clearly preferred,
+  // and the winning lag itself drifted between otherwise-identical runs.
+  // So: let PHAT propose every local maximum as a candidate, but let the
+  // RAW correlation decide which one is real.
+  auto rawDot = [&](int lag) -> double {
+    double d = 0.0;
+    const int from = std::max(0, lag);
+    const int to = std::min(n, n + lag);
+    for (int i = from; i < to; ++i)
+      d += static_cast<double>(l[i]) * r[i - lag];
+    return d;
+  };
+  auto rawConfidenceAt = [&](int lag) -> double {
+    double eL = 0.0, eR = 0.0;
+    const int from = std::max(0, lag);
+    const int to = std::min(n, n + lag);
+    for (int i = from; i < to; ++i) {
+      eL += static_cast<double>(l[i]) * l[i];
+      eR += static_cast<double>(r[i - lag]) * r[i - lag];
+    }
+    const double denom = std::sqrt(std::max(eL * eR, 1.0e-24));
+    return std::abs(rawDot(lag)) / denom;
+  };
+
+  int bestLag = bestLagPhat;
+  double bestRawConfidence = rawConfidenceAt(bestLagPhat);
+  for (int lag = -maxLag; lag <= maxLag; ++lag) {
+    const float a = std::abs(corrAt(lag));
+    const float prev = std::abs(corrAt(lag > -maxLag ? lag - 1 : lag));
+    const float next = std::abs(corrAt(lag < maxLag ? lag + 1 : lag));
+    if (a < prev || a < next)
+      continue;  // not a local maximum
+    if (a < 0.25f * bestAbsPhat)
+      continue;  // too weak in the voicing-immune metric to be plausible
+    const double conf = rawConfidenceAt(lag);
+    if (conf > bestRawConfidence) {
+      bestRawConfidence = conf;
       bestLag = lag;
     }
   }
-  const bool inverted = corrAt(bestLag) < 0.0f;
+  const bool inverted = rawDot(bestLag) < 0.0;
 
-  // Peak sharpness: winning |peak| against the best |peak| more than 1 ms
-  // away inside the search window.
+  // Peak sharpness stays about bestLagPhat/bestAbsPhat, NOT the raw-
+  // confidence-chosen bestLag: its job is "is this capture healthy at all"
+  // (a spliced/broken/out-of-range capture reads flat everywhere, PHAT
+  // magnitude included), independent of which specific candidate raw
+  // confidence ends up preferring. Gating it on bestLag instead would
+  // reject exactly the cases this redesign exists for: raw confidence
+  // deliberately overriding PHAT's own (voicing-biased) favorite lands on
+  // a candidate that isn't PHAT's global max by construction, so measuring
+  // sharpness against that lag instead of PHAT's own argmax would call a
+  // strong, genuine, high-raw-confidence match "unsharp" and throw it away
+  // (observed in the field: confidence 0.734, a clearly dominant positive
+  // peak - rejected anyway because a stronger PHAT peak sat elsewhere).
   const int guard = static_cast<int>(std::llround(0.001 * sampleRate));
   float secondAbs = 0.0f;
   for (int lag = -maxLag; lag <= maxLag; ++lag) {
-    if (std::abs(lag - bestLag) > guard)
+    if (std::abs(lag - bestLagPhat) > guard)
       secondAbs = std::max(secondAbs, std::abs(corrAt(lag)));
   }
-  result.peakSharpness = bestAbs / std::max(secondAbs, eps);
+  result.peakSharpness = bestAbsPhat / std::max(secondAbs, eps);
+
+  // Diagnostic: the whole local-maxima landscape, not just the winner - see
+  // Result::debugPeaks. A local max of |corrAt| beats both its immediate
+  // neighbors; edges of the window are checked against their one neighbor.
+  {
+    struct Peak {
+      int lag;
+      float value;
+    };
+    std::vector<Peak> peaks;
+    for (int lag = -maxLag; lag <= maxLag; ++lag) {
+      const float v = corrAt(lag);
+      const float a = std::abs(v);
+      const float prev = std::abs(corrAt(lag > -maxLag ? lag - 1 : lag));
+      const float next = std::abs(corrAt(lag < maxLag ? lag + 1 : lag));
+      if (a >= prev && a >= next)
+        peaks.push_back({lag, v});
+    }
+    std::sort(peaks.begin(), peaks.end(),
+             [](const Peak& x, const Peak& y) { return std::abs(x.value) > std::abs(y.value); });
+    juce::String s;
+    for (size_t i = 0; i < peaks.size() && i < 5; ++i) {
+      if (i > 0)
+        s << ", ";
+      s << juce::String(peaks[i].lag * 1000.0 / sampleRate, 2) << "ms:"
+        << (peaks[i].value < 0.0f ? "-" : "+")
+        << juce::String(std::abs(peaks[i].value) / bestAbsPhat, 2)
+        << (peaks[i].lag == bestLag ? "*" : "");
+    }
+    result.debugPeaks = s;
+  }
 
   // Sub-sample refinement: evaluate the whitened cross-spectrum's inverse
   // DFT (exact band-limited interpolation of the correlation) on a fine
@@ -296,7 +405,13 @@ AutoOffset::Result AutoOffset::analyze() {
 
   result.offsetMs = juce::jlimit(-kMaxLagMs, kMaxLagMs,
                                  static_cast<float>(fineTau * 1000.0 / sampleRate));
-  result.inverted = inverted;
+  // Authoritative polarity verdict: the raw dot product's own sign at the
+  // final refined lag (already computed above for confidence) - see the
+  // comment by rawDotSignAt. Almost always agrees with the seed used to
+  // steer the sub-sample search; when it doesn't (the seed seeded on the
+  // integer lag, this reads the fractional one), this is the one that
+  // ships.
+  result.inverted = dot < 0.0;
   result.confidence = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::abs(dot) / denom));
 
   // Auto Balance: same energyL/energyR this confidence score already

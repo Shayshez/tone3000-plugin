@@ -1,6 +1,7 @@
 #include "NamEngine.h"
 #include "NAM/slimmable.h"
 #include "RtWorkerPool.h"
+#include <algorithm>
 #include <atomic>
 #include <stdexcept>
 
@@ -49,6 +50,19 @@ void NamEngine::prepare(int newMaxBlockSize) {
   }
 
   isPrepared = true;
+}
+
+void NamEngine::resetState() {
+  if (!isPrepared)
+    return;
+
+  const int perPhaseCapacity =
+      phaseInputs.empty() ? 0 : static_cast<int>(phaseInputs.front().size());
+  for (auto& instance : instances)
+    instance->ResetAndPrewarm(instanceSampleRate(), perPhaseCapacity);
+
+  std::fill(phaseFrames.begin(), phaseFrames.end(), 0);
+  phaseOffset = 0;
 }
 
 void NamEngine::setSlimmableSize(double val) {

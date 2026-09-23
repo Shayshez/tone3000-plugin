@@ -53,9 +53,24 @@
  *   Idle -> FadeOut -> Probing -> Tail -> Captured -> Analyzing -> RampBack -> Idle
  *
  * Processor integration contract:
+ *  0. Before arm(): reset both chains' stateful DSP (NamEngine::resetState(),
+ *     convolver reset()) to a matching deterministic baseline, and snap each
+ *     side's Mix to 100% wet (juce::LinearSmoothedValue::setCurrentAndTarget-
+ *     Value - see TONE3000Processor::armAutoOffsetFor). Skipping the reset
+ *     lets whatever real audio was flowing a moment before bias the two
+ *     sides' model state differently; skipping the Mix override lets raw
+ *     dry sweep (bit-identical on both sides) bleed straight into the
+ *     capture, which always correlates at zero lag and non-inverted by
+ *     construction regardless of the true model relationship. Either one
+ *     shows up as a spurious, occasionally inverted-looking correlation
+ *     peak - runDualMono keeps the override in force for the whole
+ *     Probing/Tail capture window via processChainOnBuffer's forceFullWet.
  *  1. renderProbeInput() before the chains render; while it returns true,
  *     feed the filled mono block to BOTH chain inputs and discard the
  *     instrument (it keeps flowing upstream: meters and gate stay live).
+ *     Returns silence through FadeOut too, not just Probing/Tail - the
+ *     chains must not keep chewing on live audio while the output ramps
+ *     down, or the reset in step 0 is undone before the sweep even starts.
  *  2. captureChainOutputs() with the chain outputs pre-StereoOffset and
  *     pre-image-matrix, so the measurement is the absolute misalignment and
  *     unflipped polarity (a second run measures the total, not the residual).
@@ -108,6 +123,14 @@ public:
         so gainDeltaDb/boostRight carry no meaning and the caller should
         reject the measurement instead of applying it. */
     bool silent = false;
+    /** Diagnostic only: the top few local maxima of |corrAt(lag)| across the
+        whole search window (lag ms : sign : magnitude relative to the
+        winner), most prominent first. Lets a caller log the full peak
+        landscape instead of just the winner - e.g. to tell "genuinely the
+        strongest match" apart from "narrowly beat a competing peak at a
+        very different lag" when a result looks surprising. Empty string
+        costs nothing to build when unused. */
+    juce::String debugPeaks;
   };
 
   /** Lag search half-window: what the Offset knob can express. */

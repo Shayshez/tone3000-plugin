@@ -106,6 +106,16 @@ public:
 
   double getSlimmableSize() const noexcept { return requestedSlimmableSize; }
 
+  /** Resets every phase instance to its deterministic post-load state
+      (Reset + prewarm), without touching buffer sizes. Recurrent/dilated-
+      conv architectures carry state across calls, so two instances fed
+      identical input can still disagree if they came into it with
+      different recent history; this gives a caller a known, matching
+      baseline to measure from (Auto Align/Balance's probe - see
+      AutoOffset.h). Message thread only: prewarm() is not real-time safe,
+      same restriction as prepare(). */
+  void resetState();
+
 private:
   /** Instance 0: the reference for metadata queries (all instances share
       one model config, so levels/loudness/rate are identical). */

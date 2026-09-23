@@ -919,21 +919,33 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   // actually renders per block). renderProbeInput is a no-op outside its
   // own Probing/Tail sub-states (returns false, dest untouched), so this
   // only overrides the normal seed while a sweep is actually playing.
-  if (dualBlock.id == autoOffsetTargetBlockId &&
-      autoOffset.renderProbeInput(dl.getWritePointer(0), numSamples)) {
+  const bool autoOffsetTargetsThisBlock = dualBlock.id == autoOffsetTargetBlockId;
+  if (autoOffsetTargetsThisBlock && autoOffset.renderProbeInput(dl.getWritePointer(0), numSamples)) {
     dr.copyFrom(0, 0, dl, 0, 0, numSamples);
   } else {
     dl.copyFrom(0, 0, buffer, 0, 0, numSamples);
     dr.copyFrom(0, 0, buffer, numChannels > 1 ? 1 : 0, 0, numSamples);
   }
 
+  // While the probe sweep is actually in the capture window (Probing/Tail -
+  // AutoOffset.h), pin both sides at 100% wet. The raw dry sweep is bit-
+  // identical on both sides, so any dry bleed-through (a Mix knob left
+  // under 100% - IR Player defaults to 25%) correlates trivially at zero
+  // lag and non-inverted regardless of the true model relationship, and
+  // dilutes/masks the real measurement - see processChainOnBuffer's
+  // forceFullWet and AutoOffset.h's integration contract.
+  const AutoOffset::State autoOffsetState = autoOffset.state();
+  const bool forceFullWetForProbe =
+      autoOffsetTargetsThisBlock && (autoOffsetState == AutoOffset::State::Probing ||
+                                     autoOffsetState == AutoOffset::State::Tail);
+
   // Run each present child (0 or 1 element - see ChainBlock::dualLeft/
   // dualRight) through the ordinary per-block path. An empty side is a
   // no-op, leaving dl/dr as the seeded pass-through signal - a Dual Mono
   // block with nothing loaded on either side is inaudible pass-through,
   // same as adding any other still-empty block.
-  processChainOnBuffer(dualBlock.dualLeft, dl, dualLeftDryScratch, 0);
-  processChainOnBuffer(dualBlock.dualRight, dr, dualRightDryScratch, 0);
+  processChainOnBuffer(dualBlock.dualLeft, dl, dualLeftDryScratch, 0, -1, forceFullWetForProbe);
+  processChainOnBuffer(dualBlock.dualRight, dr, dualRightDryScratch, 0, -1, forceFullWetForProbe);
 
   // Auto Align probe capture: the raw chain outputs BEFORE Align's own
   // delay/polarity - the absolute misalignment, matching the global
@@ -1105,7 +1117,7 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
 void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBlock>>& blocks,
                                              juce::AudioBuffer<float>& buffer,
                                              juce::AudioBuffer<float>& dryScratch, int beginIdx,
-                                             int endIdx) {
+                                             int endIdx, bool forceFullWet) {
   const int numSamples = buffer.getNumSamples();
   const int numChannels = buffer.getNumChannels();
 
@@ -1166,10 +1178,31 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // Self-contained: seeds/recombines its own two children directly into
       // `buffer`, in place of the ordinary dry-copy/input-gain/model/mix
       // pipeline below (which assumes one continuous signal path, not a
-      // split-then-recombine shape). Still respects the wet-fade/bypass
-      // bookkeeping above, so power-toggling or removing a Dual Mono block
-      // fades exactly like every other block.
+      // split-then-recombine shape). Still needs its OWN dry/wet crossfade
+      // here, though: skipping the generic mix loop below also skips the
+      // only place that ever calls wetFadeGain.getNextValue() - without
+      // that, the smoother's countdown never advances, isSmoothing() never
+      // clears, wetSilent (above) never goes true, and a "bypassed" Dual
+      // Mono block keeps processing at full strength forever instead of
+      // ever reaching the skip branch - visually off, audibly still live.
+      jassert(dryScratch.getNumChannels() >= numChannels);
+      jassert(dryScratch.getNumSamples() >= numSamples);
+      dryScratch.copyFrom(0, 0, buffer, 0, 0, numSamples);
+      if (numChannels > 1)
+        dryScratch.copyFrom(1, 0, buffer, 1, 0, numSamples);
+
       runDualMono(*block, buffer);
+
+      float* wetL = buffer.getWritePointer(0);
+      float* wetR = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
+      const float* dryL = dryScratch.getReadPointer(0);
+      const float* dryR = numChannels > 1 ? dryScratch.getReadPointer(1) : nullptr;
+      for (int i = 0; i < numSamples; ++i) {
+        const float fade = block->wetFadeGain.getNextValue();
+        wetL[i] = dryL[i] * (1.0f - fade) + wetL[i] * fade;
+        if (wetR)
+          wetR[i] = dryR[i] * (1.0f - fade) + wetR[i] * fade;
+      }
       continue;
     }
 
@@ -1448,7 +1481,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     // ChainBlock.tsx).
     block->outputGainSmoother.setTargetValue(
         juce::Decibels::decibelsToGain(gainKnobDb(block->outputGainNormalized)));
-    block->mixSmoother.setTargetValue(juce::jlimit(0.0f, 1.0f, block->mixNormalized));
+    block->mixSmoother.setTargetValue(forceFullWet ? 1.0f
+                                                   : juce::jlimit(0.0f, 1.0f, block->mixNormalized));
 
     float blockOutputPeak = 0.0f;
     for (int i = 0; i < numSamples; ++i) {
@@ -1872,9 +1906,51 @@ constexpr float kAutoOffsetMinSharpness = 2.0f;
 // Lags under this are already aligned for any practical purpose (well under
 // a sample's worth of imaging); don't power Align on over nothing.
 constexpr float kAutoOffsetSilentMs = 0.05f;
+// Polarity gate: field-tested against real Dual Mono rigs, every wrong
+// polarity call (confirmed wrong by ear AND by the live correlation meter,
+// even after fixing the underlying peak-selection to prefer raw time-
+// domain agreement over the PHAT-whitened metric - see AutoOffset.cpp)
+// measured confidence at or under 0.51; nothing above that has been
+// observed to misfire. Below this, Ø is left exactly as the user set it -
+// Align still applies the timing correction (that part has held up), it
+// just stops guessing at polarity when the raw signal agreement is too
+// weak to trust. A missed flip costs the user one manual Ø click with the
+// correlation meter open; a wrong one costs trust in the whole feature.
+constexpr float kAutoOffsetMinPolarityConfidence = 0.6f;
 }  // namespace
 
 void TONE3000Processor::cancelAutoOffset() { autoOffset.cancel(); }
+
+// Resets a Dual Mono side's own stateful DSP (NAM's recurrent/dilated-conv
+// path, IR's convolution history) to a deterministic post-load baseline
+// before the probe measures it. Without this, a side that was just
+// processing real audio carries whatever transient state that left behind
+// into the sweep, and if the two sides' recent history differed at all
+// (genuinely different stereo content, or just different silence-floor
+// noise) their responses to the *identical* sweep diverge for its opening
+// stretch - read by the cross-correlation as a spurious peak, sometimes
+// strong enough to beat the true near-zero-lag one, with an effectively
+// coin-flip polarity sign (see AutoOffset.h). Message thread only -
+// NamEngine::resetState()/prewarm() is not real-time safe.
+namespace {
+void flushDualSideState(ChainBlock* side) {
+  if (side == nullptr)
+    return;
+  if (side->namEngine != nullptr)
+    side->namEngine->resetState();
+  if (side->convolverMono != nullptr)
+    side->convolverMono->reset();
+  if (side->convolverStereo != nullptr)
+    side->convolverStereo->reset();
+  // Snap to 100% wet now rather than letting processChainOnBuffer's
+  // forceFullWet glide there over mixSmoother's normal ~50ms ramp: the
+  // sweep starts within milliseconds of this (FadeOut is only 5ms), and a
+  // dry-contaminated ramp-in would still color the capture's opening
+  // stretch. Stepping is inaudible here - the output is muted the whole
+  // time (see AutoOffset::applyOutputGain).
+  side->mixSmoother.setCurrentAndTargetValue(1.0f);
+}
+}  // namespace
 
 // Shared by armDualAutoAlign and armDualAutoBalance - both just need "is
 // this a real DUAL_MONO block, is the engine free" before claiming it and
@@ -1895,6 +1971,11 @@ bool TONE3000Processor::armAutoOffsetFor(const std::string& blockId) {
   // out from under whichever other block's measurement is already running.
   if (autoOffset.state() != AutoOffset::State::Idle)
     return false;
+
+  // Both sides start the probe from the same known state - see the header
+  // comment above and AutoOffset.h's integration contract, step 0.
+  flushDualSideState(block->dualLeft.empty() ? nullptr : block->dualLeft.front().get());
+  flushDualSideState(block->dualRight.empty() ? nullptr : block->dualRight.front().get());
   autoOffsetTargetBlockId = blockId;
   autoOffset.arm();
   return true;
@@ -1953,7 +2034,8 @@ juce::var TONE3000Processor::pollDualAutoAlign(const std::string& blockId) {
         obj->setProperty("peakSharpness", result.peakSharpness);
         juce::Logger::writeToLog("[AutoOffset] Rejected (block " + juce::String(blockId) +
                                  "): confidence " + juce::String(result.confidence, 3) +
-                                 ", sharpness " + juce::String(result.peakSharpness, 2));
+                                 ", sharpness " + juce::String(result.peakSharpness, 2) +
+                                 ", peaks [" + result.debugPeaks + "]");
         break;
       }
 
@@ -1973,10 +2055,11 @@ juce::var TONE3000Processor::pollDualAutoAlign(const std::string& blockId) {
       // capture site), so result.inverted is the two sides' absolute
       // relative polarity and the Ø flags must end up XOR-matching it.
       // Toggling only the right side preserves an absolute both-sides flip
-      // the user may already have set.
+      // the user may already have set. Gated on confidence, unlike the
+      // timing correction above - see kAutoOffsetMinPolarityConfidence.
       bool polarityFlipped = false;
       const bool invertedNow = block->dualLeftInvert != block->dualRightInvert;
-      if (result.inverted != invertedNow) {
+      if (result.confidence >= kAutoOffsetMinPolarityConfidence && result.inverted != invertedNow) {
         block->dualRightInvert = !block->dualRightInvert;
         polarityFlipped = true;
       }
@@ -1986,11 +2069,19 @@ juce::var TONE3000Processor::pollDualAutoAlign(const std::string& blockId) {
       obj->setProperty("state", "done");
       obj->setProperty("matchedMs", result.offsetMs);
       obj->setProperty("polarityFlipped", polarityFlipped);
+      const juce::String polarityNote =
+          polarityFlipped
+              ? ", Ø toggled"
+              : (result.inverted != invertedNow
+                     ? ", Ø left alone (confidence below " +
+                           juce::String(kAutoOffsetMinPolarityConfidence, 2) + ")"
+                     : "");
       juce::Logger::writeToLog(
           "[AutoOffset] Aligned Dual Mono block " + juce::String(blockId) + " (offset " +
-          juce::String(result.offsetMs, 3) + " ms, confidence " +
-          juce::String(result.confidence, 3) + ", sharpness " +
-          juce::String(result.peakSharpness, 1) + (polarityFlipped ? ", polarity flipped)" : ")"));
+          juce::String(result.offsetMs, 3) + " ms, " + (result.inverted ? "inverted" : "normal") +
+          ", confidence " + juce::String(result.confidence, 3) + ", sharpness " +
+          juce::String(result.peakSharpness, 1) + polarityNote +
+          ", peaks [" + result.debugPeaks + "])");
       break;
     }
     case AutoOffset::State::RampBack:
