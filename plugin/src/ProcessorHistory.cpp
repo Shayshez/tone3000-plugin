@@ -275,12 +275,14 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
   }
 
   // Reconciled chains always come back up to the minimum slot layout.
-  // Snapshots from this build already satisfy the invariant (no-op); legacy
-  // states/presets that carried a single insert get padded here. Skipped
-  // for a Dual Mono child slot (padInserts=false) - it never carries insert
-  // placeholders in the first place.
+  // Snapshots from this build already satisfy the invariant; legacy
+  // states/presets that carried a single insert get padded here. Pad only,
+  // never trim: a snapshot may legitimately carry surplus slots the user
+  // positioned (addInsertSlot), and undo/redo/preset loads must bring them
+  // back exactly. Skipped for a Dual Mono child slot (padInserts=false) - it
+  // never carries insert placeholders in the first place.
   if (padInserts)
-    normalizeLaneInserts(target);
+    normalizeLaneInserts(target, /*trimSurplus=*/false);
 
   // Whatever is still parked was removed by this restore.
   for (auto& [id, b] : existing)

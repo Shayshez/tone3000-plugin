@@ -4,13 +4,13 @@ import { useSortable, isSortable } from '@dnd-kit/react/sortable';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import type { DragEndEvent, Sensors } from '@dnd-kit/dom';
 import { arrayMove } from '@dnd-kit/helpers';
-import { ClipboardPaste, Home, Plus } from './icons';
+import { ArrowLeftRight, ClipboardPaste, Home, Plus, Power, Trash2 } from './icons';
 import { ChromeIconButton, ChromeTextButton } from './ChromeIconButton';
 import { HELP, helpProps } from './helpText';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
 import { getUiScale } from '../hooks/useUiScale';
 import { useChainActions } from '../hooks/useChainActions';
-import { blockTypeMenuItems, useTileMenu } from './GalleryBlock';
+import { addSlotMenuItems, blockTypeMenuItems, useTileMenu } from './GalleryBlock';
 import { TileMenu } from './TileMenu';
 import { useToast } from './Toast';
 import {
@@ -25,7 +25,7 @@ import {
   WHITE,
 } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
-import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
+import { BLOCK_TYPE_LABEL, adjacentInsertSlots, isEqFlat, isInsertSlot } from '../types/chain';
 
 /** Every chip (tone label or "+") is this exact box, regardless of label
     length, so the strip reads as a uniform row rather than ragged pill
@@ -168,9 +168,12 @@ export interface ChainMapChildTab {
 const ChainMapAddChip: React.FC<{
   id: string;
   index: number;
+  /** The lane's rightmost "+" - the chain's permanent append point, so its
+      menu offers no Delete. */
+  isLast: boolean;
   onAdd: (id: string) => void;
   onPasteBlockAt: ((index: number) => void) | null;
-}> = ({ id, index, onAdd, onPasteBlockAt }) => {
+}> = ({ id, index, isLast, onAdd, onPasteBlockAt }) => {
   const { ref, isDragging } = useSortable({ id, index, group: SORT_GROUP });
   const actions = useChainActions();
   const toast = useToast();
@@ -216,6 +219,16 @@ const ChainMapAddChip: React.FC<{
               onSelect: () => onPasteBlockAt?.(index),
             },
             ...blockTypeMenuItems(id, actions, toast),
+            ...(isLast
+              ? []
+              : [
+                  {
+                    label: 'Delete',
+                    icon: <Trash2 size={16} />,
+                    help: HELP.chipDeleteSlot,
+                    onSelect: () => actions.removeInsertSlot(id),
+                  },
+                ]),
           ]}
         />
       )}
@@ -357,13 +370,16 @@ const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) =
 const ChainMapTile: React.FC<{
   item: ToneBlock;
   index: number;
+  /** Empty slot already directly left / right (hides that Add Slot row). */
+  slotLeft: boolean;
+  slotRight: boolean;
   isCurrent: boolean;
   onSelect: (blockId: string) => void;
   onSelectEq: (blockId: string) => void;
   /** Only ever passed (and only ever non-empty) for the current chip - see
       ChainMapChildTab. */
   childTabs?: ChainMapChildTab[];
-}> = ({ item, index, isCurrent, onSelect, onSelectEq, childTabs }) => {
+}> = ({ item, index, slotLeft, slotRight, isCurrent, onSelect, onSelectEq, childTabs }) => {
   const { ref, handleRef, isDragging } = useSortable({
     id: item.blockId,
     index,
@@ -371,6 +387,17 @@ const ChainMapTile: React.FC<{
   });
   const actions = useChainActions();
   const modified = eqModified(item);
+  // Right-click (iOS: long press) menu, same shared hook as the "+" chip
+  // and the gallery tiles: Bypass, Replace, Add Slot Left/Right.
+  const { menuAnchor, openMenu, closeMenu, shouldIgnoreClick, longPressProps } = useTileMenu();
+  const handleChipClick = (e: React.MouseEvent) => {
+    if (shouldIgnoreClick(e)) return;
+    if (e.altKey) handleToggleEnabled();
+    else onSelect(item.blockId);
+  };
+  // No tone to swap on an EQ-only block or a Dual Mono wrapper (whose sides
+  // are replaced from their own cards).
+  const canReplace = item.blockType !== 'eq' && item.blockType !== 'dualMono';
 
   // Optimistic power state (same pattern as the detail card's own Power
   // button and the gallery tile's - see ChainBlock.tsx's handleToggleEnabled
@@ -401,6 +428,8 @@ const ChainMapTile: React.FC<{
     // segment's own corners peek out past the pill's rounded ones.
     <div
       ref={ref}
+      onContextMenu={openMenu}
+      {...longPressProps}
       style={{
         position: 'relative',
         display: expanded ? 'flex' : undefined,
@@ -425,7 +454,7 @@ const ChainMapTile: React.FC<{
           <button
             ref={handleRef}
             type="button"
-            onClick={(e) => (e.altKey ? handleToggleEnabled() : onSelect(item.blockId))}
+            onClick={handleChipClick}
             {...helpProps(
               `${item.tone.title} · ${BLOCK_TYPE_LABEL[item.blockType]}${
                 enabled ? '' : ' · Bypassed'
@@ -451,7 +480,7 @@ const ChainMapTile: React.FC<{
         ) : (
           <ChromeTextButton
             ref={handleRef}
-            onClick={(e) => (e.altKey ? handleToggleEnabled() : onSelect(item.blockId))}
+            onClick={handleChipClick}
             // Alt/Option-click toggles bypass, reusing the exact same
             // setBlockParam('enabled', ...) action the header's Power button
             // uses - same convention as every other secondary action in this
@@ -548,6 +577,37 @@ const ChainMapTile: React.FC<{
         </button>
       </div>
       {expanded && <ChainMapChildTabRow tabs={childTabs} />}
+      {menuAnchor && (
+        <TileMenu
+          anchor={menuAnchor}
+          onClose={closeMenu}
+          items={[
+            {
+              label: enabled ? 'Bypass' : 'Enable',
+              icon: <Power size={16} />,
+              help: HELP.chipBypass,
+              onSelect: handleToggleEnabled,
+            },
+            ...(canReplace
+              ? [
+                  {
+                    label: 'Replace',
+                    icon: <ArrowLeftRight size={16} />,
+                    help: HELP.chipReplace,
+                    onSelect: () => actions.swapBlock(item.blockId, { navigateToDetail: true }),
+                  },
+                ]
+              : []),
+            ...addSlotMenuItems(index, slotLeft, slotRight, actions),
+            {
+              label: 'Delete',
+              icon: <Trash2 size={16} />,
+              help: HELP.chipDelete,
+              onSelect: () => actions.removeBlock(item.blockId),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 };
@@ -679,6 +739,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
                 key={item.blockId}
                 id={item.blockId}
                 index={index}
+                isLast={index === localItems.length - 1}
                 onAdd={onAdd}
                 onPasteBlockAt={onPasteBlockAt}
               />
@@ -687,6 +748,8 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
                 key={item.blockId}
                 item={item}
                 index={index}
+                slotLeft={adjacentInsertSlots(localItems, index).left}
+                slotRight={adjacentInsertSlots(localItems, index).right}
                 isCurrent={item.blockId === currentBlockId}
                 onSelect={onSelect}
                 onSelectEq={onSelectEq}

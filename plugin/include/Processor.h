@@ -298,6 +298,19 @@ public:
   // its model cache-first from the copied bytes. Returns the new id, "" on
   // failure (empty clipboard).
   std::string pasteChainBlock(int index);
+  // Put a fresh empty insert slot at `index` in the lane (clamped), as one
+  // undo step - the chip menu's Add Slot Left/Right. Deliberately skips
+  // normalizeLaneInserts: the new slot may sit above the invariant's minimum
+  // count until the next structural edit, whose back-to-front trim removes
+  // trailing surplus first, so a slot the user just positioned stays put.
+  // Pure bookkeeping for the audio path (an insert is a passthrough), so no
+  // chain-edit fade. Returns the new slot's id.
+  std::string addInsertSlot(int index);
+  // Remove one empty insert slot (the chip menu's Delete on a "+"), one undo
+  // step. Refuses non-insert ids and the lane's last item - the rightmost
+  // "+" always stays as the chain's append point. Normalizes afterwards, so
+  // dropping below the invariant's minimum re-grows a slot at the end.
+  bool removeInsertSlot(const std::string& blockId);
 
   // TONE3000 OAuth access token. Updated by the UI after the Select flow and
   // again on every refresh. `fetchModelFromUrl` attaches it as a Bearer header
@@ -988,7 +1001,7 @@ private:
   // placeholders (UUID ids) at the end; overshoot trims inserts from the end
   // so slots the user positioned earlier in the lane stay put. Inserts own no
   // engines, so add/remove is trivially cheap. Caller holds chainMutex.
-  void normalizeLaneInserts(Lane& l);
+  void normalizeLaneInserts(Lane& l, bool trimSurplus = true);
 
   // Find a block by id in the chain. Returns nullptr if absent.
   ChainBlock* findBlockById(const std::string& blockId);

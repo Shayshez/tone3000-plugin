@@ -45,6 +45,8 @@ const MENU_WIDTH = 148;
 const PANEL_PADDING = 6;
 /** Visual-px nudge so the panel's top-left sits clearly past the cursor tip. */
 const CURSOR_OFFSET = 6;
+/** Real-px breathing room kept between the panel and the window edges. */
+const VIEWPORT_MARGIN = 8;
 /** Flyout submenu's own nudge past its parent row's right edge, and up past
     the panel's own top padding so a flyout opened from the first row lines
     up with it rather than sitting a few px low. */
@@ -162,8 +164,31 @@ export const TileMenu: React.FC<{
   onClose: () => void;
 }> = ({ anchor, items, onClose }) => {
   const rootRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({
+    left: anchor.clientX + CURSOR_OFFSET,
+    top: anchor.clientY + CURSOR_OFFSET,
+  });
 
   useDismissable(true, rootRef, onClose);
+
+  // Keep the panel inside the window (long menus - a tone tile's - opened
+  // near the bottom or right edge would otherwise run off it): measured
+  // before paint, so it never visibly jumps. Past the bottom it slides up;
+  // past the right edge it opens to the cursor's left instead.
+  useLayoutEffect(() => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const margin = VIEWPORT_MARGIN;
+    let { left, top } = {
+      left: anchor.clientX + CURSOR_OFFSET,
+      top: anchor.clientY + CURSOR_OFFSET,
+    };
+    if (top + rect.height > window.innerHeight - margin)
+      top = Math.max(margin, window.innerHeight - margin - rect.height);
+    if (left + rect.width > window.innerWidth - margin)
+      left = Math.max(margin, anchor.clientX - CURSOR_OFFSET - rect.width);
+    setPos({ left, top });
+  }, [anchor]);
 
   // A resize reflows the content under the fixed menu: just dismiss;
   // keeping it at the old client point would look wrong anyway.
@@ -187,8 +212,8 @@ export const TileMenu: React.FC<{
         // Fixed to the viewport at the click point: pointer coords are real
         // px, so left/top stay numeric (px), never rem.
         position: 'fixed',
-        left: anchor.clientX + CURSOR_OFFSET,
-        top: anchor.clientY + CURSOR_OFFSET,
+        left: pos.left,
+        top: pos.top,
         zIndex: 1000,
       }}
     >

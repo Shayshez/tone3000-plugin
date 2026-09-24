@@ -136,6 +136,11 @@ export interface ChainActions {
   /** Paste the copied block into `index` (the insert slot there is filled).
       Gate on `canPaste` from useChainState. */
   pasteBlock: (index: number) => void;
+  /** Put a fresh empty "+" slot at lane `index` (the chip menu's Add Slot
+      Left/Right); one undo step. */
+  addInsertSlot: (index: number) => void;
+  /** Remove an empty "+" slot (never the lane's rightmost one); one undo step. */
+  removeInsertSlot: (insertBlockId: string) => void;
   /** Native only stores the active model, so the switch always carries the
       model object (paged in from the API by the picker, or a local tone's
       own model list); id/name/model_url is all native needs. */

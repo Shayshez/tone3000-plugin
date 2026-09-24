@@ -390,6 +390,20 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 juce::String(editor->processor.pasteChainBlock(static_cast<int>(args[0]))));
           }))
       .withNativeFunction(
+          // (index): a fresh empty insert slot at that lane position (the
+          // chip menu's Add Slot Left/Right). Returns its id.
+          "addInsertSlot",
+          guarded(1, juce::var(""), [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                juce::String(editor->processor.addInsertSlot(static_cast<int>(args[0]))));
+          }))
+      .withNativeFunction(
+          // (insertBlockId): remove that empty slot (never the lane's last,
+          // rightmost "+"). False when refused.
+          "removeInsertSlot", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.removeInsertSlot(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
           // ("stereo" | "left" | "right"): which channels of a stereo
           // source feed the plugin (the faceplate input-mode button).
           "setInputMode", guarded(1, false, [editor](const juce::Array<juce::var>& args) {

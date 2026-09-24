@@ -68,14 +68,22 @@ bool blockHasNonDefaultIrShape(const ChainBlock& block);
 // See the declaration for the invariant. Called after every structural lane
 // change (load/remove/cross-lane move/stereo seed/snapshot restore); pure
 // bookkeeping: no revision bump, no history entry of its own.
-void TONE3000Processor::normalizeLaneInserts(Lane& l) {
+void TONE3000Processor::normalizeLaneInserts(Lane& l, bool trimSurplus) {
   const int total = static_cast<int>(l.size());
   int inserts = static_cast<int>(std::count_if(l.begin(), l.end(), isInsertBlock));
   const int tones = total - inserts;
   const int required = std::max(kMinLaneSlots - tones, 1);
 
-  // Trim overshoot back-to-front so slots the user positioned stay put.
-  for (int i = total - 1; i >= 0 && inserts > required; --i) {
+  // Trim overshoot back-to-front so slots the user positioned stay put -
+  // except a trailing insert, the lane's append point (the rightmost "+"),
+  // which is never the one trimmed. Surplus exists legitimately (see
+  // addInsertSlot), and undo/redo/state restores all re-normalize here, so
+  // without this skip they'd drop the trailing "+" and leave a chain with
+  // no append slot at its end.
+  const bool trailingInsert = total > 0 && isInsertBlock(l.back());
+  // `trimSurplus` false = pad only (restores: see ProcessorHistory).
+  for (int i = total - (trailingInsert ? 2 : 1); trimSurplus && i >= 0 && inserts > required;
+       --i) {
     if (isInsertBlock(l[static_cast<size_t>(i)])) {
       l.erase(l.begin() + i);
       --inserts;
@@ -889,6 +897,29 @@ std::string TONE3000Processor::pasteChainBlock(int index) {
   landToneBlock(std::move(block), index);
   DBG("Pasted clipboard block -> " << newId << " (@ " << index << ")");
   return newId;
+}
+
+std::string TONE3000Processor::addInsertSlot(int index) {
+  juce::ScopedLock lock(chainMutex);
+  pushChainHistory();
+  const std::string newId = juce::Uuid().toString().toStdString();
+  index = juce::jlimit(0, static_cast<int>(chain.size()), index);
+  chain.insert(chain.begin() + index, std::make_unique<ChainBlock>(newId, ChainBlockType::INSERT));
+  bumpChainRevision();
+  return newId;
+}
+
+bool TONE3000Processor::removeInsertSlot(const std::string& blockId) {
+  juce::ScopedLock lock(chainMutex);
+  auto it = std::find_if(chain.begin(), chain.end(),
+                         [&blockId](const std::unique_ptr<ChainBlock>& b) { return b->id == blockId; });
+  if (it == chain.end() || !isInsertBlock(*it) || std::next(it) == chain.end())
+    return false;
+  pushChainHistory();
+  chain.erase(it);
+  normalizeLaneInserts(chain);
+  bumpChainRevision();
+  return true;
 }
 
 bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String& toneJsonString) {

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/react/sortable';
 import {
+  ArrowLeft,
   ArrowLeftRight,
+  ArrowRight,
   ClipboardPaste,
   Copy,
   File,
@@ -244,6 +246,36 @@ const localLoadMenuItems = (
     the split drop zone's IR/Cab halves (SplitFileDropZone) as the tile
     menus' own equivalent of that split. Exported for ChainMapStrip's own
     "+" chip - same rows, same targeting, just a different chip shell. */
+/** Add Slot Left/Right rows for a tone tile or chip menu, each omitted when
+    an empty slot already sits on that side (see adjacentInsertSlots). */
+export const addSlotMenuItems = (
+  index: number,
+  slotLeft: boolean,
+  slotRight: boolean,
+  actions: ChainActions
+): TileMenuItem[] => [
+  ...(slotLeft
+    ? []
+    : [
+        {
+          label: 'Add Slot Left',
+          icon: <ArrowLeft size={16} />,
+          help: HELP.chipAddSlotLeft,
+          onSelect: () => actions.addInsertSlot(index),
+        },
+      ]),
+  ...(slotRight
+    ? []
+    : [
+        {
+          label: 'Add Slot Right',
+          icon: <ArrowRight size={16} />,
+          help: HELP.chipAddSlotRight,
+          onSelect: () => actions.addInsertSlot(index + 1),
+        },
+      ]),
+];
+
 export const blockTypeMenuItems = (
   targetBlockId: string,
   actions: ChainActions,
@@ -822,6 +854,10 @@ interface GalleryBlockProps {
       block, or downstream of one/a stereo IR) - drives an ordinary block's
       own Mono/Stereo channel badge (see TileChannelBadge). */
   stereo: boolean;
+  /** An empty "+" slot already sits directly left / right of this tile -
+      hides the matching Add Slot menu row (see adjacentInsertSlots). */
+  slotLeft: boolean;
+  slotRight: boolean;
 }
 
 /** Memoized so a lane re-render (e.g. another tile's optimistic state) only
@@ -829,7 +865,7 @@ interface GalleryBlockProps {
     the ChainActions context, so there are no per-render callback props to
     defeat the memo. */
 export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
-  ({ block, index, group, size, onOpen, onOpenEq, onOpenStereo, stereo }) => {
+  ({ block, index, group, size, onOpen, onOpenEq, onOpenStereo, stereo, slotLeft, slotRight }) => {
     const { blockId, params } = block;
     const actions = useChainActions();
     const toast = useToast();
@@ -943,12 +979,15 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
             anchor={menuAnchor}
             onClose={closeMenu}
             items={[
+              // Only what the tile's hover row doesn't already offer
+              // (Bypass/EQ/Stereo/Replace/Delete live there) - no duplicates.
               {
                 label: 'Copy',
                 icon: <Copy size={16} />,
                 help: HELP.copyBlock,
                 onSelect: () => actions.copyBlock(blockId),
               },
+              ...addSlotMenuItems(index, slotLeft, slotRight, actions),
               ...blockTypeMenuItems(blockId, actions, toast),
             ]}
           />
@@ -1003,6 +1042,9 @@ interface AddTileProps {
   /** Paste the copied block into this slot; null while there's nothing valid
       to paste (the action sheet shows Paste disabled). */
   onPaste?: (() => void) | null;
+  /** The lane's rightmost slot - the chain's permanent append point, so its
+      menu offers no Delete. */
+  isLast?: boolean;
 }
 
 /** The insert slot as a dashed add tile, sortable so the insert point can be
@@ -1017,6 +1059,7 @@ export const AddTile: React.FC<AddTileProps> = ({
   routing,
   onClick,
   onPaste = null,
+  isLast = false,
 }) => {
   const { menuAnchor, openMenu, closeMenu, shouldIgnoreClick, longPressProps } = useTileMenu();
   const actions = useChainActions();
@@ -1136,6 +1179,16 @@ export const AddTile: React.FC<AddTileProps> = ({
               onSelect: () => onPaste?.(),
             },
             ...blockTypeMenuItems(id, actions, toast),
+            ...(isLast
+              ? []
+              : [
+                  {
+                    label: 'Delete',
+                    icon: <Trash2 size={16} />,
+                    help: HELP.chipDeleteSlot,
+                    onSelect: () => actions.removeInsertSlot(id),
+                  },
+                ]),
           ]}
         />
       )}

@@ -76,6 +76,8 @@ export function useChainState() {
       duplicateChainBlock: backend.getPluginFunction('duplicateChainBlock'),
       copyChainBlock: backend.getPluginFunction('copyChainBlock'),
       pasteChainBlock: backend.getPluginFunction('pasteChainBlock'),
+      addInsertSlot: backend.getPluginFunction('addInsertSlot'),
+      removeInsertSlot: backend.getPluginFunction('removeInsertSlot'),
       setBlockParam: backend.getPluginFunction('setBlockParam'),
       setBlockEqBand: backend.getPluginFunction('setBlockEqBand'),
       setBlockEqEnabled: backend.getPluginFunction('setBlockEqEnabled'),
@@ -292,6 +294,13 @@ export function useChainState() {
           filled). Resolves to the new blockId ('' on failure). */
       pasteBlock: (index: number) =>
         run<string>('pasteChainBlock', () => native.pasteChainBlock(index)),
+      /** A fresh empty insert slot at lane `index` (one undo step).
+          Resolves to its id ('' on failure). */
+      addInsertSlot: (index: number) =>
+        run<string>('addInsertSlot', () => native.addInsertSlot(index)),
+      /** Remove an empty slot (never the lane's rightmost "+"); one undo step. */
+      removeInsertSlot: (insertBlockId: string) =>
+        run<boolean>('removeInsertSlot', () => native.removeInsertSlot(insertBlockId)),
       /** Which channels of a stereo source feed the plugin (faceplate button). */
       setInputMode: (mode: InputMode) => run('setInputMode', () => native.setInputMode(mode)),
       /** The block's NAM A2 size (0 = lite, 1 = full; see BlockParams.

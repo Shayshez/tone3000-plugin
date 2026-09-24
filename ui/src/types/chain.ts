@@ -47,6 +47,17 @@ export interface BlockEqParams {
   bands: EqBand[];
 }
 
+/** Which sides of lane item `index` already have an empty "+" slot right
+    next to it - the Add Slot Left/Right menu rows hide on those sides
+    (adding a second empty slot beside an existing one is pointless). */
+export function adjacentInsertSlots(
+  items: ChainItem[],
+  index: number
+): { left: boolean; right: boolean } {
+  const isSlot = (i: number) => i >= 0 && i < items.length && isInsertSlot(items[i]);
+  return { left: isSlot(index - 1), right: isSlot(index + 1) };
+}
+
 export const EQ_NUM_BANDS = 8;
 export const EQ_MIN_FREQ_HZ = 20;
 export const EQ_MAX_FREQ_HZ = 20000;

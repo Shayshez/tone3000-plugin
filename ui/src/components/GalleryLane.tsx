@@ -3,7 +3,7 @@ import { PlusCircle } from './icons';
 import { GalleryBlock, AddTile, plusIconSize, plusCircleInset } from './GalleryBlock';
 import type { AddTileRouting } from './GalleryBlock';
 import type { ChainItem, ToneBlock } from '../types/chain';
-import { isInsertSlot } from '../types/chain';
+import { adjacentInsertSlots, isInsertSlot } from '../types/chain';
 /**
  * Lane-level pieces of the chain gallery (see ChainView for the drag
  * orchestration that owns them): the ghost rail, the lane of tiles, and the
@@ -140,6 +140,7 @@ export const GalleryLane: React.FC<{
             routing={addTileRouting(index, items.length)}
             onClick={() => onAdd(item.blockId)}
             onPaste={onPasteBlock != null ? () => onPasteBlock(index) : null}
+            isLast={index === items.length - 1}
           />
         ) : (
           <GalleryBlock
@@ -152,6 +153,8 @@ export const GalleryLane: React.FC<{
             onOpenEq={onOpenEq}
             onOpenStereo={onOpenStereo}
             stereo={isDownstreamOfStereoWidener(items, index)}
+            slotLeft={adjacentInsertSlots(items, index).left}
+            slotRight={adjacentInsertSlots(items, index).right}
           />
         )
       )}

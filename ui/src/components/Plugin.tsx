@@ -376,6 +376,8 @@ export const Plugin: React.FC = () => {
       duplicateBlock: actions.duplicateBlock,
       copyBlock: actions.copyBlock,
       pasteBlock: actions.pasteBlock,
+      addInsertSlot: actions.addInsertSlot,
+      removeInsertSlot: actions.removeInsertSlot,
       switchModel: handleSwitchModel,
       retryLoad: handleRetryLoad,
       listToneModels: session.listToneModels,
