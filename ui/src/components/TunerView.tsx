@@ -340,15 +340,15 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         position: 'absolute',
         top: '50%',
         ...(side === 'left'
-          ? { right: 'calc(100% + 0.2em)' }
-          : { left: `calc(100% + ${hasAccidental ? '0.5em' : '0.2em'})` }),
-        width: '0.24em',
-        height: '0.3em',
+          ? { right: 'calc(100% + 0.26em)' }
+          : { left: `calc(100% + ${hasAccidental ? '0.58em' : '0.26em'})` }),
+        width: '0.4em',
+        height: '0.52em',
         transform: 'translateY(-50%)',
         backgroundColor: inTune ? LOCK_BLUE : SURFACE_RAISED,
         clipPath:
           side === 'left' ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(100% 0, 0 50%, 100% 100%)',
-        filter: inTune ? `drop-shadow(0 0 0.08em ${LOCK_BLUE})` : 'none',
+        filter: inTune ? `drop-shadow(0 0 0.16em ${LOCK_BLUE})` : 'none',
         transition: 'background-color 90ms linear',
       }}
     />
