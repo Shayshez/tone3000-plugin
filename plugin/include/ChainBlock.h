@@ -190,6 +190,25 @@ constexpr int kNumBlockChannels = 4;
 constexpr int kMinLaneSlots = 5;
 
 // Chain block data structure
+// A prepared IR/Cab engine for one of a block's other channels (see
+// ChainBlock::warmIrEngines): the convolvers plus every model-derived field
+// that has to travel with them when they become the live engine.
+struct WarmIrEngine {
+  std::unique_ptr<juce::dsp::Convolution> convolverMono;
+  std::unique_ptr<juce::dsp::Convolution> convolverStereo;
+  int irNumChannels = 1;
+  int irLengthBaseSamples = 0;
+  bool irIsLong = false;
+  float irNormalizationGainLinear = 1.0f;           // content-only
+  float irEffectiveNormalizationGainLinear = 1.0f;  // with Size compensation
+  juce::AudioBuffer<float> irRawSamples;
+  double irRawSampleRate = 0.0;
+  int irContentLengthSamples = 0;
+  int irOnsetSamples = 0;
+  int irOnsetSamplesRelaxed = 0;
+  std::vector<std::pair<float, float>> irWaveformPeaks;
+};
+
 struct ChainBlock {
   std::string id;  // Chain block UUID
   ChainBlockType type;
@@ -323,6 +342,18 @@ struct ChainBlock {
   juce::LinearSmoothedValue<float> xfadeGain{1.0f};
   juce::AudioBuffer<float> xfadeScratch;
   juce::LinearSmoothedValue<float> namNormalizationSmoother;
+
+  // IR/Cab counterpart (see ProcessorScenes.cpp): prepared engines for the
+  // other channels, keyed by the channel's kernel signature (model + shape,
+  // since two channels can share an IR file but shape it differently).
+  // Message thread only (under chainMutex). A switch crossfades from the
+  // outgoing engine (xfadeOutgoingIr, reusing xfadeGain/xfadeActive/
+  // xfadeScratch at the base rate, inside the IR island) to the new one.
+  std::map<juce::String, WarmIrEngine> warmIrEngines;
+  std::set<juce::String> warmIrPending;
+  WarmIrEngine xfadeOutgoingIr;
+  juce::String xfadeOutgoingIrKey;
+  float xfadeOutgoingIrGain = 1.0f;  // outgoing engine's clamped normalization
 
   // IR-specific processing.
   // convolverMono: IR channel 0 loaded with Stereo::no; applies the same (left) kernel to

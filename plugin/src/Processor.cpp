@@ -15,6 +15,64 @@
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 #endif
 
+namespace {
+
+// Channel-switch crossfade for IR/Cab blocks (see ChainBlock::
+// xfadeOutgoingIr), decided once per callback before the island runs.
+struct IrXfade {
+  juce::dsp::Convolution* outgoing = nullptr;  // null = no fade this callback
+  // Outgoing engine's level relative to the live normalization smoother,
+  // which already sits at the new engine's level (applied after the island).
+  float gainRatio = 1.0f;
+};
+
+IrXfade beginIrXfade(ChainBlock& block, int numChannels, bool stereoAllowed) {
+  IrXfade x;
+  WarmIrEngine& out = block.xfadeOutgoingIr;
+  if (!block.xfadeActive || out.convolverMono == nullptr ||
+      block.xfadeScratch.getNumChannels() < numChannels)
+    return x;
+  x.outgoing = stereoAllowed && out.irNumChannels > 1 && numChannels > 1 &&
+                       out.convolverStereo != nullptr
+                   ? out.convolverStereo.get()
+                   : out.convolverMono.get();
+  const float live = juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear);
+  x.gainRatio = juce::jmin(16.0f, block.xfadeOutgoingIrGain / juce::jmax(live, 1.0e-4f));
+  return x;
+}
+
+// Convolve the island's base-rate frames with the live engine and, during a
+// channel switch, with the outgoing one too, crossfading old -> new over
+// kSceneXfadeSeconds (both engines run the whole time: no gap).
+void runIrWithXfade(ChainBlock& block, const IrXfade& x, juce::dsp::Convolution& convolver,
+                    float* const* channels, int numChannels, int frames) {
+  const bool fading = x.outgoing != nullptr && block.xfadeScratch.getNumSamples() >= frames;
+  if (fading)
+    for (int ch = 0; ch < numChannels; ++ch)
+      block.xfadeScratch.copyFrom(ch, 0, channels[ch], frames);
+
+  juce::dsp::AudioBlock<float> live(channels, static_cast<size_t>(numChannels),
+                                    static_cast<size_t>(frames));
+  convolver.process(juce::dsp::ProcessContextReplacing<float>(live));
+  if (!fading)
+    return;
+
+  float* const* old = block.xfadeScratch.getArrayOfWritePointers();
+  juce::dsp::AudioBlock<float> oldBlock(old, static_cast<size_t>(numChannels),
+                                        static_cast<size_t>(frames));
+  x.outgoing->process(juce::dsp::ProcessContextReplacing<float>(oldBlock));
+  for (int i = 0; i < frames; ++i) {
+    const float g = block.xfadeGain.getNextValue();
+    const float oldGain = (1.0f - g) * x.gainRatio;
+    for (int ch = 0; ch < numChannels; ++ch)
+      channels[ch][i] = channels[ch][i] * g + old[ch][i] * oldGain;
+  }
+  if (!block.xfadeGain.isSmoothing())
+    block.xfadeActive = false;  // done; the message thread reclaims the engine
+}
+
+}  // namespace
+
 // ##############
 // MAIN PROCESSOR
 // ##############
@@ -408,6 +466,22 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       block->convolverMono->prepare(spec);
       if (block->convolverStereo != nullptr)
         block->convolverStereo->prepare(spec);
+      // Channel warm pool + crossfade state follow too (see
+      // ChainBlock::warmIrEngines); the fade runs at the base rate.
+      for (auto& [key, warm] : block->warmIrEngines) {
+        if (warm.convolverMono != nullptr)
+          warm.convolverMono->prepare(spec);
+        if (warm.convolverStereo != nullptr)
+          warm.convolverStereo->prepare(spec);
+      }
+      if (block->xfadeOutgoingIr.convolverMono != nullptr)
+        block->xfadeOutgoingIr.convolverMono->prepare(spec);
+      if (block->xfadeOutgoingIr.convolverStereo != nullptr)
+        block->xfadeOutgoingIr.convolverStereo->prepare(spec);
+      block->xfadeScratch.setSize(2, juce::jmax(1, chainBaseBlockSize()), false, false, true);
+      block->xfadeGain.reset(kChainBaseSampleRate, kSceneXfadeSeconds);
+      block->xfadeGain.setCurrentAndTargetValue(1.0f);
+      block->xfadeActive = false;
 
       // Reset normalization smoother to current gain to prevent jumps on
       // re-prepare - irEffectiveNormalizationGainLinear, so a re-prepare
@@ -1478,6 +1552,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         const bool useStereoIr = block->irNumChannels > 1 && numChannels > 1 && noNamAfter &&
                                  block->convolverStereo != nullptr;
         auto& convolver = useStereoIr ? *block->convolverStereo : *block->convolverMono;
+        const IrXfade xfade = beginIrXfade(*block, numChannels, noNamAfter);
 
         // Convolution runs at the base rate inside the block's island: when
         // the chain is oversampled the island decimates the wet path, hands
@@ -1487,7 +1562,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // sound bit-identical to the non-oversampled chain.
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
-            [&convolver, &predelay = block->predelay,
+            [&convolver, &predelay = block->predelay, &irBlock = *block, &xfade,
              numChannels](float* const* baseChannels, int baseFrames) {
               // Predelay runs on the wet signal here, right before the
               // convolver, always at the base rate the island already
@@ -1496,9 +1571,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
               juce::AudioBuffer<float> baseBuffer(baseChannels, numChannels, baseFrames);
               predelay.process(baseBuffer);
 
-              juce::dsp::AudioBlock<float> irBlock(baseChannels, static_cast<size_t>(numChannels),
-                                                   static_cast<size_t>(baseFrames));
-              convolver.process(juce::dsp::ProcessContextReplacing<float>(irBlock));
+              runIrWithXfade(irBlock, xfade, convolver, baseChannels, numChannels, baseFrames);
             });
 
         // Unit-energy normalization, always on: an IR file's absolute level
@@ -1533,13 +1606,12 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // zero-capacity ring buffer, the same class of bug that crashed the
       // very first version of this block.
       try {
+        const IrXfade xfade = beginIrXfade(*block, numChannels, /*stereoAllowed=*/false);
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
-            [&convolver = *block->convolverMono, numChannels](float* const* baseChannels,
-                                                               int baseFrames) {
-              juce::dsp::AudioBlock<float> irBlock(baseChannels, static_cast<size_t>(numChannels),
-                                                   static_cast<size_t>(baseFrames));
-              convolver.process(juce::dsp::ProcessContextReplacing<float>(irBlock));
+            [&convolver = *block->convolverMono, &irBlock = *block, &xfade,
+             numChannels](float* const* baseChannels, int baseFrames) {
+              runIrWithXfade(irBlock, xfade, convolver, baseChannels, numChannels, baseFrames);
             });
 
         // Unit-energy normalization, same rule as a plain IR block's. CAB

@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
 
 namespace {
 
@@ -276,6 +277,94 @@ TEST(ScenesTest, NamModelSwitchIsGaplessOnceWarm) {
     juce::Thread::sleep(20);
   EXPECT_TRUE(restored.isSceneModelWarm("amp", 101))
       << "scene 2's model was not restored from the saved bytes";
+}
+
+// IR/Cab channels: every other channel's kernel (model + shape) is kept warm,
+// and a switch crossfades between the two convolvers - no wet-mute dip.
+// Covers both a shape-only difference (same file) and a different file.
+TEST(ScenesTest, IrChannelSwitchIsGaplessOnceWarm) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, 512);
+  proc.prepareToPlay(kFs, 512);
+
+  juce::ValueTree block = makeIrBlockTree("cab", 1, 100);
+  {
+    juce::MemoryBlock bytes;
+    ASSERT_TRUE(testFile("cab-ir-test-2.wav").loadFileAsData(bytes));
+    juce::ValueTree cached("CachedModel");
+    cached.setProperty("modelId", 101, nullptr);
+    cached.setProperty("data", juce::var(bytes), nullptr);
+    block.getChildWithName("ModelCache").appendChild(cached, nullptr);
+    block.setProperty(
+        "toneJson",
+        "{\"id\":1,\"title\":\"Test IR\",\"format\":\"ir\",\"models\":["
+        "{\"id\":100,\"name\":\"cab\",\"model_url\":\"https://test.invalid/cab.wav\"},"
+        "{\"id\":101,\"name\":\"cab-b\",\"model_url\":\"https://test.invalid/cab-b.wav\"}]}",
+        nullptr);
+  }
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree lane("ChainBlocks");
+  lane.appendChild(block, nullptr);
+  state.appendChild(lane, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  auto waitFor = [](const std::function<bool()>& cond) {
+    const auto until = juce::Time::getMillisecondCounter() + 10000;
+    while (!cond() && juce::Time::getMillisecondCounter() < until)
+      juce::Thread::sleep(20);
+    return cond();
+  };
+  auto modelLoading = [&] {
+    const juce::var st = proc.getChainState(-1);
+    return static_cast<bool>(st["chain"][0]["modelLoading"]);
+  };
+
+  // Channel B: same file, another shape (tail pulled down).
+  ASSERT_TRUE(proc.selectBlockChannel("cab", 1));
+  ASSERT_TRUE(proc.setBlockIrDecay("cab", 1.0, 0.0, 0.5, 0.8, 0.3, 0.5));
+  juce::Thread::sleep(300);  // the live shape rebuild lands
+  // Channel C: another file.
+  ASSERT_TRUE(proc.selectBlockChannel("cab", 2));
+  auto* model101 = new juce::DynamicObject();
+  model101->setProperty("id", 101);
+  model101->setProperty("name", "cab-b");
+  model101->setProperty("model_url", "https://test.invalid/cab-b.wav");
+  ASSERT_TRUE(proc.switchModel("cab", 101, juce::var(model101)));
+  ASSERT_TRUE(waitFor([&] { return !modelLoading(); }));
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const auto sine = makeSine(120 * 512, 220.0, 0.3f);
+  auto rms = [](const std::vector<float>& v, size_t start, size_t len) {
+    double sum = 0.0;
+    for (size_t i = start; i < start + len; ++i) sum += static_cast<double>(v[i]) * v[i];
+    return std::sqrt(sum / static_cast<double>(len));
+  };
+  // Switch while "playing"; no 5 ms window may fall far below both the
+  // level before and the level after (a wet-mute swap drops to ~silence).
+  auto checkSwitch = [&](int channel, const char* what) {
+    ASSERT_TRUE(waitFor([&] { return proc.isChannelWarm("cab", channel); }))
+        << what << ": channel never warmed up";
+    const std::vector<float> a(sine.begin(), sine.begin() + 40 * 512);
+    const std::vector<float> b(sine.begin() + 40 * 512, sine.begin() + 80 * 512);
+    const auto before = processStereo(proc, a).first;
+    ASSERT_TRUE(proc.selectBlockChannel("cab", channel));
+    EXPECT_FALSE(modelLoading()) << what << ": warm switch must not load";
+    const auto after = processStereo(proc, b).first;
+    const size_t win = 240;
+    const double steadyBefore = rms(before, before.size() - 8 * win, 8 * win);
+    const double steadyAfter = rms(after, after.size() - 8 * win, 8 * win);
+    double worst = 1e9;
+    for (size_t w = 0; w < 20; ++w) worst = std::min(worst, rms(after, w * win, win));
+    std::printf("[ScenesTest] %s: before %.4f after %.4f worst %.4f\n", what, steadyBefore,
+                steadyAfter, worst);
+    EXPECT_GT(worst, 0.6 * std::min(steadyBefore, steadyAfter)) << what << ": switch dipped";
+  };
+  checkSwitch(1, "other file -> shape");  // C (file 101) -> B (file 100, shaped)
+  checkSwitch(0, "shape -> default");     // B -> A (same file, default shape)
+  checkSwitch(2, "default -> other file");  // A -> C
+  const juce::var row = proc.getChainState(-1)["chain"][0];
+  EXPECT_EQ(static_cast<int>(row["activeModelId"]), 101);
 }
 
 TEST(ScenesTest, HostSceneParameterFollowsAndDrivesTheActiveScene) {

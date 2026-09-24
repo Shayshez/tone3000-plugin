@@ -44,6 +44,22 @@ const char* const kIrShapeProps[] = {"initLevel",  "attackLength", "attackCurve"
                                      "decayLevel", "decayCurve",   "size",        "width",
                                      "trimInit",   "trimRelaxed",  "reverse"};
 
+// Kernel signature of an IR/Cab channel (or of a block's live settings, via
+// serializeBlockSettings): the model, plus the shape for IR blocks (Cab has
+// none). Two channels with equal keys convolve identically, so they share a
+// warm engine. Values are rounded so a session round trip keeps the key.
+juce::String irChannelKey(const juce::ValueTree& channel, ChainBlockType type) {
+  juce::String key = "m" + channel.getProperty("activeModelId", 0).toString();
+  if (type == ChainBlockType::IR)
+    for (const char* prop : kIrShapeProps)
+      key << "|" << juce::String(static_cast<double>(channel.getProperty(prop, 0.0)), 5);
+  return key;
+}
+
+bool isIrType(const ChainBlock& block) {
+  return block.type == ChainBlockType::IR || block.type == ChainBlockType::CAB;
+}
+
 }  // namespace
 
 void TONE3000Processor::forEachSceneBlockConst(const Lane& lane,
@@ -136,6 +152,20 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& c
 
   const int modelId = static_cast<int>(channel.getProperty("activeModelId", 0));
   const bool modelChanges = blockHasModel(block) && modelId != 0 && modelId != block.activeModelId;
+
+  // IR/Cab: a warm engine for this channel's kernel (model + shape) makes
+  // the switch a crossfade instead of a load / rebuild.
+  if (isIrType(block) && block.toneVar.isObject()) {
+    const juce::String key = irChannelKey(channel, block.type);
+    if (key != irChannelKey(before, block.type) &&
+        swapToWarmIrEngine(block, key, irChannelKey(before, block.type))) {
+      if (modelChanges)
+        adoptSwappedModel(block, modelId,
+                          juce::JSON::parse(channel.getProperty("channelModel").toString()));
+      return;
+    }
+  }
+
   if (modelChanges) {
     const juce::var modelData = juce::JSON::parse(channel.getProperty("channelModel").toString());
     if (modelData.isObject() && block.toneVar.isObject() &&
@@ -449,8 +479,14 @@ bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
   block.xfadeGain.setTargetValue(1.0f);
   block.xfadeActive = true;
 
-  // Same bookkeeping switchModelLocked does, minus the load.
-  if (!static_cast<bool>(block.toneVar["local"])) {
+  adoptSwappedModel(block, modelId, modelData);
+  return true;
+}
+
+void TONE3000Processor::adoptSwappedModel(ChainBlock& block, int modelId,
+                                          const juce::var& modelData) {
+  if (modelData.isObject() && block.toneVar.isObject() &&
+      !static_cast<bool>(block.toneVar["local"])) {
     juce::Array<juce::var> models;
     models.add(modelData);
     block.toneVar.getDynamicObject()->setProperty("models", models);
@@ -460,6 +496,72 @@ bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
   block.activeModelId = modelId;
   block.modelLoading = false;
   block.loadFailed = false;
+}
+
+bool TONE3000Processor::swapToWarmIrEngine(ChainBlock& block, const juce::String& key,
+                                           const juce::String& outgoingKey) {
+  auto it = block.warmIrEngines.find(key);
+  if (it == block.warmIrEngines.end() || it->second.convolverMono == nullptr ||
+      block.convolverMono == nullptr || !block.loaded)
+    return false;
+  WarmIrEngine incoming = std::move(it->second);
+  block.warmIrEngines.erase(it);
+
+  // A crossfade still running hands its outgoing engine back to the pool.
+  if (block.xfadeOutgoingIr.convolverMono != nullptr)
+    block.warmIrEngines[block.xfadeOutgoingIrKey] = std::move(block.xfadeOutgoingIr);
+
+  // Live engine -> outgoing (keeps its tail: it plays on while fading out).
+  WarmIrEngine& out = block.xfadeOutgoingIr;
+  out = WarmIrEngine();
+  out.convolverMono = std::move(block.convolverMono);
+  out.convolverStereo = std::move(block.convolverStereo);
+  out.irNumChannels = block.irNumChannels;
+  out.irLengthBaseSamples = block.irLengthBaseSamples;
+  out.irIsLong = block.irIsLong;
+  out.irNormalizationGainLinear = block.irNormalizationGainLinear;
+  out.irEffectiveNormalizationGainLinear = block.irEffectiveNormalizationGainLinear;
+  std::swap(out.irRawSamples, block.irRawSamples);
+  out.irRawSampleRate = block.irRawSampleRate;
+  out.irContentLengthSamples = block.irContentLengthSamples;
+  out.irOnsetSamples = block.irOnsetSamples;
+  out.irOnsetSamplesRelaxed = block.irOnsetSamplesRelaxed;
+  std::swap(out.irWaveformPeaks, block.irWaveformPeaks);
+  block.xfadeOutgoingIrKey = outgoingKey;
+  block.xfadeOutgoingIrGain = juce::jlimit(0.0f, 1.0f, out.irEffectiveNormalizationGainLinear);
+
+  // Incoming -> live, from a clean state (no leftovers from its last run).
+  incoming.convolverMono->reset();
+  if (incoming.convolverStereo != nullptr)
+    incoming.convolverStereo->reset();
+  block.convolverMono = std::move(incoming.convolverMono);
+  block.convolverStereo = std::move(incoming.convolverStereo);
+  block.irNumChannels = incoming.irNumChannels;
+  block.irLengthBaseSamples = incoming.irLengthBaseSamples;
+  block.irIsLong = incoming.irIsLong;
+  block.irNormalizationGainLinear = incoming.irNormalizationGainLinear;
+  block.irEffectiveNormalizationGainLinear = incoming.irEffectiveNormalizationGainLinear;
+  std::swap(block.irRawSamples, incoming.irRawSamples);
+  block.irRawSampleRate = incoming.irRawSampleRate;
+  block.irContentLengthSamples = incoming.irContentLengthSamples;
+  block.irOnsetSamples = incoming.irOnsetSamples;
+  block.irOnsetSamplesRelaxed = incoming.irOnsetSamplesRelaxed;
+  std::swap(block.irWaveformPeaks, incoming.irWaveformPeaks);
+  // Each engine carries its own level through the fade (see the IR branch
+  // in processBlock), so the shared smoother lands on the new one at once.
+  block.irNormalizationSmoother.setCurrentAndTargetValue(
+      juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear));
+  // Any shape rebuild still in flight belongs to the channel just left.
+  ++block.irShapingGeneration;
+
+  // The fade runs at the base rate, inside the block's convolution island.
+  const int baseBlock = juce::jmax(1, chainBaseBlockSize());
+  if (block.xfadeScratch.getNumSamples() < baseBlock || block.xfadeScratch.getNumChannels() < 2)
+    block.xfadeScratch.setSize(2, baseBlock, false, false, true);
+  block.xfadeGain.reset(kChainBaseSampleRate, kSceneXfadeSeconds);
+  block.xfadeGain.setCurrentAndTargetValue(0.0f);
+  block.xfadeGain.setTargetValue(1.0f);
+  block.xfadeActive = true;
   return true;
 }
 
@@ -479,6 +581,10 @@ bool TONE3000Processor::sceneReferencesModel(const std::string& blockId, int mod
 
 void TONE3000Processor::refreshWarmEngines() {
   forEachSceneBlock(chain, [&](ChainBlock& b) {
+    if (isIrType(b)) {
+      refreshWarmIrEngines(b);
+      return;
+    }
     if (b.type != ChainBlockType::NAM)
       return;
     // Models of this block's OTHER used channels (at most 3 per block).
@@ -575,6 +681,197 @@ void TONE3000Processor::prewarmModelInBackground(const std::string& blockId, int
   if (prepared.preparedBlockSize < chainDomainBlockSize())
     prepared.namEngine->prepare(chainDomainBlockSize());
   block->warmNamEngines[modelId] = std::move(prepared.namEngine);
+}
+
+void TONE3000Processor::refreshWarmIrEngines(ChainBlock& b) {
+  // Kernels of this block's OTHER used channels that differ from the live one.
+  const juce::String liveKey = irChannelKey(serializeBlockSettings(b), b.type);
+  std::map<juce::String, juce::ValueTree> needed;  // key -> channel tree
+  for (int c = 0; c < kNumBlockChannels; ++c) {
+    const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
+    if (c == b.activeChannel || !slot.isValid())
+      continue;
+    const juce::String key = irChannelKey(slot, b.type);
+    if (key != liveKey && static_cast<int>(slot.getProperty("activeModelId", 0)) != 0)
+      needed.emplace(key, slot);
+  }
+
+  // A finished crossfade's engine goes back to the pool if still needed.
+  if (!b.xfadeActive && b.xfadeOutgoingIr.convolverMono != nullptr) {
+    if (needed.count(b.xfadeOutgoingIrKey) > 0 &&
+        b.warmIrEngines.count(b.xfadeOutgoingIrKey) == 0)
+      b.warmIrEngines[b.xfadeOutgoingIrKey] = std::move(b.xfadeOutgoingIr);
+    b.xfadeOutgoingIr = WarmIrEngine();
+  }
+
+  for (auto it = b.warmIrEngines.begin(); it != b.warmIrEngines.end();)
+    it = needed.count(it->first) == 0 ? b.warmIrEngines.erase(it) : std::next(it);
+
+  for (const auto& [key, slot] : needed) {
+    const bool inFade = b.xfadeOutgoingIr.convolverMono != nullptr && b.xfadeOutgoingIrKey == key;
+    if (b.warmIrEngines.count(key) > 0 || b.warmIrPending.count(key) > 0 || inFade)
+      continue;
+    b.warmIrPending.insert(key);
+    struct PrewarmIrJob : public juce::ThreadPoolJob {
+      TONE3000Processor& processor;
+      std::string blockId;
+      juce::String key;
+      juce::ValueTree channel;
+      PrewarmIrJob(TONE3000Processor& p, std::string bid, juce::String k, juce::ValueTree ch)
+          : ThreadPoolJob("Prewarm Channel IR"), processor(p), blockId(std::move(bid)),
+            key(std::move(k)), channel(std::move(ch)) {}
+      JobStatus runJob() override {
+        processor.prewarmIrInBackground(blockId, key, channel);
+        return jobHasFinished;
+      }
+    };
+    loadingThreadPool.addJob(new PrewarmIrJob(*this, b.id, key, slot.createCopy()), true);
+  }
+}
+
+void TONE3000Processor::prewarmIrInBackground(const std::string& blockId,
+                                              const juce::String& key,
+                                              juce::ValueTree channel) {
+  const int modelId = static_cast<int>(channel.getProperty("activeModelId", 0));
+  const juce::var modelData = juce::JSON::parse(channel.getProperty("channelModel").toString());
+  ChainBlockType type = ChainBlockType::IR;
+  IrCategory category = IrCategory::IrPlayer;
+  WarmIrEngine warm;
+  bool sameModel = false;
+  std::vector<uint8_t> bytes;
+  {
+    juce::ScopedLock lock(chainMutex);
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr || !isIrType(*block))
+      return;
+    type = block->type;
+    category = type == ChainBlockType::CAB ? IrCategory::Cab : block->irCategory;
+    if (modelId == block->activeModelId && block->irRawSamples.getNumSamples() > 0) {
+      // Same file, other shape: start from the live model's decoded data.
+      sameModel = true;
+      warm.irRawSamples = block->irRawSamples;
+      warm.irRawSampleRate = block->irRawSampleRate;
+      warm.irNumChannels = block->irNumChannels;
+      warm.irIsLong = block->irIsLong;
+      warm.irNormalizationGainLinear = block->irNormalizationGainLinear;
+      warm.irContentLengthSamples = block->irContentLengthSamples;
+      warm.irOnsetSamples = block->irOnsetSamples;
+      warm.irOnsetSamplesRelaxed = block->irOnsetSamplesRelaxed;
+      warm.irWaveformPeaks = block->irWaveformPeaks;
+    } else if (auto it = block->modelCache.find(modelId); it != block->modelCache.end()) {
+      bytes = it->second;
+    }
+  }
+
+  bool fetched = false;
+  bool ok = true;
+  if (!sameModel) {
+    if (bytes.empty() && modelData.isObject()) {
+      bytes = fetchModelFromUrl(modelData["model_url"].toString());
+      fetched = !bytes.empty();
+    }
+    PreparedBlockModel prepared;
+    if (!bytes.empty())
+      prepared = prepareBlockModelOffThread(ChainBlockType::IR, bytes,
+                                            modelData["name"].toString() + ".wav", 0.0, category);
+    ok = prepared.success && prepared.convolverMono != nullptr;
+    if (ok) {
+      warm.convolverMono = std::move(prepared.convolverMono);
+      warm.convolverStereo = std::move(prepared.convolverStereo);
+      warm.irNumChannels = prepared.irNumChannels;
+      warm.irLengthBaseSamples = prepared.irLengthBaseSamples;
+      warm.irIsLong = prepared.irIsLong;
+      warm.irNormalizationGainLinear = prepared.irNormalizationGainLinear;
+      warm.irEffectiveNormalizationGainLinear = prepared.irNormalizationGainLinear;
+      warm.irRawSamples = std::move(prepared.irRawSamples);
+      warm.irRawSampleRate = prepared.irRawSampleRate;
+      warm.irContentLengthSamples = prepared.irContentLengthSamples;
+      warm.irOnsetSamples = prepared.irOnsetSamples;
+      warm.irOnsetSamplesRelaxed = prepared.irOnsetSamplesRelaxed;
+      warm.irWaveformPeaks = std::move(prepared.irWaveformPeaks);
+    }
+  }
+
+  // IR blocks: build the channel's own shape from the raw samples (a Cab has
+  // no shape; a freshly loaded kernel already is its channel).
+  if (ok && type == ChainBlockType::IR && warm.irRawSamples.getNumSamples() > 0) {
+    const bool trim = static_cast<bool>(channel.getProperty("trimInit", false));
+    const bool relaxed = static_cast<bool>(channel.getProperty("trimRelaxed", false));
+    auto f = [&](const char* prop, float fallback) {
+      return static_cast<float>(channel.getProperty(prop, fallback));
+    };
+    PreparedIrShapeRebuild shaped = prepareIrShapeRebuild(
+        warm.irRawSamples, warm.irRawSampleRate, warm.irContentLengthSamples,
+        trim ? (relaxed ? warm.irOnsetSamplesRelaxed : warm.irOnsetSamples) : 0,
+        static_cast<bool>(channel.getProperty("reverse", false)), warm.irNumChannels,
+        warm.irIsLong, f("initLevel", 1.0f), f("attackLength", 0.0f), f("attackCurve", 0.5f),
+        f("decayLength", 1.0f), f("decayLevel", 1.0f), f("decayCurve", 0.5f), f("size", 0.5f),
+        f("width", 0.75f));
+    ok = shaped.success && shaped.convolverMono != nullptr;
+    if (ok) {
+      warm.convolverMono = std::move(shaped.convolverMono);
+      warm.convolverStereo = std::move(shaped.convolverStereo);
+      warm.irLengthBaseSamples = shaped.irLengthBaseSamples;
+      warm.irEffectiveNormalizationGainLinear =
+          warm.irNormalizationGainLinear * shaped.irSizeGainCompensation;
+    }
+  }
+
+  WarmIrEngine dropped;  // destroyed after the lock is released
+  {
+    juce::ScopedLock lock(chainMutex);
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr)
+      return;
+    block->warmIrPending.erase(key);
+    if (fetched)
+      block->modelCache[modelId] = bytes;  // so presets/sessions can embed it
+    if (!ok) {
+      juce::Logger::writeToLog("[Scenes] IR prewarm failed for channel of block " +
+                               juce::String(blockId));
+      return;
+    }
+    // Still wanted? (the channel may have changed or become the live one)
+    bool wanted = false;
+    const juce::String liveKey = irChannelKey(serializeBlockSettings(*block), block->type);
+    for (int c = 0; c < kNumBlockChannels; ++c) {
+      const juce::ValueTree& slot = block->channels[static_cast<size_t>(c)];
+      wanted = wanted || (c != block->activeChannel && slot.isValid() &&
+                          irChannelKey(slot, block->type) == key);
+    }
+    if (!wanted || key == liveKey) {
+      dropped = std::move(warm);
+      return;
+    }
+    // The base block size may have moved while this was building.
+    const juce::dsp::ProcessSpec spec{kChainBaseSampleRate,
+                                      static_cast<juce::uint32>(juce::jmax(1, chainBaseBlockSize())),
+                                      2};
+    warm.convolverMono->prepare(spec);  // keeps the loaded impulse
+    if (warm.convolverStereo != nullptr)
+      warm.convolverStereo->prepare(spec);
+    std::swap(dropped, block->warmIrEngines[key]);
+    block->warmIrEngines[key] = std::move(warm);
+  }
+}
+
+bool TONE3000Processor::isChannelWarm(const std::string& blockId, int channel) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || channel < 0 || channel >= kNumBlockChannels)
+    return false;
+  const juce::ValueTree& slot = block->channels[static_cast<size_t>(channel)];
+  if (channel == block->activeChannel || !slot.isValid())
+    return true;
+  if (isIrType(*block)) {
+    const juce::String key = irChannelKey(slot, block->type);
+    return key == irChannelKey(serializeBlockSettings(*block), block->type) ||
+           block->warmIrEngines.count(key) > 0 ||
+           (block->xfadeOutgoingIr.convolverMono != nullptr && block->xfadeOutgoingIrKey == key);
+  }
+  const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
+  return modelId == block->activeModelId || block->warmNamEngines.count(modelId) > 0 ||
+         (block->xfadeOutgoingNam != nullptr && block->xfadeOutgoingModelId == modelId);
 }
 
 // ---------------------------------------------------------------------------

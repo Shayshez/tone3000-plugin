@@ -1237,10 +1237,25 @@ private:
   void prewarmModelInBackground(const std::string& blockId, int modelId, juce::var modelData);
   // Model bytes a non-active channel needs, so presets/sessions embed them.
   bool sceneReferencesModel(const std::string& blockId, int modelId) const;
+  // IR/Cab: crossfade to the warm engine prepared for kernel signature
+  // `key` (see irChannelKey in ProcessorScenes.cpp); the live engine goes
+  // out under `outgoingKey`. False when none is ready (caller falls back to
+  // a regular load / shape rebuild).
+  // The tone/model bookkeeping switchModelLocked does, minus the load (a
+  // warm engine swap already installed the model's engine).
+  void adoptSwappedModel(ChainBlock& block, int modelId, const juce::var& modelData);
+  bool swapToWarmIrEngine(ChainBlock& block, const juce::String& key,
+                          const juce::String& outgoingKey);
+  void prewarmIrInBackground(const std::string& blockId, const juce::String& key,
+                             juce::ValueTree channel);
+  void refreshWarmIrEngines(ChainBlock& block);
 public:
   // Whether switching to `modelId` on this block will be gapless right now
   // (its warm engine is ready) - the UI can show a "preparing" state.
   bool isSceneModelWarm(const std::string& blockId, int modelId) const;
+  // Same, per channel, for any block type (NAM: its model; IR/Cab: its
+  // model + shape). True for the active channel and when nothing differs.
+  bool isChannelWarm(const std::string& blockId, int channel);
 private:
 
   // Most recent deletePreset, for restoreDeletedPreset (message thread only).
