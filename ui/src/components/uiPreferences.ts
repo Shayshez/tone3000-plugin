@@ -127,9 +127,9 @@ const tunerMute = typedPref('t3k.tunerMute', false, (raw) =>
 export const setTunerMute = tunerMute.set;
 export const useTunerMute = tunerMute.useValue;
 
-export type TunerDisplay = 'bars' | 'strobe';
+export type TunerDisplay = 'bars' | 'needle' | 'strobe' | 'combo';
 const tunerDisplay = typedPref<TunerDisplay>('t3k.tunerDisplay', 'bars', (raw) =>
-  raw === 'bars' || raw === 'strobe' ? raw : undefined
+  raw === 'bars' || raw === 'needle' || raw === 'strobe' || raw === 'combo' ? raw : undefined
 );
 export const setTunerDisplay = tunerDisplay.set;
 export const useTunerDisplay = tunerDisplay.useValue;

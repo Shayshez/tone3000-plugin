@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, RotateCcw, X as XIcon } from './icons';
 import { useTunerReading } from '../hooks/useTunerReading';
 import { useParameter } from '../hooks/useParameter';
 import { TunerStrobe } from './TunerStrobe';
+import { TunerNeedle } from './TunerNeedle';
 import { isKeyboardOwned, isTypingTarget } from '../keyPassthrough';
 import { SegmentedControl } from './controls';
 import { ChromeTextButton } from './ChromeIconButton';
@@ -23,6 +24,7 @@ import {
   useTunerOffset,
   useTunerRefHz,
 } from './uiPreferences';
+import type { TunerDisplay } from './uiPreferences';
 import {
   BRAND_BLUE,
   BRAND_RED,
@@ -294,7 +296,23 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     />
   );
 
-  // Big note letter + Hz/cents readout, shared by both displays. Always
+  // Strobe with ♭/♯ markers either side, lit toward the error.
+  const strobeRow = (width: number, height: number, bands: number) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '18rem' }}>
+      <span style={{ color: isFlat ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♭</span>
+      <TunerStrobe
+        cents={cents}
+        hasSignal={hasSignal}
+        inTune={inTune}
+        width={width}
+        height={height}
+        bands={bands}
+      />
+      <span style={{ color: isSharp ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♯</span>
+    </div>
+  );
+
+  // Big note letter + Hz/cents readout, shared by every display. Always
   // occupies its box (opacity 0 while idle) so nothing shifts on lock.
   const noteReadout = (fontSize: number) => (
     <div style={{ position: 'relative', opacity: hasSignal ? 1 : 0 }}>
@@ -460,7 +478,7 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
           {renderBars('right', rightLit)}
         </div>
-      ) : (
+      ) : display === 'strobe' ? (
         <div
           style={{
             display: 'flex',
@@ -471,17 +489,50 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           }}
         >
           {noteReadout(76)}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '18rem' }}>
-            <span style={{ color: isFlat ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♭</span>
-            <TunerStrobe
-              cents={cents}
-              hasSignal={hasSignal}
-              inTune={inTune}
-              width={STROBE_WIDTH}
-              height={STROBE_HEIGHT}
-            />
-            <span style={{ color: isSharp ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♯</span>
-          </div>
+          {strobeRow(STROBE_WIDTH, STROBE_HEIGHT, 3)}
+        </div>
+      ) : display === 'needle' ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4rem',
+            marginTop: '-16rem',
+          }}
+        >
+          <TunerNeedle
+            cents={cents}
+            hasSignal={hasSignal}
+            inTune={inTune}
+            inTuneCents={IN_TUNE_CENTS}
+            radius={300}
+            width={560}
+          />
+          {noteReadout(84)}
+        </div>
+      ) : (
+        // Combo (Fractal-style): the needle for the coarse approach, a
+        // two-band strobe under it for the last cent.
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4rem',
+            marginTop: '-22rem',
+          }}
+        >
+          <TunerNeedle
+            cents={cents}
+            hasSignal={hasSignal}
+            inTune={inTune}
+            inTuneCents={IN_TUNE_CENTS}
+            radius={230}
+            width={500}
+          />
+          {noteReadout(60)}
+          <div style={{ marginTop: '28rem' }}>{strobeRow(500, 56, 2)}</div>
         </div>
       )}
 
@@ -498,11 +549,13 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           whiteSpace: 'nowrap',
         }}
       >
-        <SegmentedControl<'bars' | 'strobe'>
+        <SegmentedControl<TunerDisplay>
           value={display}
           options={[
             { value: 'bars', label: 'BARS' },
+            { value: 'needle', label: 'NEEDLE' },
             { value: 'strobe', label: 'STROBE' },
+            { value: 'combo', label: 'COMBO' },
           ]}
           onChange={setTunerDisplay}
           ariaLabel="Tuner display"

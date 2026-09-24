@@ -17,7 +17,6 @@ import { SURFACE_RAISED } from './theme';
 
 /** Design-px stripe period of the top (coarsest) band. */
 const BASE_PERIOD = 44;
-const BANDS = 3;
 /** Design px per second of drift per cent of error, top band. */
 const SPEED_PER_CENT = 5;
 /** Errors beyond this read as the maximum speed (the note name has moved on). */
@@ -52,7 +51,9 @@ export const TunerStrobe: React.FC<{
   inTune: boolean;
   width: number;
   height: number;
-}> = ({ cents, hasSignal, inTune, width, height }) => {
+  /** Stripe bands, coarsest first (3 on its own, 2 under the needle). */
+  bands?: number;
+}> = ({ cents, hasSignal, inTune, width, height, bands = 3 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const live = useRef({ cents, hasSignal, inTune });
   live.current = { cents, hasSignal, inTune };
@@ -86,9 +87,9 @@ export const TunerStrobe: React.FC<{
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       ctx.clearRect(0, 0, width, height);
 
-      const bandH = (height - BAND_GAP * (BANDS - 1)) / BANDS;
+      const bandH = (height - BAND_GAP * (bands - 1)) / bands;
       const color = !signal ? SURFACE_RAISED : locked ? LIT_BLUE : 'rgba(255, 255, 255, 0.88)';
-      for (let b = 0; b < BANDS; b++) {
+      for (let b = 0; b < bands; b++) {
         const period = BASE_PERIOD / 2 ** b;
         const offset = (((phase * 2 ** b) % period) + period) % period;
         const y = b * (bandH + BAND_GAP);
@@ -118,7 +119,7 @@ export const TunerStrobe: React.FC<{
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-  }, [width, height]);
+  }, [width, height, bands]);
 
   return (
     <canvas
