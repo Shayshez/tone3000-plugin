@@ -65,17 +65,20 @@ const offsetLabel = (offset: number) =>
 /** In-tune accents: text on a blue fill, and the note letter itself. */
 const BLACK_TEXT = '#000000';
 const BRAND_BLUE_TEXT = '#5B8CFF';
+/** Lock triangles: the tuner's shared bright in-tune blue. */
+const LOCK_BLUE = '#3D7BFF';
 
 /** Quick picks in the reference-pitch menu. */
 const REF_PRESETS = [432, 440, 442, 444];
 
 /** Strobe / combo band width; the needle scale adds the ♭/♯ columns' 80. */
 const METER_WIDTH = 780;
-const STROBE_HEIGHT = 132;
-const COMBO_BAND_HEIGHT = 72;
+const STROBE_HEIGHT = 112;
 
 // Cents window considered "in tune" and the full deflection of one side.
 const IN_TUNE_CENTS = 5;
+/** Extra cents a held lock tolerates before releasing (see inTune). */
+const IN_TUNE_RELEASE = 2;
 const MAX_CENTS = 50;
 
 // Bar colors from the center outward (blue → yellow → red), per screenshot.
@@ -216,9 +219,17 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   }, []);
   const absCents = Math.abs(cents);
   const roundedCents = Math.round(cents);
-  const inTune = hasSignal && absCents <= IN_TUNE_CENTS;
-  const isFlat = hasSignal && cents < -IN_TUNE_CENTS;
-  const isSharp = hasSignal && cents > IN_TUNE_CENTS;
+  // Lock with hysteresis: engages inside IN_TUNE_CENTS but only lets go past
+  // IN_TUNE_CENTS + IN_TUNE_RELEASE, so the in-tune marks (blue note, lock
+  // triangles, blue zone/stripes) hold steady instead of flickering while
+  // a sustained note wobbles around the edge - the needle and strobe are
+  // sensitive enough to show that wobble on their own.
+  const lockRef = useRef(false);
+  lockRef.current =
+    hasSignal && absCents <= (lockRef.current ? IN_TUNE_CENTS + IN_TUNE_RELEASE : IN_TUNE_CENTS);
+  const inTune = lockRef.current;
+  const isFlat = hasSignal && !inTune && cents < 0;
+  const isSharp = hasSignal && !inTune && cents > 0;
 
   // Flat lights the left side, sharp the right; in tune lights both blues.
   const leftLit = !hasSignal ? 0 : inTune ? 1 : isFlat ? litCountForCents(absCents) : 0;
@@ -319,7 +330,31 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   // Big note letter + Hz/cents readout, shared by every display. Always
   // occupies its box (opacity 0 while idle) so nothing shifts on lock.
-  const noteReadout = (fontSize: number) => (
+  // `lock`: ▶ note ◀ triangles that light up once the note is in tune - a
+  // bold, glanceable "good enough" beside the fine needle/strobe (BARS has
+  // its own top/bottom triangles instead).
+  const lockTriangle = (side: 'left' | 'right', hasAccidental: boolean) => (
+    <span
+      aria-hidden
+      style={{
+        position: 'absolute',
+        top: '50%',
+        ...(side === 'left'
+          ? { right: 'calc(100% + 0.2em)' }
+          : { left: `calc(100% + ${hasAccidental ? '0.5em' : '0.2em'})` }),
+        width: '0.24em',
+        height: '0.3em',
+        transform: 'translateY(-50%)',
+        backgroundColor: inTune ? LOCK_BLUE : SURFACE_RAISED,
+        clipPath:
+          side === 'left' ? 'polygon(0 0, 100% 50%, 0 100%)' : 'polygon(100% 0, 0 50%, 100% 100%)',
+        filter: inTune ? `drop-shadow(0 0 0.08em ${LOCK_BLUE})` : 'none',
+        transition: 'background-color 90ms linear',
+      }}
+    />
+  );
+
+  const noteReadout = (fontSize: number, lock = false) => (
     <div style={{ position: 'relative', opacity: hasSignal ? 1 : 0 }}>
       <div
         style={{
@@ -337,7 +372,9 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             accidental hangs off to the right (absolute) instead of shifting
             the letter off-center. */}
         <span style={{ position: 'relative', display: 'inline-block' }}>
+          {lock && lockTriangle('left', false)}
           {note ? note.charAt(0) : '—'}
+          {lock && lockTriangle('right', !!note && note.length > 1)}
           {note && note.length > 1 && (
             <span style={{ position: 'absolute', left: '100%', top: '0.05em', fontSize: '0.35em' }}>
               {note.slice(1)}
@@ -438,7 +475,7 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 color: active ? (inTune ? BLACK_TEXT : WHITE) : GRAY,
                 background: active
                   ? inTune
-                    ? BRAND_BLUE
+                    ? LOCK_BLUE
                     : 'rgba(255,255,255,0.14)'
                   : 'transparent',
                 transition: 'background 90ms linear, color 90ms linear',
@@ -484,17 +521,33 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {renderBars('right', rightLit)}
         </div>
       ) : display === 'strobe' ? (
+        // Strobe with the red needle riding across it (Fractal-style): the
+        // needle shows direction and distance at a glance, the stripes the
+        // last cent. The note sits under the band, as in NEEDLE.
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '30rem',
-            marginTop: '-10rem',
+            gap: '34rem',
+            marginTop: '-6rem',
           }}
         >
-          {noteReadout(76)}
-          {strobeRow(METER_WIDTH, STROBE_HEIGHT, 3)}
+          {strobeRow(
+            METER_WIDTH,
+            STROBE_HEIGHT,
+            3,
+            <TunerNeedle
+              cents={cents}
+              hasSignal={hasSignal}
+              inTune={inTune}
+              inTuneCents={IN_TUNE_CENTS}
+              width={METER_WIDTH}
+              height={STROBE_HEIGHT}
+              overlay
+            />
+          )}
+          {noteReadout(84, true)}
         </div>
       ) : display === 'needle' ? (
         // Flat full-width meter on top, the note under it.
@@ -515,38 +568,9 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             width={METER_WIDTH + 80}
             height={56}
           />
-          {noteReadout(84)}
+          {noteReadout(84, true)}
         </div>
-      ) : (
-        // Combo (Fractal-style): the red needle rides across the strobe
-        // band - coarse position from the needle, the last cent from the
-        // stripes - with the note under it.
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '34rem',
-            marginTop: '-6rem',
-          }}
-        >
-          {strobeRow(
-            METER_WIDTH,
-            COMBO_BAND_HEIGHT,
-            2,
-            <TunerNeedle
-              cents={cents}
-              hasSignal={hasSignal}
-              inTune={inTune}
-              inTuneCents={IN_TUNE_CENTS}
-              width={METER_WIDTH}
-              height={COMBO_BAND_HEIGHT}
-              overlay
-            />
-          )}
-          {noteReadout(84)}
-        </div>
-      )}
+      ) : null}
 
       {/* Settings: display mode, reference pitch, tuning offset, mute. */}
       <div
@@ -567,7 +591,6 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             { value: 'bars', label: 'BARS' },
             { value: 'needle', label: 'NEEDLE' },
             { value: 'strobe', label: 'STROBE' },
-            { value: 'combo', label: 'COMBO' },
           ]}
           onChange={setTunerDisplay}
           ariaLabel="Tuner display"

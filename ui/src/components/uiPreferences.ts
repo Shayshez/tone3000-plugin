@@ -127,9 +127,14 @@ const tunerMute = typedPref('t3k.tunerMute', false, (raw) =>
 export const setTunerMute = tunerMute.set;
 export const useTunerMute = tunerMute.useValue;
 
-export type TunerDisplay = 'bars' | 'needle' | 'strobe' | 'combo';
+export type TunerDisplay = 'bars' | 'needle' | 'strobe';
 const tunerDisplay = typedPref<TunerDisplay>('t3k.tunerDisplay', 'bars', (raw) =>
-  raw === 'bars' || raw === 'needle' || raw === 'strobe' || raw === 'combo' ? raw : undefined
+  // 'combo' was merged into 'strobe' (which now carries the needle overlay).
+  raw === 'combo'
+    ? 'strobe'
+    : raw === 'bars' || raw === 'needle' || raw === 'strobe'
+      ? raw
+      : undefined
 );
 export const setTunerDisplay = tunerDisplay.set;
 export const useTunerDisplay = tunerDisplay.useValue;
