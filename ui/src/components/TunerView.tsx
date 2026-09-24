@@ -1,15 +1,74 @@
-import React from 'react';
-import { X as XIcon } from './icons';
+import React, { useEffect, useRef } from 'react';
+import { ChevronLeft, ChevronRight, RotateCcw, X as XIcon } from './icons';
 import { useTunerReading } from '../hooks/useTunerReading';
+import { useParameter } from '../hooks/useParameter';
+import { TunerStrobe } from './TunerStrobe';
+import { isKeyboardOwned, isTypingTarget } from '../keyPassthrough';
+import { SegmentedControl } from './controls';
+import { ChromeTextButton } from './ChromeIconButton';
+import { HELP, helpProps } from './helpText';
+import { TileMenu } from './TileMenu';
+import { useTileMenu } from '../hooks/useTileMenu';
+import {
+  TUNER_OFFSET_MAX,
+  TUNER_OFFSET_MIN,
+  TUNER_REF_MAX,
+  TUNER_REF_MIN,
+  setTunerDisplay,
+  setTunerMute,
+  setTunerOffset,
+  setTunerRefHz,
+  useTunerDisplay,
+  useTunerMute,
+  useTunerOffset,
+  useTunerRefHz,
+} from './uiPreferences';
 import {
   BRAND_BLUE,
   BRAND_RED,
   BRAND_YELLOW,
   FONT_MONO,
   GRAY,
+  MUTED,
   SURFACE_RAISED,
   WHITE,
 } from './theme';
+
+/** Standard 6-string targets (MIDI, low E2 .. high E4). With a tuning
+    offset the reading is already mapped back into this frame, so the row
+    always reads EADGBE. */
+const GUITAR_STRINGS = [40, 45, 50, 55, 59, 64];
+const STRING_LABELS = ['E', 'A', 'D', 'G', 'B', 'E'];
+
+/** Low-string name for each offset (flats for down-tunings, the usual
+    naming: "E♭ Std", "D Std"...). */
+const OFFSET_NAMES: Record<number, string> = {
+  [-7]: 'A',
+  [-6]: 'B♭',
+  [-5]: 'B',
+  [-4]: 'C',
+  [-3]: 'D♭',
+  [-2]: 'D',
+  [-1]: 'E♭',
+  0: 'E',
+  1: 'F',
+  2: 'F♯',
+  3: 'G',
+  4: 'A♭',
+  5: 'A',
+};
+const offsetLabel = (offset: number) =>
+  offset === 0 ? 'Standard' : `${OFFSET_NAMES[offset]} Std (${offset > 0 ? '+' : ''}${offset})`;
+
+/** In-tune accents: text on a blue fill, and the note letter itself. */
+const BLACK_TEXT = '#000000';
+const BRAND_BLUE_TEXT = '#5B8CFF';
+
+/** Quick picks in the reference-pitch menu. */
+const REF_PRESETS = [432, 440, 442, 444];
+
+const STROBE_WIDTH = 620;
+const STROBE_HEIGHT = 132;
 
 // Cents window considered "in tune" and the full deflection of one side.
 const IN_TUNE_CENTS = 5;
@@ -35,8 +94,122 @@ const litCountForCents = (absCents: number): number => {
   return Math.min(6, 1 + Math.floor(t * 5 + 0.5));
 };
 
+/**
+ * A small value stepper for the settings bar: ‹ value › with the mouse
+ * wheel stepping too (mouse-first: one hand on the guitar), and a
+ * right-click menu for quick picks / reset.
+ */
+const Stepper: React.FC<{
+  label: string;
+  value: string;
+  help: string;
+  onStep: (delta: number) => void;
+  canDec: boolean;
+  canInc: boolean;
+  menuItems: React.ComponentProps<typeof TileMenu>['items'];
+  valueWidth: number;
+}> = ({ label, value, help, onStep, canDec, canInc, menuItems, valueWidth }) => {
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const wheelRef = useRef<HTMLDivElement>(null);
+  const stepRef = useRef(onStep);
+  stepRef.current = onStep;
+  useEffect(() => {
+    const el = wheelRef.current;
+    if (!el) return;
+    // Native, non-passive: React's wheel listeners can't preventDefault.
+    const onWheel = (e: WheelEvent) => {
+      const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (d === 0) return;
+      e.preventDefault();
+      stepRef.current(d < 0 ? 1 : -1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  const arrow = (enabled: boolean): React.CSSProperties => ({
+    background: 'none',
+    border: 'none',
+    padding: '4rem',
+    color: WHITE,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    opacity: enabled ? 1 : 0.35,
+    display: 'flex',
+    alignItems: 'center',
+  });
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8rem' }}>
+      <span style={{ fontSize: '11rem', fontWeight: 600, color: MUTED, letterSpacing: '0.06em' }}>
+        {label}
+      </span>
+      <div
+        ref={wheelRef}
+        onContextMenu={openMenu}
+        {...helpProps(help)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          background: '#0a0a0a',
+          border: '1rem solid #3f3f46',
+          borderRadius: '8rem',
+          padding: '0 2rem',
+        }}
+      >
+        <button disabled={!canDec} onClick={() => onStep(-1)} style={arrow(canDec)}>
+          <ChevronLeft size={14} />
+        </button>
+        <span
+          style={{
+            width: `${valueWidth}rem`,
+            textAlign: 'center',
+            fontSize: '12rem',
+            fontFamily: FONT_MONO,
+            color: WHITE,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {value}
+        </span>
+        <button disabled={!canInc} onClick={() => onStep(1)} style={arrow(canInc)}>
+          <ChevronRight size={14} />
+        </button>
+      </div>
+      {menuAnchor && <TileMenu anchor={menuAnchor} onClose={closeMenu} items={menuItems} />}
+    </div>
+  );
+};
+
 export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const { note, cents, frequency, hasSignal } = useTunerReading();
+  const { note, midi, sounding, cents, frequency, hasSignal } = useTunerReading();
+  const display = useTunerDisplay();
+  const refHz = useTunerRefHz();
+  const offset = useTunerOffset();
+  const muteWhileTuning = useTunerMute();
+
+  // Mute while tuning: engage the global Mute while this screen is open (if
+  // it wasn't already on) and put it back on close / when the setting is
+  // turned off. A mute the user had on before opening is left alone.
+  const [outputMute, setOutputMute] = useParameter('outputMute', 'toggle');
+  const muteAtOpen = useRef(outputMute);
+  const setMuteRef = useRef(setOutputMute);
+  setMuteRef.current = setOutputMute;
+  useEffect(() => {
+    if (!muteWhileTuning || muteAtOpen.current) return;
+    setMuteRef.current(true);
+    return () => setMuteRef.current(false);
+  }, [muteWhileTuning]);
+
+  // Esc closes the tuner - unless a menu/list or a text field has the key.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || isKeyboardOwned() || isTypingTarget(e.target)) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const absCents = Math.abs(cents);
   const roundedCents = Math.round(cents);
   const inTune = hasSignal && absCents <= IN_TUNE_CENTS;
@@ -121,6 +294,62 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     />
   );
 
+  // Big note letter + Hz/cents readout, shared by both displays. Always
+  // occupies its box (opacity 0 while idle) so nothing shifts on lock.
+  const noteReadout = (fontSize: number) => (
+    <div style={{ position: 'relative', opacity: hasSignal ? 1 : 0 }}>
+      <div
+        style={{
+          fontSize: `${fontSize}rem`,
+          lineHeight: 1,
+          fontWeight: 700,
+          color: inTune ? BRAND_BLUE_TEXT : WHITE,
+          textAlign: 'center',
+          userSelect: 'none',
+          fontVariantNumeric: 'tabular-nums',
+          transition: 'color 90ms linear',
+        }}
+      >
+        {/* Letter wrapper is inline-block, so it stays centered; the
+            accidental hangs off to the right (absolute) instead of shifting
+            the letter off-center. */}
+        <span style={{ position: 'relative', display: 'inline-block' }}>
+          {note ? note.charAt(0) : '—'}
+          {note && note.length > 1 && (
+            <span style={{ position: 'absolute', left: '100%', top: '0.05em', fontSize: '0.35em' }}>
+              {note.slice(1)}
+            </span>
+          )}
+        </span>
+      </div>
+      {/* Pulled up into the line box's descender whitespace so it sits just
+          under the visible letter; nowrap + centered so the readout can
+          extend past the letter without wrapping or shifting it. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '100%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          marginTop: '-6rem',
+          fontSize: '13rem',
+          fontWeight: 400,
+          fontFamily: FONT_MONO,
+          textAlign: 'center',
+          color: GRAY,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {`${frequency.toFixed(1)} Hz  ${roundedCents >= 0 ? '+' : ''}${roundedCents}¢`}
+        {/* Own line: appended to the Hz/cents line it overran the center
+            column into the bars. */}
+        {offset !== 0 && sounding && (
+          <div style={{ fontSize: '11rem', marginTop: '2rem' }}>sounding {sounding}</div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -155,94 +384,178 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       >
         <XIcon size={20} />
       </button>
+      {/* Guitar strings, always EADGBE (the offset maps readings back into
+          standard): the one being played lights up, blue once in tune. */}
       <div
         style={{
+          position: 'absolute',
+          top: '18rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
           display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '32rem',
+          gap: '14rem',
+          fontFamily: FONT_MONO,
+          fontSize: '15rem',
+          fontWeight: 600,
+          userSelect: 'none',
         }}
       >
-        {renderBars('left', leftLit)}
+        {GUITAR_STRINGS.map((target, i) => {
+          const active = hasSignal && midi === target;
+          return (
+            <span
+              key={target}
+              style={{
+                width: '26rem',
+                height: '26rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '13rem',
+                color: active ? (inTune ? BLACK_TEXT : WHITE) : GRAY,
+                background: active
+                  ? inTune
+                    ? BRAND_BLUE
+                    : 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+                transition: 'background 90ms linear, color 90ms linear',
+              }}
+            >
+              {STRING_LABELS[i]}
+            </span>
+          );
+        })}
+      </div>
 
-        {/* Note + triangles always occupy the center so the grey track
-            doesn't shift when a pitch locks or drops. Idle is opacity 0. */}
+      {display === 'bars' ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '32rem',
+          }}
+        >
+          {renderBars('left', leftLit)}
+
+          {/* Note + triangles always occupy the center so the grey track
+              doesn't shift when a pitch locks or drops. Idle is opacity 0. */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '28rem',
+              minWidth: '120rem',
+            }}
+          >
+            {/* Top triangle points down: lit when sharp ("tune down") or in tune */}
+            {triangle('down', inTune || isSharp)}
+            {noteReadout(110)}
+            {/* Bottom triangle points up: lit when flat ("tune up") or in tune */}
+            {triangle('up', inTune || isFlat)}
+          </div>
+
+          {renderBars('right', rightLit)}
+        </div>
+      ) : (
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
-            gap: '36rem',
-            minWidth: '120rem',
+            gap: '30rem',
+            marginTop: '-10rem',
           }}
         >
-          {/* Top triangle points down: lit when sharp ("tune down") or in tune */}
-          {triangle('down', inTune || isSharp)}
-          <div
-            style={{
-              position: 'relative',
-              opacity: hasSignal ? 1 : 0,
-            }}
-          >
-            <div
-              style={{
-                fontSize: '110rem',
-                lineHeight: 1,
-                fontWeight: 700,
-                color: WHITE,
-                textAlign: 'center',
-                userSelect: 'none',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {/* Letter wrapper is inline-block, so it stays centered under
-                  the triangles; the accidental hangs off to the right
-                  (absolute) instead of shifting the letter off-center. */}
-              <span style={{ position: 'relative', display: 'inline-block' }}>
-                {note ? note.charAt(0) : '—'}
-                {note && note.length > 1 && (
-                  <span
-                    style={{
-                      position: 'absolute',
-                      left: '100%',
-                      top: '0.05em',
-                      fontSize: '0.35em',
-                    }}
-                  >
-                    {note.slice(1)}
-                  </span>
-                )}
-              </span>
-            </div>
-            {/* Pulled up into the line box's descender whitespace so it sits
-                just under the visible letter, not down by the triangle.
-                nowrap + centered so "329.6 Hz  −12¢" can extend past the
-                letter without wrapping or shifting it. */}
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                marginTop: '-6rem',
-                fontSize: '13rem',
-                fontWeight: 400,
-                fontFamily: FONT_MONO,
-                textAlign: 'center',
-                color: GRAY,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {`${frequency.toFixed(1)} Hz  ${roundedCents >= 0 ? '+' : ''}${roundedCents}¢`}
-            </div>
+          {noteReadout(76)}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '18rem' }}>
+            <span style={{ color: isFlat ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♭</span>
+            <TunerStrobe
+              cents={cents}
+              hasSignal={hasSignal}
+              inTune={inTune}
+              width={STROBE_WIDTH}
+              height={STROBE_HEIGHT}
+            />
+            <span style={{ color: isSharp ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♯</span>
           </div>
-          {/* Bottom triangle points up: lit when flat ("tune up") or in tune */}
-          {triangle('up', inTune || isFlat)}
         </div>
+      )}
 
-        {renderBars('right', rightLit)}
+      {/* Settings: display mode, reference pitch, tuning offset, mute. */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: '16rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '28rem',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <SegmentedControl<'bars' | 'strobe'>
+          value={display}
+          options={[
+            { value: 'bars', label: 'BARS' },
+            { value: 'strobe', label: 'STROBE' },
+          ]}
+          onChange={setTunerDisplay}
+          ariaLabel="Tuner display"
+        />
+        <Stepper
+          label="A4"
+          value={`${refHz} Hz`}
+          help={HELP.tunerRef}
+          valueWidth={56}
+          canDec={refHz > TUNER_REF_MIN}
+          canInc={refHz < TUNER_REF_MAX}
+          onStep={(d) => setTunerRefHz(Math.min(TUNER_REF_MAX, Math.max(TUNER_REF_MIN, refHz + d)))}
+          menuItems={[
+            ...REF_PRESETS.map((hz) => ({
+              label: `${hz} Hz`,
+              icon: <span style={{ width: '16rem' }}>{hz === refHz ? '✓' : ''}</span>,
+              help: HELP.tunerRef,
+              onSelect: () => setTunerRefHz(hz),
+            })),
+          ]}
+        />
+        <Stepper
+          label="TUNING"
+          value={offsetLabel(offset)}
+          help={HELP.tunerOffset}
+          valueWidth={112}
+          canDec={offset > TUNER_OFFSET_MIN}
+          canInc={offset < TUNER_OFFSET_MAX}
+          onStep={(d) =>
+            setTunerOffset(Math.min(TUNER_OFFSET_MAX, Math.max(TUNER_OFFSET_MIN, offset + d)))
+          }
+          menuItems={[
+            {
+              label: 'Standard',
+              icon: <RotateCcw size={16} />,
+              help: HELP.tunerOffset,
+              onSelect: () => setTunerOffset(0),
+            },
+            ...[-1, -2].map((o) => ({
+              label: offsetLabel(o),
+              icon: <span style={{ width: '16rem' }}>{o === offset ? '✓' : ''}</span>,
+              help: HELP.tunerOffset,
+              onSelect: () => setTunerOffset(o),
+            })),
+          ]}
+        />
+        <ChromeTextButton
+          armed={muteWhileTuning}
+          help={HELP.tunerMute}
+          onClick={() => setTunerMute(!muteWhileTuning)}
+        >
+          MUTE
+        </ChromeTextButton>
       </div>
     </div>
   );

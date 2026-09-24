@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNativeFunction } from './useFunction';
+import { getTunerOffset, getTunerRefHz } from '../components/uiPreferences';
+import { frequencyToNote } from '../types/tunerMath';
 
 interface TunerReading {
   frequency: number;
@@ -7,23 +9,17 @@ interface TunerReading {
   level: number;
 }
 
-const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const POLL_MS = 50;
 // Hold the last note on screen briefly after the signal decays.
 const HOLD_MS = 900;
 
-const frequencyToNote = (frequency: number) => {
-  const midi = 69 + 12 * Math.log2(frequency / 440);
-  const nearest = Math.round(midi);
-  return {
-    name: NOTE_NAMES[((nearest % 12) + 12) % 12],
-    octave: Math.floor(nearest / 12) - 1,
-    cents: (midi - nearest) * 100,
-  };
-};
-
 export interface TunerState {
+  /** Note name in the (offset-adjusted) standard frame, e.g. "E". */
   note: string | null;
+  /** That note's MIDI number (same frame) - picks the guitar string. */
+  midi: number | null;
+  /** The pitch actually sounding (differs from `note` when offset != 0). */
+  sounding: string | null;
   cents: number;
   frequency: number;
   hasSignal: boolean;
@@ -38,6 +34,8 @@ export interface TunerState {
 export const useTunerReading = (): TunerState => {
   const getTunerReading = useNativeFunction<TunerReading>('getTunerReading');
   const [note, setNote] = useState<string | null>(null);
+  const [midi, setMidi] = useState<number | null>(null);
+  const [sounding, setSounding] = useState<string | null>(null);
   const [cents, setCents] = useState(0);
   const [hasSignal, setHasSignal] = useState(false);
   const [frequency, setFrequency] = useState(0);
@@ -59,10 +57,12 @@ export const useTunerReading = (): TunerState => {
         const confidence = typeof reading.confidence === 'number' ? reading.confidence : 0;
 
         if (freq > 0 && confidence > 0.5) {
-          const detected = frequencyToNote(freq);
+          const detected = frequencyToNote(freq, getTunerRefHz(), getTunerOffset());
           // Light exponential smoothing so the display doesn't jitter.
           smoothedCentsRef.current = smoothedCentsRef.current * 0.6 + detected.cents * 0.4;
           setNote(detected.name);
+          setMidi(detected.midi);
+          setSounding(detected.sounding);
           setCents(smoothedCentsRef.current);
           setFrequency(freq);
           setHasSignal(true);
@@ -86,5 +86,5 @@ export const useTunerReading = (): TunerState => {
     };
   }, [getTunerReading]);
 
-  return { note, cents, frequency, hasSignal };
+  return { note, midi, sounding, cents, frequency, hasSignal };
 };

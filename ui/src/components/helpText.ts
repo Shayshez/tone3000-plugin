@@ -231,6 +231,11 @@ const HELP_DESKTOP = {
     'MIDI Learn: then move a knob, fader or switch on your MIDI controller to map it here.',
   midiMenuCancel: 'Cancel MIDI Learn: stop waiting for a MIDI control.',
   midiMenuClear: "Clear MIDI: remove this control's MIDI mapping.",
+  tunerRef:
+    'A4 reference pitch (standard 440 Hz). Wheel or arrows to step, right-click for quick picks.',
+  tunerOffset:
+    'Tuning offset: target N semitones down/up while still reading EADGBE (e.g. E♭ Std). Right-click for presets.',
+  tunerMute: 'Mute while tuning: silence the output whenever this tuner screen is open.',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',
   knobMenuReset: 'Reset to Default: put this knob back to its default value (same as ⌥-click).',
   knobMenuType: 'Type Value: enter an exact value (same as double-click).',
