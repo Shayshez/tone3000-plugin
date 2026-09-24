@@ -86,6 +86,11 @@ const iconButtonStyle: React.CSSProperties = {
   padding: '5rem',
 };
 
+/** Width of everything after the ‹ name › pill: gap + Save (5rem padding
+    around an 18rem glyph) + gap + the 28rem New box. PluginHeader pads the
+    bar's leading side by this so the pill itself centers on the window. */
+export const PRESET_BAR_TRAILING_WIDTH = 8 + 28 + 8 + 28;
+
 type PresetGroup = 'factory' | 'user';
 
 interface PresetRowProps {

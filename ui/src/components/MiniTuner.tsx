@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTunerReading } from '../hooks/useTunerReading';
 import { HELP, helpProps } from './helpText';
-import { BRAND_RED, SURFACE_RAISED } from './theme';
+import { BRAND_RED, HIGHLIGHT, ICON_BOX_RADIUS, SURFACE_RAISED } from './theme';
 
 const IN_TUNE_CENTS = 5;
 // Cents deviation at which the needle reaches the end of its throw; beyond
@@ -56,7 +56,14 @@ const Wedge: React.FC<{ direction: 'left' | 'right'; lit: boolean }> = ({ direct
  * onto the same reading via useTunerReading, independent of whether the full
  * screen is open.
  */
-export const MiniTuner: React.FC = () => {
+export const MiniTuner: React.FC<{
+  /** Clicking the readout opens (or closes) the full-screen tuner - it's
+      the tuner's only entry point in the top bar. */
+  onClick: () => void;
+  /** Full-screen tuner showing: HIGHLIGHT fill, like the top bar's other
+      open-panel buttons. */
+  open: boolean;
+}> = ({ onClick, open }) => {
   const { cents, hasSignal } = useTunerReading();
   const inTune = hasSignal && Math.abs(cents) <= IN_TUNE_CENTS;
   const isFlat = hasSignal && cents < -IN_TUNE_CENTS;
@@ -70,7 +77,10 @@ export const MiniTuner: React.FC = () => {
   const needleOffset = (clampedCents / MAX_NEEDLE_CENTS) * NEEDLE_THROW;
 
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={open}
       {...helpProps(HELP.miniTuner)}
       style={{
         position: 'relative',
@@ -78,8 +88,14 @@ export const MiniTuner: React.FC = () => {
         alignItems: 'center',
         justifyContent: 'center',
         gap: '2rem',
-        width: '32rem',
+        width: '40rem',
         height: '28rem',
+        padding: 0,
+        border: 'none',
+        outline: 'none',
+        borderRadius: `${ICON_BOX_RADIUS}rem`,
+        background: open ? HIGHLIGHT : 'transparent',
+        cursor: 'pointer',
       }}
     >
       {/* Left wedge lights when flat (tune up) or in tune. */}
@@ -103,6 +119,6 @@ export const MiniTuner: React.FC = () => {
           transition: 'transform 90ms linear',
         }}
       />
-    </div>
+    </button>
   );
 };

@@ -194,8 +194,10 @@ const HELP_DESKTOP = {
   tonePower: 'Tone Stack Power: Bass/Middle/Treble on/off.',
 
   // Top bar
-  miniTuner: 'Tuning direction, always on: flat/sharp/in-tune. Open the tuner for note detail.',
-  tuner: 'Tuner: chromatic tuner. Click again: back.',
+  miniTuner:
+    'Tuner, always on: flat/sharp/in-tune. Click: full tuner with note detail. Again: back.',
+  bypass: 'Bypass: plugin power. Off: dry input passes through (same as the host bypass).',
+  mute: 'Mute: silence the output. The tuner keeps working.',
   undo: 'Undo: revert last chain edit.',
   redo: 'Redo: re-apply undone edit.',
   settings: 'Settings: plugin and audio options.',
@@ -373,6 +375,8 @@ const HELP_DESKTOP = {
   eqReset: 'Reset EQ: all bands flat, position post.',
   eqPre: 'PRE: EQ before the model. Off: after the model (wet only).',
   eqPower: 'EQ Power: bypass EQ, keep settings.',
+  eqCopy: 'Copy EQ: copy all 8 bands, to paste into any other EQ.',
+  eqPaste: 'Paste EQ: replace these bands with the copied ones and turn this EQ on.',
   shareTone: 'Share: copy TONE3000 link.',
   modelSelectSignedOut: 'Models: sign in to TONE3000 to switch models.',
   backToChain: 'Back: chain overview.',

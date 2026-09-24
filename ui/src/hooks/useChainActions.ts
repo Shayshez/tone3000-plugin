@@ -225,6 +225,13 @@ export interface ChainActions {
   /** EQ position: pre = before the block's model, off = after the model (wet only). */
   setBlockEqPre: (blockId: string, pre: boolean) => void;
   resetBlockEq: (blockId: string) => void;
+  /** Copy this block's EQ bands into the native EQ clipboard. */
+  copyBlockEq: (blockId: string) => void;
+  /** Paste the copied EQ bands onto this block's EQ (powers it on; one undo
+      step). Gate on `canPasteEq`. */
+  pasteBlockEq: (blockId: string) => void;
+  /** Whether the EQ clipboard holds copied bands. */
+  canPasteEq: boolean;
   /**
    * Whether a TONE3000 session is present. Auth-dependent block actions
    * (model switching, where native re-downloads the model with a Bearer token)

@@ -1760,7 +1760,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   juce::uint32 revision = 0;
   std::vector<BlockRow> left;
   bool canUndo = false, canRedo = false;
-  bool canPaste = false, atDefault = false;
+  bool canPaste = false, canPasteEq = false, atDefault = false;
   juce::String presetId, presetName;
 
   {
@@ -1907,6 +1907,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     canUndo = chainHistory.canUndo();
     canRedo = chainHistory.canRedo();
     canPaste = blockClipboardSettings.isValid();
+    canPasteEq = eqClipboardBands.isArray();
     atDefault = isChainAtDefault();
     presetId = activePresetId;
     presetName = activePresetName;
@@ -2056,6 +2057,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   // on insert slots). The clipboard snapshot is self-contained, so this
   // stays true across preset switches and after the source block is gone.
   state->setProperty("canPasteBlock", canPaste);
+  // Whether the in-app EQ clipboard holds copied bands (EQ Paste enabled).
+  state->setProperty("canPasteEq", canPasteEq);
   // True when nothing distinguishes this state from a fresh instance (see
   // isChainAtDefault); the top bar's New button greys out on it.
   state->setProperty("atDefault", atDefault);
@@ -2660,6 +2663,38 @@ bool TONE3000Processor::resetBlockEq(const std::string& blockId) {
 
   pushChainHistory();
   block->eq.resetToDefault();
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::copyBlockEq(const std::string& blockId) {
+  juce::ScopedLock lock(chainMutex);
+  const ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+
+  // toVar() builds fresh objects, so nothing in the live chain aliases the
+  // snapshot. Copying never touches the chain: no history entry, the
+  // revision bump only publishes `canPasteEq`.
+  eqClipboardBands = block->eq.toVar().getProperty("bands", juce::var());
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::pasteBlockEq(const std::string& blockId) {
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+  const auto* bands = eqClipboardBands.getArray();
+  if (bands == nullptr || bands->size() != BlockEq::kNumBands)
+    return false;
+
+  pushChainHistory();
+  for (int i = 0; i < BlockEq::kNumBands; ++i)
+    block->eq.setBandFromVar(i, bands->getReference(i));
+  // A paste should be heard: a bypassed target would otherwise swallow it.
+  block->eq.setEnabled(true);
   bumpChainRevision();
   return true;
 }

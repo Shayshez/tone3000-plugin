@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeftRight,
   Bookmark,
+  ClipboardPaste,
   Combine,
   Copy,
   Download,
@@ -483,6 +484,35 @@ const IrCategoryControl: React.FC<{
     side into the ordinary full `ChainBlock` card (see the isDualMono
     branch below); Share is the one action simple enough to fire directly
     from here. */
+/** Copy / Paste for an EQ editor header: copies this block's 8 bands into
+    the native EQ clipboard, pastes them onto any other block's EQ (any block
+    type, either Dual Mono side, a Dual Mono block's own master EQ). Stays
+    live while the EQ is bypassed - paste powers it back on. */
+const EqClipboardButtons: React.FC<{ blockId: string }> = ({ blockId }) => {
+  const actions = useChainActions();
+  const toast = useToast();
+  return (
+    <>
+      <ChromeIconButton
+        help={HELP.eqCopy}
+        onClick={() => {
+          actions.copyBlockEq(blockId);
+          toast.show('EQ Copied');
+        }}
+      >
+        <Copy />
+      </ChromeIconButton>
+      <ChromeIconButton
+        help={HELP.eqPaste}
+        disabled={!actions.canPasteEq}
+        onClick={() => actions.pasteBlockEq(blockId)}
+      >
+        <ClipboardPaste />
+      </ChromeIconButton>
+    </>
+  );
+};
+
 const DualSideCard: React.FC<{
   dualBlockId: string;
   isLeftSide: boolean;
@@ -994,6 +1024,15 @@ interface ChainBlockProps {
     currentBlockId: string;
     childTabs: ChainMapChildTab[];
     onGoHome: () => void;
+    /** Clicking the wrapper's OWN chip (main body or its EQ mark) from
+        inside a recursed child: `onJumpToBlock(currentBlockId)` alone is a
+        no-op at the ChainView level (we're already "on" that id there), so
+        without this it left the child stuck open instead of returning to
+        the Dual Mono block's own top view - openChildSide lives in the
+        wrapper's own local state, unreachable from ChainView. Pops back to
+        the wrapper's main view, opening its own EQ when `openEq` is true
+        (the EQ-mark jump). */
+    onSelectSelf: (openEq: boolean) => void;
   };
 }
 
@@ -2131,10 +2170,18 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             chainStripItems={chainStripItems}
             blockId={dualStripContext?.currentBlockId ?? blockId}
             onSelect={(id) => {
+              if (dualStripContext && id === dualStripContext.currentBlockId) {
+                dualStripContext.onSelectSelf(false);
+                return;
+              }
               onJumpToBlock(id);
               view.reset(['main']);
             }}
             onSelectEq={(id) => {
+              if (dualStripContext && id === dualStripContext.currentBlockId) {
+                dualStripContext.onSelectSelf(true);
+                return;
+              }
               onJumpToBlock(id);
               // ['main', 'eq'], not ['eq'] alone: unlike a gallery tile's own
               // EQ shortcut (whose 'main' genuinely was never visited, by
@@ -2219,6 +2266,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '16rem', flexShrink: 0 }}>
+                <EqClipboardButtons blockId={blockId} />
                 <ChromeTextButton
                   armed={false}
                   help="Reset all EQ bands to default (flat)"
@@ -2419,6 +2467,11 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               currentBlockId: blockId,
               childTabs: dualChildTabs,
               onGoHome: onBack,
+              onSelectSelf: (openEq) => {
+                setOpenChildSide(null);
+                setOpenChildInitial(null);
+                view.reset(openEq ? ['main', 'eq'] : ['main']);
+              },
             }}
             onBack={() => {
               setOpenChildSide(null);
@@ -2578,6 +2631,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       >
                         <Power />
                       </ChromeIconButton>
+                      <EqClipboardButtons blockId={blockId} />
                       <span
                         className={uiOffClass(!eqOn)}
                         style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}
@@ -3359,6 +3413,12 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
           chainStripItems={chainStripItems}
           blockId={dualStripContext?.currentBlockId ?? blockId}
           onSelect={(id) => {
+            if (dualStripContext && id === dualStripContext.currentBlockId) {
+              // The wrapper's own chip, clicked from inside this recursed
+              // child - see dualStripContext.onSelectSelf's own comment.
+              dualStripContext.onSelectSelf(false);
+              return;
+            }
             onJumpToBlock(id);
             // Deterministic destination: a plain chip always lands on the
             // block's main content, regardless of whatever view (EQ, Info)
@@ -3367,6 +3427,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             view.reset(['main']);
           }}
           onSelectEq={(id) => {
+            if (dualStripContext && id === dualStripContext.currentBlockId) {
+              dualStripContext.onSelectSelf(true);
+              return;
+            }
             onJumpToBlock(id);
             // ['main', 'eq'], not ['eq'] alone - see the isDualMono
             // branch's own onSelectEq comment for why.
@@ -3530,6 +3594,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                         PRE
                       </ChromeTextButton>
                     </span>
+                    <EqClipboardButtons blockId={blockId} />
                     <span
                       className={uiOffClass(!eqOn)}
                       style={{ display: 'inline-flex', transition: 'opacity 0.2s ease' }}

@@ -81,6 +81,8 @@ export function useChainState() {
       setBlockEqEnabled: backend.getPluginFunction('setBlockEqEnabled'),
       setBlockEqPre: backend.getPluginFunction('setBlockEqPre'),
       resetBlockEq: backend.getPluginFunction('resetBlockEq'),
+      copyBlockEq: backend.getPluginFunction('copyBlockEq'),
+      pasteBlockEq: backend.getPluginFunction('pasteBlockEq'),
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
       setBlockIrDecay: backend.getPluginFunction('setBlockIrDecay'),
@@ -395,6 +397,14 @@ export function useChainState() {
       /** Back to flat defaults (and native skips EQ processing again). */
       resetBlockEq: (blockId: string) =>
         run<boolean>('resetBlockEq', () => native.resetBlockEq(blockId)),
+      /** Snapshot a block's EQ bands into the native EQ clipboard (not its
+          power or PRE/POST). `canPasteEq` flips via the resync. */
+      copyBlockEq: (blockId: string) =>
+        run<boolean>('copyBlockEq', () => native.copyBlockEq(blockId)),
+      /** Replace a block's EQ bands with the clipboard's and power it on,
+          as one undo step. */
+      pasteBlockEq: (blockId: string) =>
+        run<boolean>('pasteBlockEq', () => native.pasteBlockEq(blockId)),
       /** Step the chain edit history. No-ops (false) at the stack ends. */
       undo: () => run<boolean>('undoChain', () => native.undoChain()),
       redo: () => run<boolean>('redoChain', () => native.redoChain()),
@@ -410,6 +420,7 @@ export function useChainState() {
     canUndo: state.canUndo ?? false,
     canRedo: state.canRedo ?? false,
     canPaste: state.canPasteBlock ?? false,
+    canPasteEq: state.canPasteEq ?? false,
     atDefault: state.atDefault,
     activePreset: state.preset ?? null,
     stereoInput: state.stereoInput ?? false,

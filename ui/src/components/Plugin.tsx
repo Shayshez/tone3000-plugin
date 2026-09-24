@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useNativeFunction } from '../hooks/useFunction';
+import { useParameter } from '../hooks/useParameter';
 import { useChainState } from '../hooks/useChainState';
 import { ChainActionsProvider } from '../hooks/useChainActions';
 import type { ChainActions } from '../hooks/useChainActions';
@@ -36,6 +37,15 @@ export const Plugin: React.FC = () => {
   // Which tab Settings opens on; banner / gear land on System (setup first).
   const settingsTabRef = useRef<SettingsTab>('system');
   const [showTuner, setShowTuner] = useState(false);
+  // Global Bypass dims the chain and faceplate (opacity only - still
+  // editable) so a bypassed plugin reads as "off" at a glance, same visual
+  // language as a powered-off block. Meters stay bright: they show the dry
+  // signal actually leaving the plugin.
+  const [bypassed] = useParameter('bypass', 'toggle');
+  const bypassDim: React.CSSProperties = {
+    opacity: bypassed ? 0.45 : 1,
+    transition: 'opacity 0.2s ease',
+  };
   // In-plugin tone browser takeover (streams of TONE3000 tones). Opened by
   // the + when already authenticated, or right after the no-prompt login
   // flow returns. Seeded true when we're returning from a browse-intent
@@ -55,6 +65,7 @@ export const Plugin: React.FC = () => {
     canUndo,
     canRedo,
     canPaste,
+    canPasteEq,
     atDefault,
     activePreset,
     stereoInput,
@@ -385,12 +396,16 @@ export const Plugin: React.FC = () => {
       setBlockEqEnabled: actions.setBlockEqEnabled,
       setBlockEqPre: actions.setBlockEqPre,
       resetBlockEq: actions.resetBlockEq,
+      copyBlockEq: actions.copyBlockEq,
+      pasteBlockEq: actions.pasteBlockEq,
+      canPasteEq,
       authenticated,
       login: handleLogin,
     }),
     [
       actions,
       authenticated,
+      canPasteEq,
       handleLogin,
       handlePickLocalFile,
       handleRetryLoad,
@@ -527,6 +542,7 @@ export const Plugin: React.FC = () => {
                 // inside the scroll content instead.
                 paddingTop: fillToFaceplate ? 0 : 24,
                 paddingBottom: showToneBrowser || fillToFaceplate ? 0 : 24,
+                ...bypassDim,
               }}
             >
               {showToneBrowser ? (
@@ -577,11 +593,13 @@ export const Plugin: React.FC = () => {
 
         {/* Pinned faceplate at the bottom (gains, gate, tone stack), with the
           hint strip under it (hidden entirely when hints are off). */}
-        <Faceplate
-          stereoInput={stereoInput}
-          inputMode={inputMode}
-          onInputModeChange={actions.setInputMode}
-        />
+        <div style={{ width: '100%', flexShrink: 0, ...bypassDim }}>
+          <Faceplate
+            stereoInput={stereoInput}
+            inputMode={inputMode}
+            onInputModeChange={actions.setInputMode}
+          />
+        </div>
         <HintBar />
 
         {/* Settings takeover, mounted only while open so its parameter

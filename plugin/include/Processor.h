@@ -45,6 +45,9 @@ public:
   bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 
   void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+  // The global `bypass` parameter, so a host's own bypass button drives the
+  // same latency-matched crossfade as the header's Bypass button.
+  juce::AudioProcessorParameter* getBypassParameter() const override;
   using AudioProcessor::processBlock;
 
   juce::AudioProcessorEditor* createEditor() override;
@@ -506,6 +509,14 @@ public:
   bool setBlockEqEnabled(const std::string& blockId, bool enabled);
   bool setBlockEqPre(const std::string& blockId, bool pre);
   bool resetBlockEq(const std::string& blockId);
+  // In-app EQ clipboard (Copy / Paste in any EQ editor header). Copy snapshots
+  // the block's 8 bands (not its power or PRE/POST position, which belong to
+  // the target block's routing); not undoable, bumps the revision so
+  // `canPasteEq` (getChainState) reaches the UI. Paste replaces every band of
+  // the target EQ and powers it on, as one undo step. Both return false for
+  // stale/insert ids; paste also on an empty clipboard.
+  bool copyBlockEq(const std::string& blockId);
+  bool pasteBlockEq(const std::string& blockId);
 
   // Per-block spectrum for the EQ editor backdrop. The UI enables a block's
   // analyzer while its EQ view is open and polls getBlockSpectrum (~30 Hz);
@@ -1048,6 +1059,11 @@ private:
   juce::ValueTree blockClipboardSettings;
   std::map<int, std::vector<uint8_t>> blockClipboardModelCache;
 
+  // EQ clipboard (see copyBlockEq/pasteBlockEq): the copied BlockEq::toVar()
+  // "bands" array, void = nothing copied. Guarded by chainMutex; in-memory
+  // only, like the block clipboard.
+  juce::var eqClipboardBands;
+
   // MIDI performance handlers (wired to midiMapper in the constructor,
   // both invoked on the message thread).
   // Program change n loads the nth preset in list order (user first, then
@@ -1123,6 +1139,20 @@ private:
   // post-chain image matrix, pre-pan), smoothed so knob moves glide instead
   // of stepping once per block. Audio thread only.
   juce::SmoothedValue<float> outputGainSmoother;
+
+  // Global Bypass / Mute (header buttons, see processBlock's output stage).
+  // Bypass crossfades the output to the host's dry input, delayed by the
+  // reported latency (bypassDelayRing, a per-channel ring of exactly that
+  // length, always fed so it's warm when bypass engages) so bypassing never
+  // shifts the timing. The chain keeps running underneath, so un-bypassing
+  // is instant. Mute glides the final output to silence, after everything
+  // else (the tuner taps the input upstream, so it keeps working). Audio
+  // thread only; sized in prepareToPlay.
+  juce::SmoothedValue<float> bypassMix;
+  juce::SmoothedValue<float> muteGain;
+  juce::AudioBuffer<float> bypassDry;
+  std::array<std::vector<float>, 2> bypassDelayRing;
+  int bypassDelayPos = 0;
 
   // Monotonic revision of everything getChainState() reports. Bumped on every
   // chain mutation (structure, params, load completion, stereo/side changes)
@@ -1239,6 +1269,8 @@ private:
     std::atomic<float>* inputCalibrationLevel = nullptr;
     std::atomic<float>* osEnabled = nullptr;
     std::atomic<float>* osFactor = nullptr;
+    std::atomic<float>* bypass = nullptr;
+    std::atomic<float>* outputMute = nullptr;
   } paramRefs;
   void resolveParamRefs();
 
@@ -1268,6 +1300,8 @@ private:
   float cacheTargetLoudness = -18.0f;
   bool cacheCalibrateInput = false;
   float cacheInputCalibrationLevel = 12.0f;
+  bool cacheBypass = false;
+  bool cacheOutputMute = false;
 
   void updateEqCoefficients();
   void updateCachedParameters();

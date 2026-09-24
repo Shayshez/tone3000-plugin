@@ -144,6 +144,8 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
       .withOptionsFrom(editor->gateThresholdRelay)
       .withOptionsFrom(editor->gateEnabledRelay)
       .withOptionsFrom(editor->toneEqEnabledRelay)
+      .withOptionsFrom(editor->bypassRelay)
+      .withOptionsFrom(editor->outputMuteRelay)
       .withOptionsFrom(editor->calibrateInputRelay)
       .withOptionsFrom(editor->inputCalibrationLevelRelay)
       .withOptionsFrom(editor->osEnabledRelay)
@@ -557,6 +559,18 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
       .withNativeFunction(
           "resetBlockEq", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
             return juce::var(editor->processor.resetBlockEq(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
+          // (blockId): snapshot the block's EQ bands into the in-app EQ
+          // clipboard (not its power or PRE/POST position).
+          "copyBlockEq", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.copyBlockEq(args[0].toString().toStdString()));
+          }))
+      .withNativeFunction(
+          // (blockId): replace that block's EQ bands with the clipboard's and
+          // power it on, one undo step. False on an empty clipboard.
+          "pasteBlockEq", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.pasteBlockEq(args[0].toString().toStdString()));
           }))
       .withNativeFunction(
           // The UI enables a block's analyzer only while its EQ view is

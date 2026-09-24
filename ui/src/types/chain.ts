@@ -441,6 +441,8 @@ export interface ChainState {
       on insert slots). The clipboard is a self-contained snapshot, so this
       survives preset switches and deleting the copied block. */
   canPasteBlock?: boolean;
+  /** Whether the native EQ clipboard holds copied bands (EQ Paste enabled). */
+  canPasteEq?: boolean;
   /** True when nothing distinguishes the state from a fresh instance: empty
       mono chain, faceplate params at defaults, no active preset. Greys out
       the top bar's New button. */

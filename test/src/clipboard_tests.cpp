@@ -160,4 +160,53 @@ TEST(BlockClipboardTest, RejectsEmptyClipboardAndBadSources) {
   EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["canPasteBlock"]));
 }
 
+// EQ clipboard (copyBlockEq / pasteBlockEq, the EQ editor's Copy / Paste):
+// bands only, a snapshot, paste powers the target on but keeps its PRE/POST,
+// one undo step.
+TEST(EqClipboardTest, PasteCopiesBandsPowersOnAndUndoesInOneStep) {
+  ChainTestProcessor proc;
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(makeIrBlockTree("blk-a", 1, 100), nullptr);
+  left.appendChild(makeIrBlockTree("blk-b", 2, 200), nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  const auto bell = [](double gainDb) {
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("freqHz", 900.0);
+    obj->setProperty("gainDb", gainDb);
+    obj->setProperty("q", 2.0);
+    obj->setProperty("poles", 4);
+    obj->setProperty("on", true);
+    return juce::var(obj);
+  };
+  ASSERT_TRUE(proc.setBlockEqBand("blk-a", 3, bell(7.5)));
+  ASSERT_TRUE(proc.setBlockEqPre("blk-a", true));
+  ASSERT_TRUE(proc.setBlockEqEnabled("blk-b", false));
+
+  EXPECT_FALSE(proc.pasteBlockEq("blk-b"));  // nothing copied yet
+  EXPECT_FALSE(static_cast<bool>(proc.getChainState(-1)["canPasteEq"]));
+  EXPECT_FALSE(proc.copyBlockEq("not-a-block"));
+  ASSERT_TRUE(proc.copyBlockEq("blk-a"));
+  EXPECT_TRUE(static_cast<bool>(proc.getChainState(-1)["canPasteEq"]));
+
+  // Snapshot, not reference: a later source edit doesn't reach the paste.
+  ASSERT_TRUE(proc.setBlockEqBand("blk-a", 3, bell(-3.0)));
+
+  const juce::var before = proc.getChainState(-1)["chain"][1]["params"]["eq"];
+  ASSERT_TRUE(proc.pasteBlockEq("blk-b"));
+  const juce::var eq = proc.getChainState(-1)["chain"][1]["params"]["eq"];
+  EXPECT_FLOAT_EQ(static_cast<float>(eq["bands"][3]["freqHz"]), 900.0f);
+  EXPECT_FLOAT_EQ(static_cast<float>(eq["bands"][3]["gainDb"]), 7.5f);
+  EXPECT_FLOAT_EQ(static_cast<float>(eq["bands"][3]["q"]), 2.0f);
+  EXPECT_TRUE(static_cast<bool>(eq["enabled"]));  // powered on
+  EXPECT_FALSE(static_cast<bool>(eq["pre"]));     // target keeps its position
+
+  ASSERT_TRUE(proc.undoChain());
+  EXPECT_EQ(juce::JSON::toString(proc.getChainState(-1)["chain"][1]["params"]["eq"]),
+            juce::JSON::toString(before));
+}
+
 }  // namespace

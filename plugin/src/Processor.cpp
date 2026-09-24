@@ -101,6 +101,12 @@ void TONE3000Processor::resolveParamRefs() {
   paramRefs.inputCalibrationLevel = get("inputCalibrationLevel");
   paramRefs.osEnabled = get("osEnabled");
   paramRefs.osFactor = get("osFactor");
+  paramRefs.bypass = get("bypass");
+  paramRefs.outputMute = get("outputMute");
+}
+
+juce::AudioProcessorParameter* TONE3000Processor::getBypassParameter() const {
+  return parameters.getParameter("bypass");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createParameterLayout() {
@@ -162,6 +168,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
   layout.add(std::make_unique<juce::AudioParameterChoice>(
       juce::ParameterID{"osFactor", 35}, "osFactor", juce::StringArray{"2x", "4x", "8x"}, 0,
       juce::AudioParameterChoiceAttributes().withAutomatable(false)));
+
+  // Global Bypass (also the host's bypass parameter, see getBypassParameter)
+  // and output Mute. Performance switches, not tone: deliberately absent
+  // from presetParameterIds, so loading a preset never flips them.
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"bypass", 36}, "Bypass", false));
+  layout.add(std::make_unique<juce::AudioParameterBool>(
+      juce::ParameterID{"outputMute", 37}, "Mute", false));
 
   return layout;
 }
@@ -725,6 +739,19 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   outputGainSmoother.reset(sampleRate, 0.02);
   outputGainSmoother.setCurrentAndTargetValue(mainStageGain(cacheOutputLevel));
 
+  // Global Bypass / Mute: primed from the current parameters (a session
+  // restored bypassed or muted starts that way, no glide). The dry delay
+  // matches the latency reported above; scratch is sized generously so a
+  // host overshooting its promised block size doesn't allocate here.
+  bypassMix.reset(sampleRate, 0.02);
+  bypassMix.setCurrentAndTargetValue(cacheBypass ? 1.0f : 0.0f);
+  muteGain.reset(sampleRate, 0.02);
+  muteGain.setCurrentAndTargetValue(cacheOutputMute ? 0.0f : 1.0f);
+  bypassDry.setSize(2, juce::jmax(samplesPerBlock, 8192));
+  for (auto& ring : bypassDelayRing)
+    ring.assign(static_cast<size_t>(chainBoundaryLatency), 0.0f);
+  bypassDelayPos = 0;
+
   // Post-chain pan gain: 20 ms ramps, primed from the current parameters and
   // rig so a restored session doesn't fade in from the wrong pan. Mirrors
   // the gain resolution in processImageStage (stereoOutputDetected was just
@@ -891,6 +918,8 @@ void TONE3000Processor::updateCachedParameters() {
   cacheCalibrateInput = loadBool(paramRefs.calibrateInput);
   cacheGateEnabled = loadBool(paramRefs.gateEnabled);
   cacheToneEqEnabled = loadBool(paramRefs.toneEqEnabled);
+  cacheBypass = loadBool(paramRefs.bypass);
+  cacheOutputMute = loadBool(paramRefs.outputMute);
 }
 
 // See the declaration (Processor.h). Called from processChainOnBuffer's own
@@ -1625,6 +1654,34 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
   updateCachedParameters();
 
+  // Global Bypass dry path: the host's input as delivered (a standalone mono
+  // input device mirrored onto both channels, so bypass isn't left-only),
+  // delayed by the reported latency. Captured every block, bypassed or not,
+  // so the delay ring is warm the moment bypass engages.
+  const int dryChannels = juce::jmin(numChannels, 2);
+  if (bypassDry.getNumSamples() < numSamples)
+    bypassDry.setSize(2, numSamples, false, false, true);  // host overshoot only
+  for (int ch = 0; ch < dryChannels; ++ch)
+    bypassDry.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+  if (dryChannels > 1 && standaloneMonoInput.load())
+    bypassDry.copyFrom(1, 0, bypassDry, 0, 0, numSamples);
+  if (const int delayLen = static_cast<int>(bypassDelayRing[0].size()); delayLen > 0) {
+    int pos = bypassDelayPos;
+    for (int ch = 0; ch < dryChannels; ++ch) {
+      auto* ring = bypassDelayRing[static_cast<size_t>(ch)].data();
+      auto* d = bypassDry.getWritePointer(ch);
+      pos = bypassDelayPos;
+      for (int i = 0; i < numSamples; ++i) {
+        const float delayed = ring[pos];
+        ring[pos] = d[i];
+        d[i] = delayed;
+        if (++pos == delayLen)
+          pos = 0;
+      }
+    }
+    bypassDelayPos = pos;
+  }
+
   // Heartbeat for isAudioActive(): fade handshakes skip their bounded waits
   // when no callbacks are running (nothing is audible then).
   lastAudioCallbackMs.store(juce::Time::currentTimeMillis());
@@ -1835,21 +1892,29 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   // ###########
   // Output gain (level ±24 dB, same on both channels; the balance trim
   // lives in the post-chain image matrix above, pre-pan). Smoothed so knob
-  // moves glide instead of stepping once per block. Per-channel output
-  // meters ride the same pass.
+  // moves glide instead of stepping once per block. Then the global Bypass
+  // crossfade (to the latency-matched dry input, at unity - the Output knob
+  // is part of what's bypassed) and Mute, last of all. Per-channel output
+  // meters ride the same pass, so they show exactly what leaves the plugin.
   // ###########
   {
     outputGainSmoother.setTargetValue(mainStageGain(cacheOutputLevel));
+    bypassMix.setTargetValue(cacheBypass ? 1.0f : 0.0f);
+    muteGain.setTargetValue(cacheOutputMute ? 0.0f : 1.0f);
 
     float peakL = 0.0f, peakR = 0.0f;
     auto* l = buffer.getWritePointer(0);
     auto* r = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
+    const auto* dryL = bypassDry.getReadPointer(0);
+    const auto* dryR = bypassDry.getReadPointer(dryChannels > 1 ? 1 : 0);
     for (int i = 0; i < numSamples; ++i) {
       const float g = outputGainSmoother.getNextValue();
-      l[i] *= g;
+      const float b = bypassMix.getNextValue();
+      const float m = muteGain.getNextValue();
+      l[i] = (l[i] * g * (1.0f - b) + dryL[i] * b) * m;
       peakL = std::max(peakL, std::abs(l[i]));
       if (r) {
-        r[i] *= g;
+        r[i] = (r[i] * g * (1.0f - b) + dryR[i] * b) * m;
         peakR = std::max(peakR, std::abs(r[i]));
       }
     }

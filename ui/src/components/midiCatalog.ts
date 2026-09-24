@@ -36,6 +36,8 @@ export const MAPPABLE_TARGETS: MappableTarget[] = [
   { id: 'inputLevel', name: 'Input Gain', group: 'Global', kind: 'continuous' },
   { id: 'outputLevel', name: 'Output Level', group: 'Global', kind: 'continuous' },
   { id: 'outputPan', name: 'Output Pan', group: 'Global', kind: 'continuous' },
+  { id: 'bypass', name: 'Bypass', group: 'Global', kind: 'toggle' },
+  { id: 'outputMute', name: 'Mute', group: 'Global', kind: 'toggle' },
   { id: 'gateEnabled', name: 'Gate Power', group: 'Noise Gate', kind: 'toggle' },
   { id: 'gateThreshold', name: 'Gate Threshold', group: 'Noise Gate', kind: 'continuous' },
   { id: 'toneEqEnabled', name: 'Tone Stack Power', group: 'Tone Stack', kind: 'toggle' },
