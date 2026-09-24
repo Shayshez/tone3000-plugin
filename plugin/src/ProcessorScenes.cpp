@@ -124,8 +124,49 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& c
   }
 }
 
+namespace {
+// Dual Mono side blocks (both lanes, inserts skipped).
+template <typename Fn>
+void forEachDualSide(ChainBlock& wrapper, Fn&& fn) {
+  for (auto* lane : {&wrapper.dualLeft, &wrapper.dualRight})
+    for (auto& side : *lane)
+      if (side != nullptr && side->type != ChainBlockType::INSERT)
+        fn(*side);
+}
+}  // namespace
+
+ChainBlock* TONE3000Processor::channelGroupRoot(const std::string& blockId) {
+  for (auto& block : chain) {
+    if (block == nullptr || block->type != ChainBlockType::DUAL_MONO)
+      continue;
+    ChainBlock* parent = nullptr;
+    forEachDualSide(*block, [&](ChainBlock& side) {
+      if (side.id == blockId)
+        parent = block.get();
+    });
+    if (parent != nullptr)
+      return parent;
+  }
+  return findBlockById(blockId);
+}
+
 void TONE3000Processor::switchBlockChannel(ChainBlock& block, int channel) {
   channel = juce::jlimit(0, kNumBlockChannels - 1, channel);
+  if (block.type == ChainBlockType::DUAL_MONO) {
+    forEachDualSide(block, [&](ChainBlock& side) {
+      // A side loaded after the group left channel A still carries its
+      // live state as channel A: relabel it to the group's channel first.
+      if (side.activeChannel != block.activeChannel) {
+        side.channels[static_cast<size_t>(block.activeChannel)] = juce::ValueTree();
+        side.activeChannel = block.activeChannel;
+      }
+      switchSingleBlockChannel(side, channel);
+    });
+  }
+  switchSingleBlockChannel(block, channel);
+}
+
+void TONE3000Processor::switchSingleBlockChannel(ChainBlock& block, int channel) {
   if (channel == block.activeChannel)
     return;
   block.channels[static_cast<size_t>(block.activeChannel)] = captureChannel(block);
@@ -141,7 +182,7 @@ bool TONE3000Processor::selectBlockChannel(const std::string& blockId, int chann
   if (channel < 0 || channel >= kNumBlockChannels)
     return false;
   juce::ScopedLock lock(chainMutex);
-  ChainBlock* block = findBlockById(blockId);
+  ChainBlock* block = channelGroupRoot(blockId);
   if (block == nullptr || block->type == ChainBlockType::INSERT)
     return false;
   if (channel == block->activeChannel)
@@ -158,17 +199,22 @@ bool TONE3000Processor::copyBlockChannel(const std::string& blockId, int from, i
   if (from < 0 || from >= kNumBlockChannels || to < 0 || to >= kNumBlockChannels || from == to)
     return false;
   juce::ScopedLock lock(chainMutex);
-  ChainBlock* block = findBlockById(blockId);
+  ChainBlock* block = channelGroupRoot(blockId);
   if (block == nullptr || block->type == ChainBlockType::INSERT)
     return false;
   pushChainHistory();
-  const juce::ValueTree& stored = block->channels[static_cast<size_t>(from)];
-  const juce::ValueTree source =
-      from == block->activeChannel || !stored.isValid() ? captureChannel(*block) : stored.createCopy();
-  if (to == block->activeChannel)
-    applyChannel(*block, source);
-  else
-    block->channels[static_cast<size_t>(to)] = source;
+  auto copyOne = [&](ChainBlock& b) {
+    const juce::ValueTree& stored = b.channels[static_cast<size_t>(from)];
+    const juce::ValueTree source =
+        from == b.activeChannel || !stored.isValid() ? captureChannel(b) : stored.createCopy();
+    if (to == b.activeChannel)
+      applyChannel(b, source);
+    else
+      b.channels[static_cast<size_t>(to)] = source;
+  };
+  copyOne(*block);
+  if (block->type == ChainBlockType::DUAL_MONO)
+    forEachDualSide(*block, copyOne);
   refreshWarmEngines();
   bumpChainRevision();
   return true;
@@ -192,12 +238,19 @@ TONE3000Processor::Scene TONE3000Processor::effectiveScene(int index) const {
 }
 
 void TONE3000Processor::applyScene(const Scene& scene) {
+  // Dual Mono sides follow their wrapper's channel (switchBlockChannel).
+  std::set<std::string> dualSides;
+  for (auto& block : chain)
+    if (block != nullptr && block->type == ChainBlockType::DUAL_MONO)
+      forEachDualSide(*block, [&](ChainBlock& side) { dualSides.insert(side.id); });
+
   forEachSceneBlock(chain, [&](ChainBlock& b) {
     const auto it = scene.blocks.find(b.id);
     if (it == scene.blocks.end())
       return;
     b.enabled = it->second.enabled;  // glides on the block's wet fade
-    switchBlockChannel(b, it->second.channel);
+    if (dualSides.count(b.id) == 0)
+      switchBlockChannel(b, it->second.channel);
   });
   refreshIrTailLength();
   sceneLevelDb.store(scene.levelDb);
@@ -308,7 +361,7 @@ bool TONE3000Processor::setSceneBlockChannel(int sceneIndex, const std::string& 
   if (sceneIndex < 0 || sceneIndex >= kNumScenes || channel < 0 || channel >= kNumBlockChannels)
     return false;
   juce::ScopedLock lock(chainMutex);
-  ChainBlock* block = findBlockById(blockId);
+  ChainBlock* block = channelGroupRoot(blockId);  // a Dual Mono side -> its group
   if (block == nullptr || block->type == ChainBlockType::INSERT)
     return false;
   pushChainHistory();
@@ -316,12 +369,17 @@ bool TONE3000Processor::setSceneBlockChannel(int sceneIndex, const std::string& 
     switchBlockChannel(*block, channel);
     refreshIrTailLength();
   } else {
-    // A channel picked for another scene must exist to be warmed up.
-    if (!block->channels[static_cast<size_t>(channel)].isValid() && channel != block->activeChannel)
-      block->channels[static_cast<size_t>(channel)] = captureChannel(*block);
-    auto [it, inserted] = scenes[static_cast<size_t>(sceneIndex)].blocks.try_emplace(
-        blockId, SceneBlockState{block->enabled, block->activeChannel});
-    it->second.channel = channel;
+    auto setOne = [&](ChainBlock& b) {
+      // A channel picked for another scene must exist to be warmed up.
+      if (!b.channels[static_cast<size_t>(channel)].isValid() && channel != b.activeChannel)
+        b.channels[static_cast<size_t>(channel)] = captureChannel(b);
+      auto [it, inserted] = scenes[static_cast<size_t>(sceneIndex)].blocks.try_emplace(
+          b.id, SceneBlockState{b.enabled, b.activeChannel});
+      it->second.channel = channel;
+    };
+    setOne(*block);
+    if (block->type == ChainBlockType::DUAL_MONO)
+      forEachDualSide(*block, setOne);
   }
   refreshWarmEngines();
   bumpChainRevision();

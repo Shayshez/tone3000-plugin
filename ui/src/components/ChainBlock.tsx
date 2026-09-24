@@ -3493,24 +3493,30 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               >
                 <Power />
               </ChromeIconButton>
-              <ChannelSelector block={block} actions={actions} />
+              {/* A Dual Mono side switches channels with its group (the
+                  Dual Mono card's own selector). */}
+              {!dualParent && <ChannelSelector block={block} actions={actions} />}
 
+              {/* EQ view keeps only what concerns the EQ (power, channel,
+                  which block): the rest lives on the block's own view. */}
               {/* With per-block choice off, a block matching the new-block
                 default has nothing to say: the chip only appears on a
                 mismatch (e.g. a preset's FULL block under a lite default). */}
-              {isNam && (sizeControlEnabled || slimFull !== isSlimSizeFull(namSlimSizeDefault)) && (
-                <BlockSizeControl
-                  full={slimFull}
-                  interactive={sizeControlEnabled}
-                  onChange={handleSetSlimFull}
-                />
-              )}
+              {!showEq &&
+                isNam &&
+                (sizeControlEnabled || slimFull !== isSlimSizeFull(namSlimSizeDefault)) && (
+                  <BlockSizeControl
+                    full={slimFull}
+                    interactive={sizeControlEnabled}
+                    onChange={handleSetSlimFull}
+                  />
+                )}
 
               {/* Also renders on a real CAB block now (isCab): the "IR
                 Player" side is the reverse conversion back to a plain IR
                 block (see handleCabCategoryClick), so the control has to
                 stay visible there for the button to exist at all. */}
-              {!isNam && (
+              {!showEq && !isNam && (
                 <IrCategoryControl
                   category={isCab ? 'cab' : irCategory}
                   onChange={handleCabCategoryClick}
@@ -3520,7 +3526,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               {/* Calibration indicator (not a button): white = the loaded model
                 carries calibration data, gray = it doesn't. Hidden entirely
                 while the calibration setting is off. */}
-              {showCalibration && (
+              {!showEq && showCalibration && (
                 <span
                   {...helpProps(calibrationActive ? HELP.blockCalibrated : HELP.blockUncalibrated)}
                   style={{
@@ -3546,8 +3552,10 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             {showEq && (
               <span
                 style={{
+                  flex: 1,
+                  margin: '0 24rem',
                   fontSize: '13rem',
-                  color: GRAY,
+                  color: MUTED,
                   fontWeight: 400,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -3629,69 +3637,73 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 like the shaping UI itself (line ~1580 below): neither NAM
                 nor CAB carries these fields - CAB is "structurally minimal
                 by design", per ChainBlock.h. */}
-              {!isNam && !isCab && (
+              {!showEq && !isNam && !isCab && (
                 <ChromeTextButton help={HELP.blockResetShape} onClick={handleResetIrShape}>
                   Reset
                 </ChromeTextButton>
               )}
 
-              {!isLocal && (
-                <ChromeIconButton
-                  open={showInfo}
-                  help={HELP.toneInfo}
-                  onClick={() => view.toggle('info')}
-                >
-                  <Info />
-                </ChromeIconButton>
-              )}
-              {!isLocal && (
-                <ChromeIconButton help={HELP.shareTone} onClick={handleShare}>
-                  <Share />
-                </ChromeIconButton>
-              )}
-              <ChromeIconButton
-                help={HELP.swapTone}
-                onClick={() =>
-                  dualParent
-                    ? actions.addToDualSlot(dualParent.blockId, dualParent.isLeftSide)
-                    : actions.swapBlock(blockId, { navigateToDetail: true })
-                }
-              >
-                <ArrowLeftRight />
-              </ChromeIconButton>
-              {/* A block already nested as one side of a Dual Mono pair
+              {!showEq && (
+                <>
+                  {!isLocal && (
+                    <ChromeIconButton
+                      open={showInfo}
+                      help={HELP.toneInfo}
+                      onClick={() => view.toggle('info')}
+                    >
+                      <Info />
+                    </ChromeIconButton>
+                  )}
+                  {!isLocal && (
+                    <ChromeIconButton help={HELP.shareTone} onClick={handleShare}>
+                      <Share />
+                    </ChromeIconButton>
+                  )}
+                  <ChromeIconButton
+                    help={HELP.swapTone}
+                    onClick={() =>
+                      dualParent
+                        ? actions.addToDualSlot(dualParent.blockId, dualParent.isLeftSide)
+                        : actions.swapBlock(blockId, { navigateToDetail: true })
+                    }
+                  >
+                    <ArrowLeftRight />
+                  </ChromeIconButton>
+                  {/* A block already nested as one side of a Dual Mono pair
                   can't be wrapped again (the native side only ever seeds a
                   dual child as NAM/IR/CAB/EQ) - this only ever shows on a
                   genuine top-level lane block's own editor. */}
-              {!dualParent && (
-                <ChromeIconButton
-                  help={HELP.convertToDualMono}
-                  onClick={async () => {
-                    // This block's own id stops resolving the instant the
-                    // wrapper lands - jump to its id right after, or
-                    // ChainView's detail view falls back to the gallery
-                    // instead of staying open on the result (same shape as
-                    // collapseDualMonoToSingle's own fix, see its comment).
-                    const newId = await actions.convertBlockToDualMono(blockId);
-                    if (newId) onJumpToBlock(newId);
-                  }}
-                >
-                  <GearIcon gear="dualMono" color="currentColor" />
-                </ChromeIconButton>
+                  {!dualParent && (
+                    <ChromeIconButton
+                      help={HELP.convertToDualMono}
+                      onClick={async () => {
+                        // This block's own id stops resolving the instant the
+                        // wrapper lands - jump to its id right after, or
+                        // ChainView's detail view falls back to the gallery
+                        // instead of staying open on the result (same shape as
+                        // collapseDualMonoToSingle's own fix, see its comment).
+                        const newId = await actions.convertBlockToDualMono(blockId);
+                        if (newId) onJumpToBlock(newId);
+                      }}
+                    >
+                      <GearIcon gear="dualMono" color="currentColor" />
+                    </ChromeIconButton>
+                  )}
+                  <ChromeIconButton
+                    help={HELP.removeBlock}
+                    onClick={() => {
+                      if (dualParent) {
+                        actions.removeDualSlotContent(dualParent.blockId, dualParent.isLeftSide);
+                        onBack();
+                      } else {
+                        actions.removeBlock(blockId);
+                      }
+                    }}
+                  >
+                    <Trash2 />
+                  </ChromeIconButton>
+                </>
               )}
-              <ChromeIconButton
-                help={HELP.removeBlock}
-                onClick={() => {
-                  if (dualParent) {
-                    actions.removeDualSlotContent(dualParent.blockId, dualParent.isLeftSide);
-                    onBack();
-                  } else {
-                    actions.removeBlock(blockId);
-                  }
-                }}
-              >
-                <Trash2 />
-              </ChromeIconButton>
             </div>
           </div>
 

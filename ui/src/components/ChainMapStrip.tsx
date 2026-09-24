@@ -21,6 +21,7 @@ import {
   BRAND_ORANGE,
   BRAND_YELLOW,
   DISABLED_OPACITY,
+  FONT_MONO,
   GRAY,
   HIGHLIGHT,
   MUTED,
@@ -62,6 +63,8 @@ const EQ_MARK_BOTTOM_INSET = 1;
     just seen. Sized to the invisible hit area's full height so hovering
     anywhere in the click target lights up the same pill the click lands on. */
 const EQ_MARK_PILL_PAD = 6;
+/** One L/R/link segment of the expanded Dual Mono chip. */
+const CHILD_TAB_WIDTH = 28;
 
 /** Same derivation the block detail view's EQ button lights up yellow with
     (see ChainBlock.tsx's eqActive): EQ powered on and not flat (a flat or
@@ -269,12 +272,21 @@ const ChainMapHomeChip: React.FC<{ onGoHome: () => void }> = ({ onGoHome }) => (
     (jumps straight to that side's EQ) - reusing that established mark
     instead of a second labeled button per side keeps this compact. */
 const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) => (
-  <div style={{ display: 'flex', alignItems: 'stretch', gap: '2rem', padding: '0 4rem 0 2rem' }}>
+  <div style={{ display: 'flex', alignItems: 'stretch', paddingRight: '2rem' }}>
     {tabs.map((tab) => (
-      <div
-        key={tab.label}
-        style={{ position: 'relative', width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem` }}
-      >
+      <div key={tab.label} style={{ position: 'relative', width: `${CHILD_TAB_WIDTH}rem` }}>
+        {/* Hairline divider between the pill's segments. */}
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: '7rem',
+            bottom: '7rem',
+            width: '1rem',
+            backgroundColor: 'rgba(0, 0, 0, 0.14)',
+          }}
+        />
         <button
           type="button"
           onClick={tab.onSelect}
@@ -289,13 +301,11 @@ const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) =
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: '5rem',
-            fontFamily: 'inherit',
-            // Deliberately smaller/lighter than the chip's own "DUAL" label
-            // (CHIP_FONT_SIZE, weight 600) - these are secondary
-            // sub-navigation, not the block's name, and reading as equally
-            // heavy made the expanded pill feel bulkier than it needed to.
+            fontFamily: FONT_MONO,
+            // Smaller than the chip's own "DUAL" label - secondary
+            // sub-navigation, not the block's name.
             fontSize: `${CHIP_FONT_SIZE - 2}rem`,
-            fontWeight: 500,
+            fontWeight: 400,
             color: tab.active ? BLACK : 'rgba(0, 0, 0, 0.6)',
             backgroundColor: tab.active ? 'rgba(0, 0, 0, 0.08)' : 'transparent',
           }}
@@ -329,7 +339,7 @@ const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) =
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: `${EQ_MARK_WIDTH + EQ_MARK_PILL_PAD * 2}rem`,
+                width: `${CHILD_TAB_WIDTH - 4}rem`,
                 height: `${EQ_MARK_HIT_HEIGHT}rem`,
                 borderRadius: `${EQ_MARK_HIT_HEIGHT / 2}rem`,
               }}
@@ -337,7 +347,7 @@ const ChainMapChildTabRow: React.FC<{ tabs: ChainMapChildTab[] }> = ({ tabs }) =
               <span
                 aria-hidden
                 style={{
-                  width: `${EQ_MARK_WIDTH}rem`,
+                  width: `${CHILD_TAB_WIDTH - 12}rem`,
                   height: `${EQ_MARK_HEIGHT}rem`,
                   borderRadius: `${EQ_MARK_HEIGHT / 2}rem`,
                   // This tab always sits on the expanded pill's own WHITE
@@ -490,9 +500,9 @@ const ChainMapTile: React.FC<{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontFamily: 'inherit',
+              fontFamily: FONT_MONO,
               fontSize: `${CHIP_FONT_SIZE}rem`,
-              fontWeight: 600,
+              fontWeight: 400,
               color: BLACK,
             }}
           >

@@ -1212,7 +1212,13 @@ private:
   // model changes crossfade from a warm engine when possible.
   void applyChannel(ChainBlock& block, const juce::ValueTree& channel);
   // Switch without a history entry (scene switches); caller holds the lock.
+  // A Dual Mono block and its side blocks are one channel group: switching
+  // the wrapper switches its sides to the same channel.
   void switchBlockChannel(ChainBlock& block, int channel);
+  void switchSingleBlockChannel(ChainBlock& block, int channel);
+  // The block that owns `blockId`'s channel: its Dual Mono wrapper for a
+  // side block, else the block itself (nullptr if not found).
+  ChainBlock* channelGroupRoot(const std::string& blockId);
   // Queue the off-thread IR kernel rebuild after shape params moved.
   void requestIrShapeRebuild(ChainBlock& block);
 

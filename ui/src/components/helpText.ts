@@ -241,13 +241,16 @@ const HELP_DESKTOP = {
   sceneSelect: 'Switch to this scene.',
   sceneRename: 'Rename: give this scene a name (Enter to save, Esc to cancel).',
   sceneCopy: "Copy To: overwrite another scene with this one's settings (keeps its name).",
-  sceneLevel: 'Scene level: output boost/cut for this scene only (e.g. +3 dB for a solo).',
+  sceneLevel:
+    'Scene level: output boost/cut for this scene only. Drag or wheel to change, double-click to type, ⌥-click: 0 dB.',
   blockChannel:
     'Channel A-D: four full versions of this block (model, knobs, EQ). Scenes pick a channel per block.',
   blockChannelCopy: "Copy this channel's settings onto another channel of the block.",
   sceneManager: 'Scene Manager: every scene against every block - bypass and channel at a glance.',
   sceneCellPower: 'Click: bypass/enable this block in this scene.',
   sceneCellChannel: 'Click: pick the channel this block uses in this scene.',
+  sceneCellLinked:
+    'Channel follows the Dual Mono block (a Dual Mono block and its sides switch channels together).',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',
   knobMenuReset: 'Reset to Default: put this knob back to its default value (same as ⌥-click).',
   knobMenuType: 'Type Value: enter an exact value (same as double-click).',

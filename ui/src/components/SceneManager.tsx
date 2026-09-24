@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Copy, Minus, Plus, Power, X as XIcon } from './icons';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { getUiScale } from '../hooks/useUiScale';
+import { Copy, Power, X as XIcon } from './icons';
 import { ChromeIconButton } from './ChromeIconButton';
 import { TileMenu } from './TileMenu';
 import { useTileMenu } from '../hooks/useTileMenu';
@@ -51,29 +52,201 @@ interface Column {
   /** Type label (NAM/IR/...), prefixed L/R for a Dual Mono side. */
   label: string;
   title: string;
+  /** Dual Mono side: its channel follows this wrapper (one channel group). */
+  group?: ToneBlock;
 }
 
 /** Every block a scene can address, in chain order; a Dual Mono block is
     followed by its sides' blocks. */
-const sceneColumns = (items: ChainItem[], prefix = ''): Column[] =>
+const sceneColumns = (items: ChainItem[], prefix = '', group?: ToneBlock): Column[] =>
   items.flatMap((item): Column[] => {
     if (isInsertSlot(item)) return [];
     const own: Column = {
       block: item,
       label: `${prefix}${BLOCK_TYPE_LABEL[item.blockType]}`,
       title: item.blockType === 'dualMono' ? 'Dual Mono' : item.tone.title,
+      group,
     };
     if (item.blockType !== 'dualMono') return [own];
     return [
       own,
-      ...sceneColumns(item.dualLeft ?? [], 'L '),
-      ...sceneColumns(item.dualRight ?? [], 'R '),
+      ...sceneColumns(item.dualLeft ?? [], 'L ', item),
+      ...sceneColumns(item.dualRight ?? [], 'R ', item),
     ];
   });
 
 const LEVEL_MIN = -24;
 const LEVEL_MAX = 12;
-const levelLabel = (db: number) => (db === 0 ? '0 dB' : `${db > 0 ? '+' : ''}${db} dB`);
+const LEVEL_STEP = 0.5;
+/** Drag sensitivity: dB per design px. */
+const LEVEL_DB_PER_PX = 0.1;
+const clampLevel = (db: number) =>
+  Math.max(LEVEL_MIN, Math.min(LEVEL_MAX, Math.round(db / LEVEL_STEP) * LEVEL_STEP));
+const levelLabel = (db: number) =>
+  db === 0 ? '0.0 dB' : `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
+
+/**
+ * Scene level as a "text fader": the readout is the control. Drag left/
+ * right (or up/down) to change, mouse wheel for 0.5 dB steps, double-click
+ * to type a value, ⌥-click for 0 dB. A thin bar under the text shows the
+ * level from the 0 dB mark, so it reads at a glance.
+ */
+const LevelFader: React.FC<{ value: number; onChange: (db: number) => void }> = ({
+  value,
+  onChange,
+}) => {
+  const [live, setLive] = useState(value);
+  const drag = useRef<{ x: number; y: number; start: number; moved: boolean } | null>(null);
+  useEffect(() => {
+    if (!drag.current) setLive(value);
+  }, [value]);
+  const [typing, setTyping] = useState<string | null>(null);
+  const set = (db: number) => {
+    const next = clampLevel(db);
+    setLive(next);
+    onChange(next);
+  };
+
+  // Wheel needs a non-passive listener to keep the grid from scrolling.
+  const ref = useRef<HTMLDivElement>(null);
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const setRef = useRef(set);
+  setRef.current = set;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.deltaY !== 0) setRef.current(liveRef.current + (e.deltaY < 0 ? 1 : -1) * LEVEL_STEP);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const span = LEVEL_MAX - LEVEL_MIN;
+  const zeroPct = ((0 - LEVEL_MIN) / span) * 100;
+  const valuePct = ((live - LEVEL_MIN) / span) * 100;
+
+  if (typing !== null) {
+    const commit = () => {
+      const n = parseFloat(typing);
+      if (Number.isFinite(n)) set(n);
+      setTyping(null);
+    };
+    return (
+      <input
+        autoFocus
+        value={typing}
+        placeholder={live.toFixed(1)}
+        inputMode="decimal"
+        onChange={(e) => setTyping(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') setTyping(null);
+        }}
+        style={{
+          width: `${FADER_W}rem`,
+          height: `${FADER_H}rem`,
+          boxSizing: 'border-box',
+          background: SEGMENTED_TRACK,
+          border: 'none',
+          borderRadius: '3rem',
+          color: WHITE,
+          fontFamily: FONT_MONO,
+          fontSize: '11rem',
+          textAlign: 'center',
+          outline: 'none',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      {...helpProps(HELP.sceneLevel)}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        if (e.altKey) {
+          set(0);
+          return;
+        }
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, y: e.clientY, start: live, moved: false };
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        const scale = getUiScale();
+        // Right or up raises; whichever axis moved more wins.
+        const dx = (e.clientX - d.x) / scale;
+        const dy = (d.y - e.clientY) / scale;
+        const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+        if (Math.abs(delta) > 2) d.moved = true;
+        if (d.moved) set(d.start + delta * LEVEL_DB_PER_PX);
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+      }}
+      onDoubleClick={() => setTyping('')}
+      style={{
+        position: 'relative',
+        width: `${FADER_W}rem`,
+        height: `${FADER_H}rem`,
+        flexShrink: 0,
+        borderRadius: '3rem',
+        background: SEGMENTED_TRACK,
+        cursor: 'ew-resize',
+        overflow: 'hidden',
+        touchAction: 'none',
+        userSelect: 'none',
+      }}
+    >
+      {/* Level bar from the 0 dB mark. */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          height: '2rem',
+          left: `${Math.min(zeroPct, valuePct)}%`,
+          width: `${Math.abs(valuePct - zeroPct)}%`,
+          background: BRAND_YELLOW,
+        }}
+      />
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          height: '4rem',
+          left: `${zeroPct}%`,
+          width: '1rem',
+          background: MUTED,
+        }}
+      />
+      <span
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: FONT_MONO,
+          fontSize: '11rem',
+          color: live === 0 ? MUTED : WHITE,
+        }}
+      >
+        {levelLabel(live)}
+      </span>
+    </div>
+  );
+};
+
+const FADER_W = 64;
+const FADER_H = 22;
 
 const HEAD_W = 236;
 const COL_MIN_W = 104;
@@ -93,26 +266,6 @@ const SceneRowHead: React.FC<{
     if (draft.trim() !== name) actions.renameScene(index, draft.trim());
   };
   const menu = useTileMenu();
-  const stepLevel = (delta: number) =>
-    actions.setSceneLevel(index, Math.max(LEVEL_MIN, Math.min(LEVEL_MAX, level + delta)));
-  const stepButton = (delta: number) => (
-    <button
-      type="button"
-      onClick={() => stepLevel(delta)}
-      {...helpProps(HELP.sceneLevel)}
-      style={{
-        all: 'unset',
-        cursor: 'pointer',
-        width: '16rem',
-        height: '18rem',
-        display: 'grid',
-        placeItems: 'center',
-        color: MUTED,
-      }}
-    >
-      {delta < 0 ? <Minus size={12} /> : <Plus size={12} />}
-    </button>
-  );
 
   return (
     <div
@@ -179,29 +332,7 @@ const SceneRowHead: React.FC<{
           outline: 'none',
         }}
       />
-      <div
-        style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}
-        {...helpProps(HELP.sceneLevel)}
-      >
-        {stepButton(-1)}
-        <button
-          type="button"
-          onClick={() => actions.setSceneLevel(index, 0)}
-          {...helpProps(`${HELP.sceneLevel} Click: back to 0 dB.`)}
-          style={{
-            all: 'unset',
-            cursor: 'pointer',
-            width: '46rem',
-            textAlign: 'center',
-            fontFamily: FONT_MONO,
-            fontSize: '11rem',
-            color: level === 0 ? SUBTLE : WHITE,
-          }}
-        >
-          {levelLabel(level)}
-        </button>
-        {stepButton(1)}
-      </div>
+      <LevelFader value={level} onChange={(db) => actions.setSceneLevel(index, db)} />
       {menu.menuAnchor && (
         <TileMenu
           anchor={menu.menuAnchor}
@@ -230,9 +361,11 @@ const SceneRowHead: React.FC<{
 const SceneCell: React.FC<{
   block: ToneBlock;
   state: SceneBlockState;
+  /** Dual Mono side: the channel shown is its group's, read-only. */
+  linked?: boolean;
   onEnabled: (enabled: boolean) => void;
   onChannel: (channel: number) => void;
-}> = ({ block, state, onEnabled, onChannel }) => (
+}> = ({ block, state, linked = false, onEnabled, onChannel }) => (
   <div
     style={{
       display: 'flex',
@@ -251,35 +384,49 @@ const SceneCell: React.FC<{
     >
       <Power />
     </ChromeIconButton>
-    <div style={{ display: 'flex', gap: '1rem' }}>
-      {Array.from({ length: NUM_CHANNELS }, (_, c) => {
-        const isActive = c === state.channel;
-        return (
-          <button
-            key={c}
-            type="button"
-            onClick={() => onChannel(c)}
-            {...helpProps(`Channel ${CHANNEL_LETTERS[c]} - ${HELP.sceneCellChannel}`)}
-            style={{
-              all: 'unset',
-              cursor: 'pointer',
-              width: '15rem',
-              height: '20rem',
-              display: 'grid',
-              placeItems: 'center',
-              borderRadius: '2rem',
-              fontFamily: FONT_MONO,
-              fontSize: '11rem',
-              fontWeight: 600,
-              color: isActive ? BLACK : channelUsed(block, c) ? WHITE : SUBTLE,
-              background: isActive ? BRAND_YELLOW : SEGMENTED_TRACK,
-            }}
-          >
-            {CHANNEL_LETTERS[c]}
-          </button>
-        );
-      })}
-    </div>
+    {linked ? (
+      <span
+        {...helpProps(HELP.sceneCellLinked)}
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: '11rem',
+          color: SUBTLE,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {`\u2190 ${CHANNEL_LETTERS[state.channel] ?? 'A'}`}
+      </span>
+    ) : (
+      <div style={{ display: 'flex', gap: '1rem' }}>
+        {Array.from({ length: NUM_CHANNELS }, (_, c) => {
+          const isActive = c === state.channel;
+          return (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onChannel(c)}
+              {...helpProps(`Channel ${CHANNEL_LETTERS[c]} - ${HELP.sceneCellChannel}`)}
+              style={{
+                all: 'unset',
+                cursor: 'pointer',
+                width: '15rem',
+                height: '20rem',
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: '2rem',
+                fontFamily: FONT_MONO,
+                fontSize: '11rem',
+                fontWeight: 600,
+                color: isActive ? BLACK : channelUsed(block, c) ? WHITE : SUBTLE,
+                background: isActive ? BRAND_YELLOW : SEGMENTED_TRACK,
+              }}
+            >
+              {CHANNEL_LETTERS[c]}
+            </button>
+          );
+        })}
+      </div>
+    )}
   </div>
 );
 
@@ -454,7 +601,10 @@ export const SceneManager: React.FC<{
                 />
               </div>
               {columns.map((col) => {
-                const state = cellState(s, col.block);
+                // A Dual Mono side shows its group's channel (they move as one).
+                const state = col.group
+                  ? { ...cellState(s, col.block), channel: cellState(s, col.group).channel }
+                  : cellState(s, col.block);
                 return (
                   <div
                     key={col.block.blockId}
@@ -467,6 +617,7 @@ export const SceneManager: React.FC<{
                     <SceneCell
                       block={col.block}
                       state={state}
+                      linked={!!col.group}
                       onEnabled={(enabled) => {
                         edit(s, col.block, { ...state, enabled });
                         actions.setSceneBlockEnabled(s, col.block.blockId, enabled);

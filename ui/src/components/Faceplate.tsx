@@ -452,23 +452,35 @@ export const Faceplate = React.memo(function Faceplate({
 
       <div
         style={{
-          justifySelf: 'end',
+          justifySelf: 'stretch',
+          alignSelf: 'stretch',
           display: 'flex',
           alignItems: 'flex-end',
           gap: '28rem',
         }}
       >
-        {scenes && onSelectScene && onRenameScene && onCopyScene && onOpenSceneManager && (
-          // Between the tone stack and the output section: scenes are the
-          // live, one-hand switches, next to the output they shape.
-          <ScenesStrip
-            scenes={scenes}
-            onSelect={onSelectScene}
-            onRename={onRenameScene}
-            onCopy={onCopyScene}
-            onOpenManager={onOpenSceneManager}
-          />
-        )}
+        {/* Scenes: centered (both ways) in the room between the tone stack
+            and the output section - the live, one-hand switches. */}
+        <div
+          style={{
+            flex: 1,
+            alignSelf: 'stretch',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 0,
+          }}
+        >
+          {scenes && onSelectScene && onRenameScene && onCopyScene && onOpenSceneManager && (
+            <ScenesStrip
+              scenes={scenes}
+              onSelect={onSelectScene}
+              onRename={onRenameScene}
+              onCopy={onCopyScene}
+              onOpenManager={onOpenSceneManager}
+            />
+          )}
+        </div>
         <OutputGainKnob />
       </div>
     </div>

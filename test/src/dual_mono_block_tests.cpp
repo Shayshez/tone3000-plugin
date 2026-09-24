@@ -1796,3 +1796,41 @@ TEST(DualMonoBlockTest, VariableHostBlockSizesMatchFixedOutput) {
   EXPECT_LT(diffL, 1e-4f) << "left side depends on host block size";
   EXPECT_LT(diffR, 1e-4f) << "right side depends on host block size";
 }
+
+// Channels: a Dual Mono block and its side blocks are one channel group -
+// switching (from the wrapper or a side) moves all of them together, and a
+// side's settings stay per channel.
+TEST(DualMonoBlockTest, ChannelsMoveAsOneGroup) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, kBlock);
+  proc.prepareToPlay(kFs, kBlock);
+  auto ir = makeIrBlockTree("blk-ir", 1, 100);
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree left("ChainBlocks");
+  left.appendChild(ir, nullptr);
+  state.appendChild(left, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  const std::string wrapperId = proc.convertBlockToDualMono("blk-ir");
+  ASSERT_FALSE(wrapperId.empty());
+  ASSERT_TRUE(waitForDualMonoLoaded(proc));
+  auto side = [&] { return blockById(proc, juce::String(wrapperId))["dualLeft"][0]; };
+  const std::string sideId = side()["blockId"].toString().toStdString();
+
+  ASSERT_TRUE(proc.setBlockParam(sideId, "mix", 0.4));
+  ASSERT_TRUE(proc.selectBlockChannel(wrapperId, 1));
+  EXPECT_EQ(static_cast<int>(side()["params"]["channel"]), 1) << "the side follows its wrapper";
+  ASSERT_TRUE(proc.setBlockParam(sideId, "mix", 0.8));
+
+  // From the side: the whole group moves.
+  ASSERT_TRUE(proc.selectBlockChannel(sideId, 0));
+  EXPECT_EQ(static_cast<int>(blockById(proc, juce::String(wrapperId))["params"]["channel"]), 0);
+  EXPECT_FLOAT_EQ(static_cast<float>(side()["params"]["mix"]), 0.4f);
+
+  // Scenes: picking a channel for the group in another scene applies to all.
+  ASSERT_TRUE(proc.setSceneBlockChannel(2, sideId, 1));
+  ASSERT_TRUE(proc.selectScene(2));
+  EXPECT_EQ(static_cast<int>(blockById(proc, juce::String(wrapperId))["params"]["channel"]), 1);
+  EXPECT_EQ(static_cast<int>(side()["params"]["channel"]), 1);
+  EXPECT_FLOAT_EQ(static_cast<float>(side()["params"]["mix"]), 0.8f);
+}
