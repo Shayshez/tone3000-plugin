@@ -17,58 +17,98 @@
 
 namespace {
 
-// Channel-switch crossfade for IR/Cab blocks (see ChainBlock::
-// xfadeOutgoingIr), decided once per callback before the island runs.
-struct IrXfade {
-  juce::dsp::Convolution* outgoing = nullptr;  // null = no fade this callback
-  // Outgoing engine's level relative to the live normalization smoother,
-  // which already sits at the new engine's level (applied after the island).
-  float gainRatio = 1.0f;
-};
-
-IrXfade beginIrXfade(ChainBlock& block, int numChannels, bool stereoAllowed) {
-  IrXfade x;
-  WarmIrEngine& out = block.xfadeOutgoingIr;
-  if (!block.xfadeActive || out.convolverMono == nullptr ||
-      block.xfadeScratch.getNumChannels() < numChannels)
-    return x;
-  x.outgoing = stereoAllowed && out.irNumChannels > 1 && numChannels > 1 &&
-                       out.convolverStereo != nullptr
-                   ? out.convolverStereo.get()
-                   : out.convolverMono.get();
-  const float live = juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear);
-  x.gainRatio = juce::jmin(16.0f, block.xfadeOutgoingIrGain / juce::jmax(live, 1.0e-4f));
-  return x;
+// IR Player blocks (reverbs, delays, ...) spill on bypass: the convolver's
+// input closes and its tail rings out over the returning dry signal instead
+// of being faded away. Cabs and amps bypass the usual way.
+bool spillsOnBypass(const ChainBlock& block) {
+  return block.type == ChainBlockType::IR && block.irCategory == IrCategory::IrPlayer;
 }
 
-// Convolve the island's base-rate frames with the live engine and, during a
-// channel switch, with the outgoing one too, crossfading old -> new over
-// kSceneXfadeSeconds (both engines run the whole time: no gap).
-void runIrWithXfade(ChainBlock& block, const IrXfade& x, juce::dsp::Convolution& convolver,
-                    float* const* channels, int numChannels, int frames) {
-  const bool fading = x.outgoing != nullptr && block.xfadeScratch.getNumSamples() >= frames;
-  if (fading)
-    for (int ch = 0; ch < numChannels; ++ch)
-      block.xfadeScratch.copyFrom(ch, 0, channels[ch], frames);
+// Still sounding after its input closed: a channel-switch tail, or (IR
+// Player) the live engine ringing out a bypass.
+bool irRinging(const ChainBlock& block) {
+  for (const auto& tail : block.irTails)
+    if (tail.active)
+      return true;
+  return spillsOnBypass(block) && block.irLiveTailRemaining > 0;
+}
 
-  juce::dsp::AudioBlock<float> live(channels, static_cast<size_t>(numChannels),
-                                    static_cast<size_t>(frames));
-  convolver.process(juce::dsp::ProcessContextReplacing<float>(live));
-  if (!fading)
-    return;
-
-  float* const* old = block.xfadeScratch.getArrayOfWritePointers();
-  juce::dsp::AudioBlock<float> oldBlock(old, static_cast<size_t>(numChannels),
-                                        static_cast<size_t>(frames));
-  x.outgoing->process(juce::dsp::ProcessContextReplacing<float>(oldBlock));
-  for (int i = 0; i < frames; ++i) {
-    const float g = block.xfadeGain.getNextValue();
-    const float oldGain = (1.0f - g) * x.gainRatio;
+// Convolve the island's base-rate frames: the live engine behind its input
+// gain (irInputGain - ramps in after a channel switch, closes for a
+// spillover bypass), plus every ringing tail on its own closing input (see
+// ChainBlock::irTails). Tails are summed at full level, pre-scaled to the
+// live normalization - nothing is ever cut, so a switch leaves no gap and
+// no truncated reverb/delay tail. Idle cost: one flag scan.
+void runIrEngines(ChainBlock& block, juce::dsp::Convolution& live, bool stereoAllowed,
+                  float* const* channels, int numChannels, int frames) {
+  bool anyTail = false;
+  for (const auto& tail : block.irTails)
+    anyTail = anyTail || tail.active;
+  const bool haveScratch = block.irSourceScratch.getNumChannels() >= numChannels &&
+                           block.irSourceScratch.getNumSamples() >= frames &&
+                           block.irTailScratch.getNumChannels() >= numChannels &&
+                           block.irTailScratch.getNumSamples() >= frames;
+  const bool runTails = anyTail && haveScratch;
+  if (runTails)
     for (int ch = 0; ch < numChannels; ++ch)
-      channels[ch][i] = channels[ch][i] * g + old[ch][i] * oldGain;
+      block.irSourceScratch.copyFrom(ch, 0, channels[ch], frames);
+
+  auto& gain = block.irInputGain;
+  const bool ramping = gain.isSmoothing();
+  const bool closed = !ramping && gain.getCurrentValue() <= 0.0f;
+  if (closed) {
+    for (int ch = 0; ch < numChannels; ++ch)
+      juce::FloatVectorOperations::clear(channels[ch], frames);
+  } else if (ramping || gain.getCurrentValue() < 1.0f) {
+    for (int i = 0; i < frames; ++i) {
+      const float g = gain.getNextValue();
+      for (int ch = 0; ch < numChannels; ++ch)
+        channels[ch][i] *= g;
+    }
   }
-  if (!block.xfadeGain.isSmoothing())
-    block.xfadeActive = false;  // done; the message thread reclaims the engine
+  juce::dsp::AudioBlock<float> liveBlock(channels, static_cast<size_t>(numChannels),
+                                         static_cast<size_t>(frames));
+  live.process(juce::dsp::ProcessContextReplacing<float>(liveBlock));
+  block.irLiveTailRemaining =
+      closed ? juce::jmax(0, block.irLiveTailRemaining - frames) : block.irLengthBaseSamples + 4096;
+
+  if (!runTails)
+    return;
+  const float* const* source = block.irSourceScratch.getArrayOfReadPointers();
+  float* const* tailOut = block.irTailScratch.getArrayOfWritePointers();
+  for (auto& tail : block.irTails) {
+    if (!tail.active || tail.engine.convolverMono == nullptr) {
+      tail.active = false;
+      continue;
+    }
+    WarmIrEngine& engine = tail.engine;
+    auto& convolver = stereoAllowed && engine.irNumChannels > 1 && numChannels > 1 &&
+                              engine.convolverStereo != nullptr
+                          ? *engine.convolverStereo
+                          : *engine.convolverMono;
+    const bool tailClosed = !tail.inputGain.isSmoothing() && tail.inputGain.getCurrentValue() <= 0.0f;
+    if (tailClosed) {
+      for (int ch = 0; ch < numChannels; ++ch)
+        juce::FloatVectorOperations::clear(tailOut[ch], frames);
+    } else {
+      for (int i = 0; i < frames; ++i) {
+        const float g = tail.inputGain.getNextValue();
+        for (int ch = 0; ch < numChannels; ++ch)
+          tailOut[ch][i] = source[ch][i] * g;
+      }
+    }
+    juce::dsp::AudioBlock<float> tailBlock(tailOut, static_cast<size_t>(numChannels),
+                                           static_cast<size_t>(frames));
+    convolver.process(juce::dsp::ProcessContextReplacing<float>(tailBlock));
+    for (int ch = 0; ch < numChannels; ++ch)
+      juce::FloatVectorOperations::addWithMultiply(channels[ch], tailOut[ch], tail.gainRatio,
+                                                   frames);
+    if (tailClosed) {
+      tail.remaining -= frames;
+      if (tail.remaining <= 0)
+        tail.active = false;  // rang out; the message thread reclaims it
+    }
+  }
 }
 
 }  // namespace
@@ -320,6 +360,7 @@ void TONE3000Processor::applyOversamplingSettings() {
   // The chain-domain scratch grows with the factor; the RT path never
   // resizes it.
   laneDryScratch.setSize(2, juce::jmax(1, chainDomainBlockSize()), false, false, true);
+  eqXfadeScratch.setSize(2, juce::jmax(1, chainDomainBlockSize()), false, false, true);
   laneDryScratch.clear();
   for (auto* scratch : {&dualLeftBuf, &dualLeftDryScratch, &dualRightBuf, &dualRightDryScratch}) {
     scratch->setSize(1, juce::jmax(1, chainDomainBlockSize()), false, false, true);
@@ -474,14 +515,12 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
         if (warm.convolverStereo != nullptr)
           warm.convolverStereo->prepare(spec);
       }
-      if (block->xfadeOutgoingIr.convolverMono != nullptr)
-        block->xfadeOutgoingIr.convolverMono->prepare(spec);
-      if (block->xfadeOutgoingIr.convolverStereo != nullptr)
-        block->xfadeOutgoingIr.convolverStereo->prepare(spec);
-      block->xfadeScratch.setSize(2, juce::jmax(1, chainBaseBlockSize()), false, false, true);
-      block->xfadeGain.reset(kChainBaseSampleRate, kSceneXfadeSeconds);
-      block->xfadeGain.setCurrentAndTargetValue(1.0f);
-      block->xfadeActive = false;
+      for (auto& tail : block->irTails) {
+        if (tail.engine.convolverMono != nullptr)
+          tail.engine.convolverMono->prepare(spec);
+        if (tail.engine.convolverStereo != nullptr)
+          tail.engine.convolverStereo->prepare(spec);
+      }
 
       // Reset normalization smoother to current gain to prevent jumps on
       // re-prepare - irEffectiveNormalizationGainLinear, so a re-prepare
@@ -502,6 +541,8 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
     if (block->type == ChainBlockType::IR || block->type == ChainBlockType::CAB) {
       block->irBaseRateIsland.prepare(chainOversampleFactor.load(),
                                       juce::jmax(1, chainBaseBlockSize()));
+      block->prepareIrSpill(kChainBaseSampleRate, chainBaseBlockSize(),
+                            spillsOnBypass(*block) && !block->enabled);
     }
     if (block->type == ChainBlockType::IR) {
       // Always at the base rate (see BlockPredelay), and snapped to the
@@ -898,6 +939,7 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // The dry scratch lives in the chain domain, where a callback can carry
   // more frames than the host block (e.g. a 44.1k host upsampled to 48k).
   laneDryScratch.setSize(2, chainDomainBlockSize(), false, false, true);
+  eqXfadeScratch.setSize(2, juce::jmax(1, chainDomainBlockSize()), false, false, true);
   laneDryScratch.clear();
   for (auto* scratch : {&dualLeftBuf, &dualLeftDryScratch, &dualRightBuf, &dualRightDryScratch}) {
     scratch->setSize(1, chainDomainBlockSize(), false, false, true);
@@ -1221,8 +1263,8 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   // deliberately never consulted. Re-measure peak afterward so the meter
   // reflects what actually leaves the block, same as an ordinary block's
   // own meter already does post-EQ.
-  if (dualBlock.eq.isActive()) {
-    dualBlock.eq.process(buffer);
+  if (dualBlock.eq.isActive() || dualBlock.eqXfadeActive) {
+    processBlockEq(dualBlock, buffer);
     peak = 0.0f;
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
       const float* data = buffer.getReadPointer(ch);
@@ -1317,7 +1359,13 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     if (wetSilent)
       block->swapFadeDone.store(true);  // a waiting requester may splice now
 
-    if (!block->loaded || (!wantsWet && wetSilent)) {
+    // Spillover (IR Player bypass, channel-switch tails): keep processing
+    // until the tails have rung out.
+    const bool ringing = (block->type == ChainBlockType::IR ||
+                          block->type == ChainBlockType::CAB) &&
+                         irRinging(*block);
+    const bool spilling = spillsOnBypass(*block) && !block->enabled && !swapPending;
+    if (!block->loaded || (!wantsWet && wetSilent && !ringing)) {
       // Not processing: park the block's meters at the floor. The EQ view can
       // still be open, so keep its analyzer fed with the pass-through audio.
       block->inputMeterDb.store(-60.0f);
@@ -1394,8 +1442,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // EQ in the PRE position: between the block's input gain and its model,
       // shaping what drives the amp/IR. Skipped entirely when flat/bypassed
       // (or in the default post position; see the POST stage below).
-      if (block->eq.isPre() && block->eq.isActive()) {
-        block->eq.process(buffer);
+      if (block->eq.isPre() && (block->eq.isActive() || block->eqXfadeActive)) {
+        processBlockEq(*block, buffer);
         // Re-measure so the input meter still reads what the model receives.
         blockInputPeak = bufferPeak(buffer, numChannels, numSamples);
       }
@@ -1552,7 +1600,10 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         const bool useStereoIr = block->irNumChannels > 1 && numChannels > 1 && noNamAfter &&
                                  block->convolverStereo != nullptr;
         auto& convolver = useStereoIr ? *block->convolverStereo : *block->convolverMono;
-        const IrXfade xfade = beginIrXfade(*block, numChannels, noNamAfter);
+        // Live input: closes for a spillover bypass, open otherwise (after a
+        // channel switch it is already ramping in).
+        block->irInputGain.setTargetValue(
+            spillsOnBypass(*block) && !block->enabled && !swapPending ? 0.0f : 1.0f);
 
         // Convolution runs at the base rate inside the block's island: when
         // the chain is oversampled the island decimates the wet path, hands
@@ -1562,7 +1613,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // sound bit-identical to the non-oversampled chain.
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
-            [&convolver, &predelay = block->predelay, &irBlock = *block, &xfade,
+            [&convolver, &predelay = block->predelay, &irBlock = *block, noNamAfter,
              numChannels](float* const* baseChannels, int baseFrames) {
               // Predelay runs on the wet signal here, right before the
               // convolver, always at the base rate the island already
@@ -1571,7 +1622,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
               juce::AudioBuffer<float> baseBuffer(baseChannels, numChannels, baseFrames);
               predelay.process(baseBuffer);
 
-              runIrWithXfade(irBlock, xfade, convolver, baseChannels, numChannels, baseFrames);
+              runIrEngines(irBlock, convolver, noNamAfter, baseChannels, numChannels, baseFrames);
             });
 
         // Unit-energy normalization, always on: an IR file's absolute level
@@ -1606,12 +1657,13 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // zero-capacity ring buffer, the same class of bug that crashed the
       // very first version of this block.
       try {
-        const IrXfade xfade = beginIrXfade(*block, numChannels, /*stereoAllowed=*/false);
+        block->irInputGain.setTargetValue(1.0f);
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
-            [&convolver = *block->convolverMono, &irBlock = *block, &xfade,
+            [&convolver = *block->convolverMono, &irBlock = *block,
              numChannels](float* const* baseChannels, int baseFrames) {
-              runIrWithXfade(irBlock, xfade, convolver, baseChannels, numChannels, baseFrames);
+              runIrEngines(irBlock, convolver, /*stereoAllowed=*/false, baseChannels, numChannels,
+                           baseFrames);
             });
 
         // Unit-energy normalization, same rule as a plain IR block's. CAB
@@ -1635,8 +1687,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     // model, before the dry/wet mix, so the dry share of Mix passes
     // untouched. Skipped entirely when flat/bypassed (the PRE position ran
     // before the model).
-    if (!block->eq.isPre() && block->eq.isActive()) {
-      block->eq.process(buffer);
+    if (!block->eq.isPre() && (block->eq.isActive() || block->eqXfadeActive)) {
+      processBlockEq(*block, buffer);
     }
 
     // Per-block output stage: blend the wet signal with dry, then apply Out
@@ -1670,16 +1722,21 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       const float wetGain = block->swapWetMuteGain.getNextValue();
       const float outGain = block->outputGainSmoother.getNextValue();
       const float fade = block->wetFadeGain.getNextValue();
-      const float m = block->mixSmoother.getNextValue() * fade;
+      const float mix = block->mixSmoother.getNextValue();
+      const float m = mix * fade;
       const float postGain = 1.0f + (outGain - 1.0f) * fade;
+      // Spillover bypass: the dry side glides to unity pass-through exactly
+      // as usual, while the (input-closed) wet tail keeps its full level.
+      const float wetCoeff = m * postGain + (spilling ? mix * outGain * (1.0f - fade) : 0.0f);
+      const float dryCoeff = (1.0f - m) * postGain;
       float wetL = buffer.getWritePointer(0)[i] * wetGain;
       float dryL = dryScratch.getReadPointer(0)[i];
-      buffer.getWritePointer(0)[i] = (dryL * (1.0f - m) + wetL * m) * postGain;
+      buffer.getWritePointer(0)[i] = dryL * dryCoeff + wetL * wetCoeff;
       blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(0)[i]));
       if (numChannels > 1) {
         float wetR = buffer.getWritePointer(1)[i] * wetGain;
         float dryR = dryScratch.getReadPointer(1)[i];
-        buffer.getWritePointer(1)[i] = (dryR * (1.0f - m) + wetR * m) * postGain;
+        buffer.getWritePointer(1)[i] = dryR * dryCoeff + wetR * wetCoeff;
         blockOutputPeak = std::max(blockOutputPeak, std::abs(buffer.getWritePointer(1)[i]));
       }
     }
@@ -1707,6 +1764,40 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
                                   numChannels > 1 ? buffer.getReadPointer(1) : nullptr,
                                   numSamples);
   }
+}
+
+// A block's EQ, crossfading from the previous channel's EQ right after a
+// channel switch (see ChainBlock::eqOutgoing); a plain eq.process otherwise.
+void TONE3000Processor::processBlockEq(ChainBlock& block, juce::AudioBuffer<float>& buffer) {
+  const int numSamples = buffer.getNumSamples();
+  const int numChannels = buffer.getNumChannels();
+  if (!block.eqXfadeActive || eqXfadeScratch.getNumSamples() < numSamples ||
+      eqXfadeScratch.getNumChannels() < numChannels) {
+    block.eqXfadeActive = false;
+    if (block.eq.isActive())
+      block.eq.process(buffer);
+    return;
+  }
+  for (int ch = 0; ch < numChannels; ++ch)
+    eqXfadeScratch.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+  juce::AudioBuffer<float> old(eqXfadeScratch.getArrayOfWritePointers(), numChannels, numSamples);
+  if (block.eqOutgoing.isActive())
+    block.eqOutgoing.process(old);
+  if (block.eq.isActive())
+    block.eq.process(buffer);
+  for (int ch = 0; ch < numChannels; ++ch) {
+    float* out = buffer.getWritePointer(ch);
+    const float* prev = old.getReadPointer(ch);
+    auto gain = block.eqXfadeGain;  // same ramp on every channel
+    for (int i = 0; i < numSamples; ++i) {
+      const float g = gain.getNextValue();
+      out[i] = out[i] * g + prev[i] * (1.0f - g);
+    }
+    if (ch == numChannels - 1)
+      block.eqXfadeGain = gain;
+  }
+  if (!block.eqXfadeGain.isSmoothing())
+    block.eqXfadeActive = false;
 }
 
 // ##############################

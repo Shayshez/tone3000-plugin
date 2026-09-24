@@ -101,6 +101,28 @@ TEST(ScenesTest, ChannelsAreSeededThenDivergeAndScenesPickThem) {
   EXPECT_FALSE(proc.selectBlockChannel("nope", 1));
 }
 
+// One tone per block: replacing the tone moves every channel to it (each
+// keeps its own settings) - no channel can hold another tone/kind of block.
+TEST(ScenesTest, ReplacingTheToneMovesEveryChannel) {
+  ChainTestProcessor proc;
+  seedChain(proc, {"a"});
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  ASSERT_TRUE(proc.setBlockParam("a", "mix", 0.3));
+  ASSERT_TRUE(proc.selectBlockChannel("a", 1));
+  ASSERT_TRUE(proc.setBlockParam("a", "mix", 0.7));
+  ASSERT_TRUE(proc.swapTone(
+      "a",
+      "{\"id\":9,\"title\":\"Other\",\"format\":\"ir\",\"models\":[{\"id\":900,"
+      "\"name\":\"other\",\"model_url\":\"https://test.invalid/other.wav\"}]}"));
+  ASSERT_TRUE(proc.selectBlockChannel("a", 0));
+  const juce::var row = blockParams(proc, "a");
+  EXPECT_FLOAT_EQ(static_cast<float>(row["mix"]), 0.3f) << "channel A keeps its settings";
+  const juce::var state = proc.getChainState(-1);
+  EXPECT_EQ(static_cast<int>(state["chain"][0]["activeModelId"]), 900)
+      << "channel A follows the new tone";
+  EXPECT_EQ(static_cast<int>(state["chain"][0]["tone"]["id"]), 9);
+}
+
 TEST(ScenesTest, SceneLevelMovesTheOutput) {
   ChainTestProcessor proc;
   proc.setPlayConfigDetails(2, 2, kFs, 512);
@@ -365,6 +387,142 @@ TEST(ScenesTest, IrChannelSwitchIsGaplessOnceWarm) {
   checkSwitch(2, "default -> other file");  // A -> C
   const juce::var row = proc.getChainState(-1)["chain"][0];
   EXPECT_EQ(static_cast<int>(row["activeModelId"]), 101);
+}
+
+// Spillover: a reverb's tail survives a channel switch or a bypass. A noise
+// burst goes in, then silence; mid-tail the block switches channel (or is
+// bypassed). The tail that follows must keep its energy compared with an
+// untouched reference run - a crossfaded/faded engine would cut it off.
+namespace {
+struct ReverbRig {
+  ChainTestProcessor proc;
+  explicit ReverbRig(bool twoChannels) {
+    proc.setPlayConfigDetails(2, 2, kFs, 512);
+    proc.prepareToPlay(kFs, 512);
+    juce::ValueTree block = makeIrBlockTree("verb", 1, 100, "reverb-ir-6s-test.wav", "irPlayer");
+    juce::ValueTree state("ChainSnapshot");
+    juce::ValueTree lane("ChainBlocks");
+    lane.appendChild(block, nullptr);
+    state.appendChild(lane, nullptr);
+    proc.restoreFromTree(state);
+    EXPECT_TRUE(waitForChainLoaded(proc));
+    if (twoChannels) {
+      // Channel B: same file, darker/shorter shape; back on A, wait for B warm.
+      EXPECT_TRUE(proc.selectBlockChannel("verb", 1));
+      EXPECT_TRUE(proc.setBlockIrDecay("verb", 1.0, 0.0, 0.5, 0.6, 0.5, 0.5));
+      juce::Thread::sleep(400);
+      EXPECT_TRUE(proc.selectBlockChannel("verb", 0));
+      const auto until = juce::Time::getMillisecondCounter() + 10000;
+      while (!proc.isChannelWarm("verb", 1) && juce::Time::getMillisecondCounter() < until)
+        juce::Thread::sleep(20);
+      EXPECT_TRUE(proc.isChannelWarm("verb", 1));
+    }
+    processStereo(proc, std::vector<float>(40 * 512, 0.0f));  // settle
+  }
+};
+
+double energy(const std::vector<float>& v, size_t start, size_t len) {
+  double sum = 0.0;
+  for (size_t i = start; i < std::min(v.size(), start + len); ++i)
+    sum += static_cast<double>(v[i]) * v[i];
+  return sum;
+}
+
+std::vector<float> burst() {
+  auto v = makeNoise(24 * 512, 7, 0.3f);  // ~0.25 s of noise
+  return v;
+}
+}  // namespace
+
+TEST(ScenesTest, ReverbTailSurvivesAChannelSwitch) {
+  ReverbRig ref(true), test(true);
+  const auto in = burst();
+  const std::vector<float> silence(96 * 512, 0.0f);  // ~1 s
+  processStereo(ref.proc, in);
+  processStereo(test.proc, in);
+  ASSERT_TRUE(test.proc.selectBlockChannel("verb", 1));  // switch at the start of the tail
+  const auto refTail = processStereo(ref.proc, silence).first;
+  const auto testTail = processStereo(test.proc, silence).first;
+  const size_t from = 4800, len = 19200;  // 100-500 ms into the tail
+  const double r = energy(refTail, from, len), t = energy(testTail, from, len);
+  std::printf("[ScenesTest] tail energy after switch: %.4f of reference\n", t / r);
+  EXPECT_GT(t, 0.7 * r) << "the switch cut the reverb tail";
+}
+
+TEST(ScenesTest, ReverbTailSurvivesAChannelSwitchWithOddHostBlocks) {
+  ReverbRig ref(true), test(true);
+  const auto in = burst();
+  const std::vector<float> silence(96 * 512, 0.0f);
+  processStereo(ref.proc, in, 300);
+  processStereo(test.proc, in, 300);
+  ASSERT_TRUE(test.proc.selectBlockChannel("verb", 1));
+  const auto refTail = processStereo(ref.proc, silence, 300).first;
+  const auto testTail = processStereo(test.proc, silence, 300).first;
+  const double r = energy(refTail, 4800, 19200), t = energy(testTail, 4800, 19200);
+  EXPECT_GT(t, 0.7 * r) << "odd host blocks: the switch cut the reverb tail";
+  EXPECT_LT(t, 1.3 * r);
+}
+
+TEST(ScenesTest, ReverbTailSurvivesABypass) {
+  ReverbRig ref(false), test(false);
+  const auto in = burst();
+  const std::vector<float> silence(96 * 512, 0.0f);
+  processStereo(ref.proc, in);
+  processStereo(test.proc, in);
+  ASSERT_TRUE(test.proc.setBlockParam("verb", "enabled", 0.0));  // bypass mid-tail
+  const auto refTail = processStereo(ref.proc, silence).first;
+  const auto testTail = processStereo(test.proc, silence).first;
+  const size_t from = 4800, len = 19200;
+  const double r = energy(refTail, from, len), t = energy(testTail, from, len);
+  std::printf("[ScenesTest] tail energy after bypass: %.4f of reference\n", t / r);
+  EXPECT_GT(t, 0.7 * r) << "bypass cut the reverb tail";
+
+  // New input no longer reaches the reverb while bypassed: dry only.
+  processStereo(test.proc, std::vector<float>(10 * 48000, 0.0f));  // let the tail finish
+  const auto sine = makeSine(40 * 512, 440.0, 0.25f);
+  const auto out = processStereo(test.proc, sine).first;
+  const double inE = energy(sine, 20 * 512, 20 * 512), outE = energy(out, 20 * 512, 20 * 512);
+  EXPECT_NEAR(outE / inE, 1.0, 0.05) << "a bypassed block passes dry at unity";
+}
+
+// A channel switch crossfades the block EQ instead of stepping it: right
+// after switching from a flat channel to one with a big bell boost, the
+// output still sits near the old level and glides up over the fade.
+TEST(ScenesTest, ChannelSwitchCrossfadesTheEq) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, 512);
+  proc.prepareToPlay(kFs, 512);
+  seedChain(proc, {"a"});
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  ASSERT_TRUE(proc.selectBlockChannel("a", 1));
+  auto* band = new juce::DynamicObject();
+  band->setProperty("freqHz", 1000.0);
+  band->setProperty("gainDb", 18.0);
+  band->setProperty("q", 1.0);
+  band->setProperty("poles", 4);
+  band->setProperty("on", true);
+  ASSERT_TRUE(proc.setBlockEqBand("a", 2, juce::var(band)));
+  ASSERT_TRUE(proc.setBlockEqEnabled("a", true));
+  ASSERT_TRUE(proc.selectBlockChannel("a", 0));
+
+  const auto sine = makeSine(80 * 512, 1000.0, 0.05f);
+  const std::vector<float> first(sine.begin(), sine.begin() + 40 * 512);
+  const std::vector<float> second(sine.begin() + 40 * 512, sine.end());
+  const auto before = processStereo(proc, first).first;
+  ASSERT_TRUE(proc.selectBlockChannel("a", 1));
+  const auto after = processStereo(proc, second).first;
+  auto rms = [](const std::vector<float>& v, size_t start, size_t len) {
+    double sum = 0.0;
+    for (size_t i = start; i < start + len; ++i) sum += static_cast<double>(v[i]) * v[i];
+    return std::sqrt(sum / static_cast<double>(len));
+  };
+  const double levelA = rms(before, before.size() - 4800, 4800);
+  const double levelB = rms(after, after.size() - 4800, 4800);
+  const double justAfter = rms(after, 0, 96);  // first 2 ms of a 30 ms fade
+  std::printf("[ScenesTest] EQ switch: A %.4f, first 2 ms %.4f, B %.4f\n", levelA, justAfter,
+              levelB);
+  ASSERT_GT(levelB, 4.0 * levelA) << "fixture: channel B should be much louder at 1 kHz";
+  EXPECT_LT(justAfter, levelA + 0.25 * (levelB - levelA)) << "the EQ stepped instead of fading";
 }
 
 TEST(ScenesTest, HostSceneParameterFollowsAndDrivesTheActiveScene) {

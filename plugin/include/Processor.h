@@ -1214,7 +1214,7 @@ private:
   juce::ValueTree defaultChannel(const ChainBlock& block) const;
   // Apply a channel tree to the live block (keeps bypass and NAM size);
   // model changes crossfade from a warm engine when possible.
-  void applyChannel(ChainBlock& block, const juce::ValueTree& channel);
+  void applyChannel(ChainBlock& block, const juce::ValueTree& stored);
   // Switch without a history entry (scene switches); caller holds the lock.
   // A Dual Mono block and its side blocks are one channel group: switching
   // the wrapper switches its sides to the same channel.
@@ -1245,10 +1245,13 @@ private:
   // warm engine swap already installed the model's engine).
   void adoptSwappedModel(ChainBlock& block, int modelId, const juce::var& modelData);
   bool swapToWarmIrEngine(ChainBlock& block, const juce::String& key,
-                          const juce::String& outgoingKey);
+                          const juce::String& outgoingKey, float tailLevel = 1.0f);
   void prewarmIrInBackground(const std::string& blockId, const juce::String& key,
                              juce::ValueTree channel);
   void refreshWarmIrEngines(ChainBlock& block);
+  // Destroy an engine (or anything heavy) on the loader pool instead of
+  // under chainMutex, which the audio thread waits on.
+  void retireInBackground(std::shared_ptr<void> doomed);
 public:
   // Whether switching to `modelId` on this block will be gapless right now
   // (its warm engine is ready) - the UI can show a "preparing" state.
@@ -1489,6 +1492,9 @@ private:
   // chainDomainBlockSize). Stays 2-channel because the chain runs a
   // (possibly stereo) buffer through in one pass.
   juce::AudioBuffer<float> laneDryScratch;
+  // Shared by processBlockEq's channel-switch crossfade (one block at a time).
+  juce::AudioBuffer<float> eqXfadeScratch;
+  void processBlockEq(ChainBlock& block, juce::AudioBuffer<float>& buffer);
 
   // Scratch for a Dual Mono block's recombine (see runDualMono,
   // Processor.cpp): one buffer is enough even with multiple Dual Mono

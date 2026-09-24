@@ -209,6 +209,18 @@ struct WarmIrEngine {
   std::vector<std::pair<float, float>> irWaveformPeaks;
 };
 
+// An IR engine ringing out after it stopped being the live one (spillover,
+// see ChainBlock::irTails): its input fades closed, its output keeps playing
+// until the whole kernel has decayed.
+struct IrTail {
+  WarmIrEngine engine;
+  juce::String key;       // kernel signature, to reuse it for a switch back
+  float gainRatio = 1.0f;  // its normalization relative to the live engine's
+  juce::LinearSmoothedValue<float> inputGain{1.0f};  // base rate, -> 0
+  int remaining = 0;  // base-rate samples still ringing once the input closed
+  bool active = false;  // audio thread clears it; message thread reclaims
+};
+
 struct ChainBlock {
   std::string id;  // Chain block UUID
   ChainBlockType type;
@@ -351,9 +363,38 @@ struct ChainBlock {
   // xfadeScratch at the base rate, inside the IR island) to the new one.
   std::map<juce::String, WarmIrEngine> warmIrEngines;
   std::set<juce::String> warmIrPending;
-  WarmIrEngine xfadeOutgoingIr;
-  juce::String xfadeOutgoingIrKey;
-  float xfadeOutgoingIrGain = 1.0f;  // outgoing engine's clamped normalization
+
+  // Spillover (see runIrEngines in Processor.cpp). A switch never cuts a
+  // tail: the live engine's INPUT is what fades (irInputGain), and the
+  // outgoing engine keeps ringing in irTails until its kernel has decayed.
+  // IR Player blocks also spill on bypass: the input closes and the tail
+  // rings out over the returning dry signal (irLiveTailRemaining tracks it).
+  // All base rate, inside the block's convolution island; scratch sized in
+  // prepareChain. Audio thread owns the smoothers/counters while running;
+  // the message thread edits them under chainMutex only.
+  juce::LinearSmoothedValue<float> irInputGain{1.0f};
+  int irLiveTailRemaining = 0;
+  std::array<IrTail, 4> irTails;
+  // EQ crossfade on a channel switch (see processBlockEq): the previous
+  // channel's EQ (a plain-value copy, filter state included) keeps running
+  // for kSceneXfadeSeconds while the new one fades in, instead of stepping
+  // the coefficients (a click on large gain changes / power toggles).
+  BlockEq eqOutgoing;
+  bool eqXfadeActive = false;
+  juce::LinearSmoothedValue<float> eqXfadeGain{1.0f};
+  juce::AudioBuffer<float> irSourceScratch;  // the island input, pre-gain
+  juce::AudioBuffer<float> irTailScratch;
+  // (Re)size the spillover scratch and set the ramps' rate (base rate);
+  // `inputClosed` = a bypassed IR Player block (its input starts closed).
+  // Message thread, with the audio thread not inside this block.
+  void prepareIrSpill(double baseSampleRate, int baseBlockSize, bool inputClosed) {
+    irSourceScratch.setSize(2, juce::jmax(1, baseBlockSize), false, false, true);
+    irTailScratch.setSize(2, juce::jmax(1, baseBlockSize), false, false, true);
+    irInputGain.reset(baseSampleRate, kSceneXfadeSeconds);
+    irInputGain.setCurrentAndTargetValue(inputClosed ? 0.0f : 1.0f);
+    for (auto& tail : irTails)
+      tail.inputGain.reset(baseSampleRate, kSceneXfadeSeconds);
+  }
 
   // IR-specific processing.
   // convolverMono: IR channel 0 loaded with Stereo::no; applies the same (left) kernel to

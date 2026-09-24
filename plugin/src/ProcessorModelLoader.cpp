@@ -1868,6 +1868,10 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     // small work buffers), and the swap-fade already has the wet path silent.
     block.irBaseRateIsland.prepare(chainOversampleFactor.load(),
                                    juce::jmax(1, chainBaseBlockSize()));
+    // Spillover ramps/scratch (see ChainBlock::irTails), same reasoning.
+    block.prepareIrSpill(kChainBaseSampleRate, chainBaseBlockSize(),
+                         block.type == ChainBlockType::IR &&
+                             block.irCategory == IrCategory::IrPlayer && !block.enabled);
     // Same "never seen by prepareChain" reasoning applies to the predelay
     // ring buffer: it must be sized here too, or a block loaded mid-session
     // processes with an unprepared (zero-capacity) buffer.
@@ -1939,6 +1943,10 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
     // branch above.
     block.irBaseRateIsland.prepare(chainOversampleFactor.load(),
                                    juce::jmax(1, chainBaseBlockSize()));
+    // Spillover ramps/scratch (see ChainBlock::irTails), same reasoning.
+    block.prepareIrSpill(kChainBaseSampleRate, chainBaseBlockSize(),
+                         block.type == ChainBlockType::IR &&
+                             block.irCategory == IrCategory::IrPlayer && !block.enabled);
 
     // Cab content always replaces the signal (fully wet) - no category
     // branch needed, a CAB block only ever has one answer. Swaps/model

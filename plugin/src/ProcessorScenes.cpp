@@ -87,12 +87,30 @@ void TONE3000Processor::forEachSceneBlock(Lane& lane, const std::function<void(C
   }
 }
 
+void TONE3000Processor::retireInBackground(std::shared_ptr<void> doomed) {
+  // Engine teardown (convolution partitions, NAM graphs, raw IR buffers) is
+  // far too heavy for the chain lock the audio thread waits on: hand the
+  // last reference to a pool job and let it die there.
+  struct RetireJob : public juce::ThreadPoolJob {
+    std::shared_ptr<void> doomed;
+    explicit RetireJob(std::shared_ptr<void> d) : ThreadPoolJob("Retire Engine"), doomed(std::move(d)) {}
+    JobStatus runJob() override {
+      doomed.reset();
+      return jobHasFinished;
+    }
+  };
+  if (doomed != nullptr)
+    loadingThreadPool.addJob(new RetireJob(std::move(doomed)), true);
+}
+
 // ---------------------------------------------------------------------------
 // Channels
 
 juce::ValueTree TONE3000Processor::captureChannel(const ChainBlock& block) const {
   juce::ValueTree channel = serializeBlockSettings(block).createCopy();
-  for (const char* prop : {"id", "type", "enabled", "slimSize", "channel"})
+  // One tone per block (the block's own toneJson): a channel records only
+  // which tone its model belongs to, plus the model itself.
+  for (const char* prop : {"id", "type", "enabled", "slimSize", "channel", "toneJson"})
     channel.removeProperty(prop, nullptr);
   channel.removeChild(channel.getChildWithName("Channels"), nullptr);
   if (blockHasModel(block)) {
@@ -111,7 +129,7 @@ juce::ValueTree TONE3000Processor::defaultChannel(const ChainBlock& block) const
   // Kept from the live block: identity, content, bypass (scene) and NAM size.
   static const juce::Identifier kept[] = {"id",       "type",          "enabled",
                                           "slimSize", "irCategory",    "toneId",
-                                          "toneJson", "activeModelId", "channel"};
+                                          "activeModelId", "channel"};
   for (int i = 0; i < defaults.getNumProperties(); ++i) {
     const juce::Identifier name = defaults.getPropertyName(i);
     if (std::find(std::begin(kept), std::end(kept), name) == std::end(kept))
@@ -128,9 +146,20 @@ juce::ValueTree TONE3000Processor::defaultChannel(const ChainBlock& block) const
   return channel;
 }
 
-void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& channel) {
-  if (!channel.isValid())
+void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& stored) {
+  if (!stored.isValid())
     return;
+  // One tone per block: a channel picks a model of the block's tone. A slot
+  // recorded under another tone (a session saved before this rule) keeps
+  // the block's current model and only brings its settings.
+  juce::ValueTree channel = stored;
+  if (blockHasModel(block) &&
+      static_cast<int>(stored.getProperty("toneId", block.toneId)) != block.toneId) {
+    channel = stored.createCopy();
+    channel.setProperty("toneId", block.toneId, nullptr);
+    channel.setProperty("activeModelId", block.activeModelId, nullptr);
+    channel.removeProperty("channelModel", nullptr);
+  }
   // IR kernel params before, to know whether a rebuild is needed.
   const juce::ValueTree before = serializeBlockSettings(block);
 
@@ -139,16 +168,23 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& c
   juce::ValueTree merged = channel.createCopy();
   merged.setProperty("enabled", block.enabled, nullptr);
   merged.setProperty("slimSize", block.namSlimSize, nullptr);
+  const BlockEq previousEq = block.eq;  // plain values, filter state included
   applyBlockSettings(block, merged);
-  block.predelay.setDelayMs(block.predelayNormalized * BlockPredelay::kMaxDelayMs);
-
-  // A channel may hold a different tone (capture) than the others.
-  const juce::String toneJson = channel.getProperty("toneJson").toString();
-  if (blockHasModel(block) && toneJson.isNotEmpty() && toneJson != block.toneJson) {
-    const juce::var toneVar = juce::JSON::parse(toneJson);
-    if (toneVar.isObject())
-      setToneOnBlock(block, static_cast<int>(channel.getProperty("toneId", 0)), toneJson, toneVar);
+  // EQ: crossfade from the previous channel's (still running, same
+  // position) instead of stepping the filters.
+  {
+    const juce::ValueTree eqNow = block.eq.toValueTree();
+    const juce::ValueTree eqBefore = before.getChildWithName(eqNow.getType());
+    if (!eqBefore.isEquivalentTo(eqNow) && previousEq.isPre() == block.eq.isPre() &&
+        (previousEq.isActive() || block.eq.isActive())) {
+      block.eqOutgoing = previousEq;
+      block.eqXfadeGain.reset(chainSampleRate(), kSceneXfadeSeconds);
+      block.eqXfadeGain.setCurrentAndTargetValue(0.0f);
+      block.eqXfadeGain.setTargetValue(1.0f);
+      block.eqXfadeActive = true;
+    }
   }
+  block.predelay.setDelayMs(block.predelayNormalized * BlockPredelay::kMaxDelayMs);
 
   const int modelId = static_cast<int>(channel.getProperty("activeModelId", 0));
   const bool modelChanges = blockHasModel(block) && modelId != 0 && modelId != block.activeModelId;
@@ -157,8 +193,13 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& c
   // the switch a crossfade instead of a load / rebuild.
   if (isIrType(block) && block.toneVar.isObject()) {
     const juce::String key = irChannelKey(channel, block.type);
+    // The tail keeps the wet level it had: it plays through the block's new
+    // Mix, so pre-scale it by old / new.
+    const float oldMix = static_cast<float>(before.getProperty("mix", 1.0f));
+    const float tailLevel =
+        juce::jmin(16.0f, oldMix / juce::jmax(0.05f, block.mixNormalized));
     if (key != irChannelKey(before, block.type) &&
-        swapToWarmIrEngine(block, key, irChannelKey(before, block.type))) {
+        swapToWarmIrEngine(block, key, irChannelKey(before, block.type), tailLevel)) {
       if (modelChanges)
         adoptSwappedModel(block, modelId,
                           juce::JSON::parse(channel.getProperty("channelModel").toString()));
@@ -498,21 +539,9 @@ void TONE3000Processor::adoptSwappedModel(ChainBlock& block, int modelId,
   block.loadFailed = false;
 }
 
-bool TONE3000Processor::swapToWarmIrEngine(ChainBlock& block, const juce::String& key,
-                                           const juce::String& outgoingKey) {
-  auto it = block.warmIrEngines.find(key);
-  if (it == block.warmIrEngines.end() || it->second.convolverMono == nullptr ||
-      block.convolverMono == nullptr || !block.loaded)
-    return false;
-  WarmIrEngine incoming = std::move(it->second);
-  block.warmIrEngines.erase(it);
-
-  // A crossfade still running hands its outgoing engine back to the pool.
-  if (block.xfadeOutgoingIr.convolverMono != nullptr)
-    block.warmIrEngines[block.xfadeOutgoingIrKey] = std::move(block.xfadeOutgoingIr);
-
-  // Live engine -> outgoing (keeps its tail: it plays on while fading out).
-  WarmIrEngine& out = block.xfadeOutgoingIr;
+namespace {
+// Move a block's live IR engine state out into `out` (or back in, see below).
+void takeLiveIr(ChainBlock& block, WarmIrEngine& out) {
   out = WarmIrEngine();
   out.convolverMono = std::move(block.convolverMono);
   out.convolverStereo = std::move(block.convolverStereo);
@@ -527,41 +556,95 @@ bool TONE3000Processor::swapToWarmIrEngine(ChainBlock& block, const juce::String
   out.irOnsetSamples = block.irOnsetSamples;
   out.irOnsetSamplesRelaxed = block.irOnsetSamplesRelaxed;
   std::swap(out.irWaveformPeaks, block.irWaveformPeaks);
-  block.xfadeOutgoingIrKey = outgoingKey;
-  block.xfadeOutgoingIrGain = juce::jlimit(0.0f, 1.0f, out.irEffectiveNormalizationGainLinear);
+}
 
-  // Incoming -> live, from a clean state (no leftovers from its last run).
-  incoming.convolverMono->reset();
-  if (incoming.convolverStereo != nullptr)
-    incoming.convolverStereo->reset();
-  block.convolverMono = std::move(incoming.convolverMono);
-  block.convolverStereo = std::move(incoming.convolverStereo);
-  block.irNumChannels = incoming.irNumChannels;
-  block.irLengthBaseSamples = incoming.irLengthBaseSamples;
-  block.irIsLong = incoming.irIsLong;
-  block.irNormalizationGainLinear = incoming.irNormalizationGainLinear;
-  block.irEffectiveNormalizationGainLinear = incoming.irEffectiveNormalizationGainLinear;
-  std::swap(block.irRawSamples, incoming.irRawSamples);
-  block.irRawSampleRate = incoming.irRawSampleRate;
-  block.irContentLengthSamples = incoming.irContentLengthSamples;
-  block.irOnsetSamples = incoming.irOnsetSamples;
-  block.irOnsetSamplesRelaxed = incoming.irOnsetSamplesRelaxed;
-  std::swap(block.irWaveformPeaks, incoming.irWaveformPeaks);
-  // Each engine carries its own level through the fade (see the IR branch
-  // in processBlock), so the shared smoother lands on the new one at once.
-  block.irNormalizationSmoother.setCurrentAndTargetValue(
-      juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear));
+void installLiveIr(ChainBlock& block, WarmIrEngine& in) {
+  block.convolverMono = std::move(in.convolverMono);
+  block.convolverStereo = std::move(in.convolverStereo);
+  block.irNumChannels = in.irNumChannels;
+  block.irLengthBaseSamples = in.irLengthBaseSamples;
+  block.irIsLong = in.irIsLong;
+  block.irNormalizationGainLinear = in.irNormalizationGainLinear;
+  block.irEffectiveNormalizationGainLinear = in.irEffectiveNormalizationGainLinear;
+  std::swap(block.irRawSamples, in.irRawSamples);
+  block.irRawSampleRate = in.irRawSampleRate;
+  block.irContentLengthSamples = in.irContentLengthSamples;
+  block.irOnsetSamples = in.irOnsetSamples;
+  block.irOnsetSamplesRelaxed = in.irOnsetSamplesRelaxed;
+  std::swap(block.irWaveformPeaks, in.irWaveformPeaks);
+}
+
+// Samples a kernel keeps ringing after its input closes, plus headroom for
+// the convolution engines' partitioning.
+int irTailSamples(const WarmIrEngine& engine) {
+  return engine.irLengthBaseSamples + 4096;
+}
+}  // namespace
+
+bool TONE3000Processor::swapToWarmIrEngine(ChainBlock& block, const juce::String& key,
+                                           const juce::String& outgoingKey, float tailLevel) {
+  if (block.convolverMono == nullptr || !block.loaded)
+    return false;
+
+  // Incoming: a tail still ringing with this very kernel (switching back
+  // mid-tail: it resumes with its tail intact), else the warm pool.
+  WarmIrEngine incoming;
+  float incomingInputGain = 0.0f;
+  bool found = false;
+  for (auto& tail : block.irTails)
+    if (!found && tail.engine.convolverMono != nullptr && tail.key == key) {
+      incoming = std::move(tail.engine);
+      incomingInputGain = tail.active ? tail.inputGain.getCurrentValue() : 0.0f;
+      tail = IrTail();
+      found = true;
+    }
+  if (!found) {
+    auto it = block.warmIrEngines.find(key);
+    if (it == block.warmIrEngines.end() || it->second.convolverMono == nullptr)
+      return false;
+    incoming = std::move(it->second);
+    block.warmIrEngines.erase(it);
+  }
+
+  // Outgoing: the live engine becomes a tail (a free slot; with every slot
+  // ringing, the quietest - least remaining - gives way).
+  IrTail* slot = nullptr;
+  for (auto& tail : block.irTails)
+    if (slot == nullptr && tail.engine.convolverMono == nullptr)
+      slot = &tail;
+  if (slot == nullptr) {
+    slot = &block.irTails[0];
+    for (auto& tail : block.irTails)
+      if (tail.remaining < slot->remaining)
+        slot = &tail;
+    retireInBackground(std::make_shared<WarmIrEngine>(std::move(slot->engine)));
+    *slot = IrTail();
+  }
+  const float outgoingInputGain = block.irInputGain.getCurrentValue();
+  takeLiveIr(block, slot->engine);
+  installLiveIr(block, incoming);
+
+  const float liveGain = juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear);
+  slot->key = outgoingKey;
+  slot->gainRatio = juce::jmin(
+      16.0f, tailLevel * juce::jlimit(0.0f, 1.0f, slot->engine.irEffectiveNormalizationGainLinear) /
+                 juce::jmax(liveGain, 1.0e-4f));
+  slot->inputGain.reset(kChainBaseSampleRate, kSceneXfadeSeconds);
+  slot->inputGain.setCurrentAndTargetValue(outgoingInputGain);
+  slot->inputGain.setTargetValue(0.0f);
+  slot->remaining = irTailSamples(slot->engine);
+  slot->active = true;
+
+  // Each engine carries its own level (tails are pre-scaled by gainRatio),
+  // so the shared normalization smoother lands on the new one at once.
+  block.irNormalizationSmoother.setCurrentAndTargetValue(liveGain);
+  // The live input ramps in from where it was (0 for a fresh engine); the
+  // audio thread keeps it closed while an IR Player block is bypassed.
+  block.irInputGain.setCurrentAndTargetValue(incomingInputGain);
+  block.irInputGain.setTargetValue(1.0f);
+  block.irLiveTailRemaining = block.irLengthBaseSamples + 4096;
   // Any shape rebuild still in flight belongs to the channel just left.
   ++block.irShapingGeneration;
-
-  // The fade runs at the base rate, inside the block's convolution island.
-  const int baseBlock = juce::jmax(1, chainBaseBlockSize());
-  if (block.xfadeScratch.getNumSamples() < baseBlock || block.xfadeScratch.getNumChannels() < 2)
-    block.xfadeScratch.setSize(2, baseBlock, false, false, true);
-  block.xfadeGain.reset(kChainBaseSampleRate, kSceneXfadeSeconds);
-  block.xfadeGain.setCurrentAndTargetValue(0.0f);
-  block.xfadeGain.setTargetValue(1.0f);
-  block.xfadeActive = true;
   return true;
 }
 
@@ -591,8 +674,9 @@ void TONE3000Processor::refreshWarmEngines() {
     std::map<int, juce::var> needed;  // model id -> catalog object
     for (int c = 0; c < kNumBlockChannels; ++c) {
       const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
-      if (c == b.activeChannel || !slot.isValid())
-        continue;
+      if (c == b.activeChannel || !slot.isValid() ||
+          static_cast<int>(slot.getProperty("toneId", b.toneId)) != b.toneId)
+        continue;  // unused, live, or another tone's (see applyChannel)
       const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
       if (modelId != 0 && modelId != b.activeModelId)
         needed.emplace(modelId, juce::JSON::parse(slot.getProperty("channelModel").toString()));
@@ -604,16 +688,18 @@ void TONE3000Processor::refreshWarmEngines() {
           b.warmNamEngines.count(b.xfadeOutgoingModelId) == 0)
         b.warmNamEngines[b.xfadeOutgoingModelId] = std::move(b.xfadeOutgoingNam);
       else
-        b.xfadeOutgoingNam.reset();
+        retireInBackground(std::shared_ptr<NamEngine>(std::move(b.xfadeOutgoingNam)));
     }
 
     for (auto it = b.warmNamEngines.begin(); it != b.warmNamEngines.end();) {
       const bool stale = it->second == nullptr ||
                          it->second->getOversampleFactor() != chainOversampleFactor.load();
-      if (needed.count(it->first) == 0 || stale)
+      if (needed.count(it->first) == 0 || stale) {
+        retireInBackground(std::shared_ptr<NamEngine>(std::move(it->second)));
         it = b.warmNamEngines.erase(it);
-      else
+      } else {
         ++it;
+      }
     }
 
     for (const auto& [modelId, modelData] : needed) {
@@ -662,6 +748,11 @@ void TONE3000Processor::prewarmModelInBackground(const std::string& blockId, int
     prepared = prepareBlockModelOffThread(ChainBlockType::NAM, bytes,
                                           modelData["name"].toString() + ".nam", slimSize,
                                           std::nullopt);
+  // Size drift re-prepare out here, not under the lock (the audio thread
+  // waits on it); prepareChain covers any drift after this point.
+  if (prepared.success && prepared.namEngine != nullptr &&
+      prepared.preparedBlockSize < chainDomainBlockSize())
+    prepared.namEngine->prepare(chainDomainBlockSize());
 
   juce::ScopedLock lock(chainMutex);
   ChainBlock* block = findBlockById(blockId);
@@ -676,11 +767,11 @@ void TONE3000Processor::prewarmModelInBackground(const std::string& blockId, int
     return;
   }
   if (!sceneReferencesModel(blockId, modelId) || modelId == block->activeModelId ||
-      prepared.namEngine->getOversampleFactor() != chainOversampleFactor.load())
-    return;  // no longer needed (or stale); dropped with `prepared`
-  if (prepared.preparedBlockSize < chainDomainBlockSize())
-    prepared.namEngine->prepare(chainDomainBlockSize());
-  block->warmNamEngines[modelId] = std::move(prepared.namEngine);
+      prepared.namEngine->getOversampleFactor() != chainOversampleFactor.load()) {
+    retireInBackground(std::shared_ptr<NamEngine>(std::move(prepared.namEngine)));
+    return;  // no longer needed (or stale)
+  }
+  std::swap(block->warmNamEngines[modelId], prepared.namEngine);  // any old one leaves below
 }
 
 void TONE3000Processor::refreshWarmIrEngines(ChainBlock& b) {
@@ -689,27 +780,39 @@ void TONE3000Processor::refreshWarmIrEngines(ChainBlock& b) {
   std::map<juce::String, juce::ValueTree> needed;  // key -> channel tree
   for (int c = 0; c < kNumBlockChannels; ++c) {
     const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
-    if (c == b.activeChannel || !slot.isValid())
+    if (c == b.activeChannel || !slot.isValid() ||
+        static_cast<int>(slot.getProperty("toneId", b.toneId)) != b.toneId)
       continue;
     const juce::String key = irChannelKey(slot, b.type);
     if (key != liveKey && static_cast<int>(slot.getProperty("activeModelId", 0)) != 0)
       needed.emplace(key, slot);
   }
 
-  // A finished crossfade's engine goes back to the pool if still needed.
-  if (!b.xfadeActive && b.xfadeOutgoingIr.convolverMono != nullptr) {
-    if (needed.count(b.xfadeOutgoingIrKey) > 0 &&
-        b.warmIrEngines.count(b.xfadeOutgoingIrKey) == 0)
-      b.warmIrEngines[b.xfadeOutgoingIrKey] = std::move(b.xfadeOutgoingIr);
-    b.xfadeOutgoingIr = WarmIrEngine();
+  // Tails that rang out go back to the pool if still needed.
+  for (auto& tail : b.irTails) {
+    if (tail.active || tail.engine.convolverMono == nullptr)
+      continue;
+    if (needed.count(tail.key) > 0 && b.warmIrEngines.count(tail.key) == 0)
+      b.warmIrEngines[tail.key] = std::move(tail.engine);
+    else
+      retireInBackground(std::make_shared<WarmIrEngine>(std::move(tail.engine)));
+    tail = IrTail();
   }
 
-  for (auto it = b.warmIrEngines.begin(); it != b.warmIrEngines.end();)
-    it = needed.count(it->first) == 0 ? b.warmIrEngines.erase(it) : std::next(it);
+  for (auto it = b.warmIrEngines.begin(); it != b.warmIrEngines.end();) {
+    if (needed.count(it->first) > 0) {
+      ++it;
+      continue;
+    }
+    retireInBackground(std::make_shared<WarmIrEngine>(std::move(it->second)));
+    it = b.warmIrEngines.erase(it);
+  }
 
   for (const auto& [key, slot] : needed) {
-    const bool inFade = b.xfadeOutgoingIr.convolverMono != nullptr && b.xfadeOutgoingIrKey == key;
-    if (b.warmIrEngines.count(key) > 0 || b.warmIrPending.count(key) > 0 || inFade)
+    bool ringing = false;  // a tail with this kernel serves a switch back
+    for (const auto& tail : b.irTails)
+      ringing = ringing || (tail.engine.convolverMono != nullptr && tail.key == key);
+    if (b.warmIrEngines.count(key) > 0 || b.warmIrPending.count(key) > 0 || ringing)
       continue;
     b.warmIrPending.insert(key);
     struct PrewarmIrJob : public juce::ThreadPoolJob {
@@ -843,13 +946,9 @@ void TONE3000Processor::prewarmIrInBackground(const std::string& blockId,
       dropped = std::move(warm);
       return;
     }
-    // The base block size may have moved while this was building.
-    const juce::dsp::ProcessSpec spec{kChainBaseSampleRate,
-                                      static_cast<juce::uint32>(juce::jmax(1, chainBaseBlockSize())),
-                                      2};
-    warm.convolverMono->prepare(spec);  // keeps the loaded impulse
-    if (warm.convolverStereo != nullptr)
-      warm.convolverStereo->prepare(spec);
+    // Built for the current base block size; a later size change re-prepares
+    // the pool in prepareChain. Nothing heavy under the lock: the audio
+    // thread waits on it.
     std::swap(dropped, block->warmIrEngines[key]);
     block->warmIrEngines[key] = std::move(warm);
   }
@@ -865,9 +964,11 @@ bool TONE3000Processor::isChannelWarm(const std::string& blockId, int channel) {
     return true;
   if (isIrType(*block)) {
     const juce::String key = irChannelKey(slot, block->type);
+    bool ringing = false;
+    for (const auto& tail : block->irTails)
+      ringing = ringing || (tail.engine.convolverMono != nullptr && tail.key == key);
     return key == irChannelKey(serializeBlockSettings(*block), block->type) ||
-           block->warmIrEngines.count(key) > 0 ||
-           (block->xfadeOutgoingIr.convolverMono != nullptr && block->xfadeOutgoingIrKey == key);
+           block->warmIrEngines.count(key) > 0 || ringing;
   }
   const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
   return modelId == block->activeModelId || block->warmNamEngines.count(modelId) > 0 ||

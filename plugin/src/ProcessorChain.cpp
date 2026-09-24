@@ -943,19 +943,35 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
   // processing until the new model is spliced in by
   // applyPreparedModelToChainBlock (which also stamps the new type);
   // `modelLoading` drives the UI's loading state meanwhile.
-  // Channels hold versions of the same kind of block: a swap to another
-  // kind (amp <-> IR) drops the other channels; otherwise they keep their
-  // own tones, and their cached model bytes survive the swap.
+  // Channels are versions of the same kind of block: a swap to another
+  // kind (amp <-> IR) drops the other channels (below, same-kind swaps move
+  // them to the new tone).
   if (parsed.type != block->type)
     for (int c = 0; c < kNumBlockChannels; ++c)
       if (c != block->activeChannel)
         block->channels[static_cast<size_t>(c)] = juce::ValueTree();
-  for (auto it = block->modelCache.begin(); it != block->modelCache.end();)
-    it = sceneReferencesModel(block->id, it->first) ? std::next(it) : block->modelCache.erase(it);
+  block->modelCache.clear();  // every channel now uses the new tone
   setToneOnBlock(*block, parsed.toneId, parsed.toneJson, parsed.toneVar);
   block->activeModelId = parsed.firstModelId;
   block->modelLoading = true;
   block->loadFailed = false;
+  // One tone per block: the other channels keep their settings and move to
+  // the new tone's model too.
+  {
+    auto* model = new juce::DynamicObject();
+    model->setProperty("id", parsed.firstModelId);
+    model->setProperty("name", parsed.modelName);
+    model->setProperty("model_url", parsed.modelUrl);
+    const juce::String modelJson = juce::JSON::toString(juce::var(model), true);
+    for (int c = 0; c < kNumBlockChannels; ++c) {
+      juce::ValueTree& slot = block->channels[static_cast<size_t>(c)];
+      if (c == block->activeChannel || !slot.isValid())
+        continue;
+      slot.setProperty("toneId", parsed.toneId, nullptr);
+      slot.setProperty("activeModelId", parsed.firstModelId, nullptr);
+      slot.setProperty("channelModel", modelJson, nullptr);
+    }
+  }
 
   // Bug fix, 2026-09-17: a *local* file drop onto an already-occupied tile
   // (GalleryBlock.tsx's own drop, including the split IR/Cab zone) kept
