@@ -931,10 +931,18 @@ void TONE3000Processor::runDualMono(ChainBlock& dualBlock, juce::AudioBuffer<flo
   const int numSamples = buffer.getNumSamples();
   const int numChannels = buffer.getNumChannels();
 
-  auto& dl = dualLeftBuf;
-  auto& dr = dualRightBuf;
-  jassert(dl.getNumSamples() >= numSamples);
-  jassert(dr.getNumSamples() >= numSamples);
+  jassert(dualLeftBuf.getNumSamples() >= numSamples);
+  jassert(dualRightBuf.getNumSamples() >= numSamples);
+  // Views of exactly this block's length over the preallocated scratch (no
+  // allocation: referencing constructor). The scratch itself is sized for
+  // the largest chain-domain block, and processChainOnBuffer runs
+  // buffer.getNumSamples() samples - handing it the scratch directly made
+  // each side process its full capacity every call, so any block shorter
+  // than the maximum (hosts like Logic vary block sizes) pushed stale
+  // samples from earlier blocks through the sides' NAM/IR state: loud,
+  // harsh noise. Fixed-size hosts (the standalone) never showed it.
+  juce::AudioBuffer<float> dl(dualLeftBuf.getArrayOfWritePointers(), 1, numSamples);
+  juce::AudioBuffer<float> dr(dualRightBuf.getArrayOfWritePointers(), 1, numSamples);
 
   // Seed: 2 channels present -> channel 0 feeds left, channel 1 feeds
   // right, distinctly. Only 1 channel present -> duplicated into both (a

@@ -1698,3 +1698,101 @@ TEST(DualMonoBlockTest, AutoAlignMeasuresRealRigsInMonoChainModeAndWritesBlockPa
     EXPECT_TRUE(static_cast<bool>(params["dualAlignEnabled"]))
         << "a real measured offset should power Align on";
 }
+
+// Host-config sweep (Logic runs 44.1 kHz / 2048-sample blocks): the same
+// Dual Mono rig must sound the same at every host rate and block size - the
+// resampling boundary and block slicing are supposed to be transparent. A
+// config-specific buffer bug shows up here as a level blow-up or garbage.
+TEST(DualMonoBlockTest, HostRateAndBlockSizeSweepStaysSane) {
+  struct Config {
+    double rate;
+    int block;
+  };
+  const Config configs[] = {{48000.0, 512}, {44100.0, 512}, {48000.0, 2048}, {44100.0, 2048}};
+  double refRms = 0.0;
+  float refPeak = 0.0f;
+  for (const auto& cfg : configs) {
+    ChainTestProcessor proc;
+    proc.setPlayConfigDetails(2, 2, cfg.rate, cfg.block);
+    proc.prepareToPlay(cfg.rate, cfg.block);
+    juce::ValueTree state("ChainSnapshot");
+    juce::ValueTree lane("ChainBlocks");
+    lane.appendChild(makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                                           makeIrBlockTree("blk-ir", 2, 200)),
+                     nullptr);
+    state.appendChild(lane, nullptr);
+    proc.restoreFromTree(state);
+    ASSERT_TRUE(waitForDualMonoLoaded(proc));
+
+    const int n = 40 * 2048;
+    processStereo(proc, makeSine(n, 220.0, 0.25f, cfg.rate), cfg.block);  // warm-up
+    const auto out = processStereo(proc, makeSine(n, 220.0, 0.25f, cfg.rate), cfg.block);
+    float peak = 0.0f;
+    double sum = 0.0;
+    bool finite = true;
+    for (size_t i = n / 2; i < out.first.size(); ++i) {
+      for (float s : {out.first[i], out.second[i]}) {
+        finite = finite && std::isfinite(s);
+        peak = std::max(peak, std::abs(s));
+        sum += static_cast<double>(s) * s;
+      }
+    }
+    const double rms = std::sqrt(sum / static_cast<double>(out.first.size()));
+    if (refRms == 0.0) refRms = rms;
+    if (refPeak == 0.0f) refPeak = peak;
+    std::printf("[DualMonoSweep] %.0f Hz / %d: peak %.3f rms %.4f (%.2f dB vs ref)\n", cfg.rate,
+                cfg.block, static_cast<double>(peak), rms, 20.0 * std::log10(rms / refRms));
+    EXPECT_TRUE(finite) << cfg.rate << "/" << cfg.block;
+    EXPECT_NEAR(20.0 * std::log10(rms / refRms), 0.0, 1.5) << cfg.rate << "/" << cfg.block;
+    // Peak too: the stale-sample bug left RMS untouched but spiked peaks
+    // (0.344 vs 0.279 at 44.1k/2048).
+    EXPECT_NEAR(20.0 * std::log10(peak / refPeak), 0.0, 0.5) << cfg.rate << "/" << cfg.block;
+  }
+}
+
+// Block-size independence (the Logic noise bug): a host that varies its
+// block sizes (Logic does; the 44.1k boundary also yields irregular chain
+// blocks) must get sample-for-sample the same output as a fixed-size host.
+// runDualMono used to hand each side its max-size scratch buffer, so every
+// shorter block pushed stale samples through the sides' NAM/IR state.
+TEST(DualMonoBlockTest, VariableHostBlockSizesMatchFixedOutput) {
+  auto run = [](const juce::ValueTree& tree, bool variable) {
+    ChainTestProcessor proc;
+    proc.setPlayConfigDetails(2, 2, kFs, 512);
+    proc.prepareToPlay(kFs, 512);
+    juce::ValueTree state("ChainSnapshot");
+    juce::ValueTree lane("ChainBlocks");
+    lane.appendChild(tree.createCopy(), nullptr);
+    state.appendChild(lane, nullptr);
+    proc.restoreFromTree(state);
+    EXPECT_TRUE(waitForDualMonoLoaded(proc));
+    const int total = 48000 * 3;
+    const auto in = makeNoise(total, 4321, 0.25f);
+    std::vector<float> outL(static_cast<size_t>(total)), outR(static_cast<size_t>(total));
+    juce::AudioBuffer<float> buf(2, 512);
+    juce::MidiBuffer midi;
+    const int pattern[] = {512, 256, 37, 512, 1, 511, 300};
+    int off = 0, k = 0;
+    while (off < total) {
+      const int n = std::min(variable ? pattern[k++ % 7] : 512, total - off);
+      buf.setSize(2, n, false, false, true);
+      buf.copyFrom(0, 0, in.data() + off, n);
+      buf.copyFrom(1, 0, in.data() + off, n);
+      proc.processBlock(buf, midi);
+      std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + n, outL.begin() + off);
+      std::copy(buf.getReadPointer(1), buf.getReadPointer(1) + n, outR.begin() + off);
+      off += n;
+    }
+    return std::make_pair(outL, outR);
+  };
+  const auto dual = makeDualMonoBlockTree("blk-dual", makeNamBlockTree("blk-nam", 1, 100),
+                                          makeIrBlockTree("blk-ir", 2, 200));
+  const auto fixed = run(dual, false);
+  const auto variable = run(dual, true);
+  const float diffL = maxAbsDiff(fixed.first, variable.first);
+  const float diffR = maxAbsDiff(fixed.second, variable.second);
+  std::printf("[DualMonoBlockTest] fixed vs variable blocks max |diff|: L=%.8f R=%.8f\n",
+              static_cast<double>(diffL), static_cast<double>(diffR));
+  EXPECT_LT(diffL, 1e-4f) << "left side depends on host block size";
+  EXPECT_LT(diffR, 1e-4f) << "right side depends on host block size";
+}
