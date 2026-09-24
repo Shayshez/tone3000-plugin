@@ -344,6 +344,7 @@ target_sources(${PROJECT_NAME}
         src/ProcessorChain.cpp
         src/ProcessorHistory.cpp
         src/ProcessorPresets.cpp
+        src/ProcessorScenes.cpp
         src/ProcessorState.cpp
         src/ProcessorModelLoader.cpp
         include/ChainDomain.h

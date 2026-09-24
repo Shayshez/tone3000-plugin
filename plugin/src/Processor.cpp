@@ -738,6 +738,8 @@ void TONE3000Processor::prepareToPlay(double sampleRate, int samplesPerBlock) {
   // restored bypassed or muted starts that way, no glide). The dry delay
   // matches the latency reported above; scratch is sized generously so a
   // host overshooting its promised block size doesn't allocate here.
+  sceneGainSmoother.reset(sampleRate, 0.03);
+  sceneGainSmoother.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(sceneLevelDb.load()));
   bypassMix.reset(sampleRate, 0.02);
   bypassMix.setCurrentAndTargetValue(cacheBypass ? 1.0f : 0.0f);
   muteGain.reset(sampleRate, 0.02);
@@ -1890,6 +1892,7 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   {
     outputGainSmoother.setTargetValue(mainStageGain(cacheOutputLevel));
     bypassMix.setTargetValue(cacheBypass ? 1.0f : 0.0f);
+    sceneGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(sceneLevelDb.load()));
     muteGain.setTargetValue(
         cacheOutputMute || tunerMuteActive.load(std::memory_order_relaxed) ? 0.0f : 1.0f);
 
@@ -1899,7 +1902,8 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     const auto* dryL = bypassDry.getReadPointer(0);
     const auto* dryR = bypassDry.getReadPointer(dryChannels > 1 ? 1 : 0);
     for (int i = 0; i < numSamples; ++i) {
-      const float g = outputGainSmoother.getNextValue();
+      // Scene level rides with the Output knob (both bypassed by Bypass).
+      const float g = outputGainSmoother.getNextValue() * sceneGainSmoother.getNextValue();
       const float b = bypassMix.getNextValue();
       const float m = muteGain.getNextValue();
       l[i] = (l[i] * g * (1.0f - b) + dryL[i] * b) * m;

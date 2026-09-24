@@ -1066,6 +1066,19 @@ bool TONE3000Processor::switchModel(const std::string& blockId, int modelId,
   DBG("Queueing model switch: " << modelName << " (ID: " << modelId << ")");
 
   pushChainHistory();
+  switchModelLocked(*block, modelId, modelData);
+  return true;
+}
+
+// Shared core of switchModel and a scene switch (no history entry here -
+// callers decide). Caller holds chainMutex and has validated modelData.
+void TONE3000Processor::switchModelLocked(ChainBlock& blockRef, int modelId,
+                                          const juce::var& modelData) {
+  ChainBlock* block = &blockRef;
+  const std::string blockId = block->id;
+  juce::DynamicObject* model = modelData.getDynamicObject();
+  const juce::String modelUrl = model->getProperty("model_url").toString();
+  const juce::String modelName = model->getProperty("name").toString();
 
   // The new model becomes the tone's sole stored model. Local tones keep
   // their full model list instead (the picked model is already in it; see
@@ -1104,8 +1117,6 @@ bool TONE3000Processor::switchModel(const std::string& blockId, int modelId,
   };
 
   loadingThreadPool.addJob(new SwitchModelJob(*this, blockId, modelId, modelUrl, modelName), true);
-
-  return true;
 }
 
 bool TONE3000Processor::setDualImage(const std::string& blockId, double leftPanNormalized,

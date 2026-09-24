@@ -19,6 +19,8 @@ juce::ValueTree TONE3000Processor::captureChainSnapshot(bool includeModelData) c
   juce::ValueTree blocks("ChainBlocks");
   serializeChainToTree(chain, blocks, includeModelData);
   snapshot.appendChild(blocks, nullptr);
+  // Scenes ride every snapshot (undo, presets, session state).
+  serializeScenes(snapshot);
 
   return snapshot;
 }
@@ -300,6 +302,10 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   // branch/solo/invert/align state silently fold away, leaving only the old
   // Left lane, with no error and no user-facing message.
   reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
+  // A snapshot without scenes (older presets/sessions, reset to default)
+  // leaves all eight empty: each starts as the live chain the first time
+  // it's visited.
+  restoreScenes(snapshot);
 
   // Restores can add/remove/retire IR blocks wholesale (undo/redo, presets,
   // project load), so resync the host-facing tail length.

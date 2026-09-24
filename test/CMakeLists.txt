@@ -26,6 +26,7 @@ target_sources(DspTests PRIVATE
     src/eq_post_routing_tests.cpp
     src/global_bypass_mute_tests.cpp
     src/insert_slot_tests.cpp
+    src/scenes_tests.cpp
     src/factory_preset_tests.cpp
     src/ir_category_tests.cpp
     src/ir_content_length_tests.cpp
@@ -65,6 +66,7 @@ target_sources(DspTests PRIVATE
     ../plugin/src/ProcessorHistory.cpp
     ../plugin/src/ProcessorModelLoader.cpp
     ../plugin/src/ProcessorPresets.cpp
+    ../plugin/src/ProcessorScenes.cpp
     ../plugin/src/ProcessorState.cpp
     ../plugin/src/StereoOffset.cpp
     ../plugin/src/TunerDetector.cpp

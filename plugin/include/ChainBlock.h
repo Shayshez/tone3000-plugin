@@ -5,6 +5,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -538,6 +539,13 @@ struct ChainBlock {
   // when its pre flag is on. Flat by default, in which case processing is
   // skipped entirely (single branch per audio block).
   BlockEq eq;
+
+  // Scenes: which of this block's parameters are stored per scene rather
+  // than shared by all scenes (see TONE3000Processor's scene section).
+  // Bypass and the selected model are always per scene; these are the
+  // opt-in extras - any of kSceneParams ("inputGain", "outputGain", "mix",
+  // "predelay", "eq"). Persisted with the block's settings.
+  std::set<juce::String> perSceneParams;
 
   // Spectrum analyzer for the EQ editor backdrop. Only fed by the audio thread
   // while the UI has this block's EQ view open (atomic enabled flag).

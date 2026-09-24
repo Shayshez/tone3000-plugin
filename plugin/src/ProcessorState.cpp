@@ -174,10 +174,22 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
     blockState.appendChild(block.eq.toValueTree(), nullptr);
   }
 
+  if (!block.perSceneParams.empty()) {
+    juce::StringArray names;
+    for (const auto& name : block.perSceneParams)
+      names.add(name);
+    blockState.setProperty("perScene", names.joinIntoString(","), nullptr);
+  }
+
   return blockState;
 }
 
 void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueTree& blockState) {
+  block.perSceneParams.clear();
+  for (const auto& name :
+       juce::StringArray::fromTokens(blockState.getProperty("perScene").toString(), ",", ""))
+    if (name.isNotEmpty())
+      block.perSceneParams.insert(name);
   block.enabled = static_cast<bool>(blockState.getProperty("enabled", true));
   block.normalizeEnabled = static_cast<bool>(blockState.getProperty("normalize", true));
   block.inputGainNormalized = static_cast<float>(blockState.getProperty("inputGain", 0.5f));

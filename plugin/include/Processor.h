@@ -4,6 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
+#include <functional>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -272,6 +273,9 @@ public:
   // `modelData` (JSON object with id/name/model_url, paged in from the API by
   // the UI) is required and becomes the tone's new sole stored model.
   bool switchModel(const std::string& blockId, int modelId, const juce::var& modelData);
+  // switchModel's core without the history entry (scene switches reuse it).
+  // Caller holds chainMutex; modelData must be a valid catalog model object.
+  void switchModelLocked(ChainBlock& block, int modelId, const juce::var& modelData);
   // Retry a failed model download (block.loadFailed): clears the flag and
   // re-queues the block's active model through the background loader. The
   // simplest recovery when tone3000.com was unreachable mid-load.
@@ -611,6 +615,43 @@ public:
   // bytes back under the same id. Returns that id, "" when there is nothing
   // to restore or the slot is taken again. One level deep, in memory only.
   juce::String restoreDeletedPreset();
+
+  // ####################
+  // SCENES
+  // ####################
+  // Eight scenes per chain (the chain's structure never changes between
+  // them - that's what presets are for). A scene stores, per block: bypass,
+  // the selected model (the dropdown), and any parameter the user marked
+  // "Per Scene" (see ChainBlock::perSceneParams); plus a scene name and a
+  // scene output level. Everything else is shared by all scenes, so editing
+  // it changes every scene - the selected model plays the role of a
+  // Fractal-style "channel".
+  //
+  // The ACTIVE scene is always the live chain itself: nothing is copied on
+  // every edit. The live chain is captured into the active scene's slot when
+  // switching away and whenever scenes are serialized (session, presets,
+  // undo), so edits persist per scene automatically. Switching applies only
+  // the target scene's per-scene values; shared values are never touched.
+  static constexpr int kNumScenes = 8;
+  // Per-scene-capable parameters (bypass and model are always per scene).
+  static const std::vector<juce::String>& sceneParamNames();
+
+  // Switch to scene `index` (0-based). Gapless: parameter moves glide on the
+  // blocks' own smoothers, bypass on its wet fade. Not an undo step. Returns
+  // false for a bad index; true (no-op) if already active.
+  bool selectScene(int index);
+  int getActiveScene() const;
+  bool renameScene(int index, const juce::String& name);
+  // Scene output level in dB (-24..+12), applied after the Output knob.
+  bool setSceneLevel(int index, double levelDb);
+  // Overwrite scene `to` with scene `from` (the live chain if `from` is
+  // active). If `to` is the active scene, the chain is re-applied.
+  bool copyScene(int from, int to);
+  // Make one of a block's parameters (see sceneParamNames) per-scene or
+  // shared. Turning it per-scene seeds every scene with the current value;
+  // turning it shared keeps the current value for all scenes. Undoable.
+  bool setBlockParamPerScene(const std::string& blockId, const juce::String& param,
+                             bool perScene);
   // Move a preset by `delta` steps within its browser section (negative =
   // earlier). The custom order is user-facing truth: prev/next stepping and
   // MIDI program-change numbers follow it (see loadPresetAtIndex).
@@ -1119,6 +1160,46 @@ private:
   bool isChainAtDefault() const;
 
   PresetManager presetManager;
+  // Scenes (see the public SCENES section). Guarded by chainMutex. Slot
+  // `activeScene` may be stale: the live chain is its truth (see
+  // effectiveScene / captureLiveScene).
+  struct SceneBlockState {
+    bool enabled = true;
+    // Selected model; 0 = none (EQ / Dual Mono wrapper / not captured).
+    int modelId = 0;
+    // That model's catalog object ({id, name, model_url, ...}) so a switch
+    // can re-point the block even after its tone JSON forgot it (native
+    // only keeps the active model's metadata).
+    juce::var modelData;
+    // Values of the block's per-scene params (normalized 0..1).
+    std::map<juce::String, float> params;
+    // The block's EQ, when "eq" is per scene (BlockEq::toValueTree).
+    juce::ValueTree eq;
+  };
+  struct Scene {
+    juce::String name;
+    float levelDb = 0.0f;
+    std::map<std::string, SceneBlockState> blocks;  // by block id (incl. Dual Mono children)
+  };
+  std::array<Scene, kNumScenes> scenes;
+  int activeScene = 0;
+  // Output-stage scene level (host rate; see processBlock's output stage).
+  std::atomic<float> sceneLevelDb{0.0f};
+  juce::SmoothedValue<float> sceneGainSmoother;
+
+  SceneBlockState captureSceneBlock(const ChainBlock& block) const;
+  // The live chain as a Scene (name/level from the active slot).
+  Scene captureLiveScene() const;
+  // Scene `index` as it currently stands (live chain when active).
+  Scene effectiveScene(int index) const;
+  void applySceneBlock(const SceneBlockState& state, ChainBlock& block);
+  void applyScene(const Scene& scene);
+  void serializeScenes(juce::ValueTree& snapshot) const;
+  void restoreScenes(const juce::ValueTree& snapshot);
+  static void forEachSceneBlockConst(const Lane& lane,
+                                     const std::function<void(const ChainBlock&)>& fn);
+  static void forEachSceneBlock(Lane& lane, const std::function<void(ChainBlock&)>& fn);
+
   // Most recent deletePreset, for restoreDeletedPreset (message thread only).
   juce::String lastDeletedPresetId;
   juce::MemoryBlock lastDeletedPresetBytes;
