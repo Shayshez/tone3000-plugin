@@ -1,43 +1,48 @@
 import React, { useEffect, useRef } from 'react';
-import { BRAND_BLUE, GRAY, MUTED, WHITE } from './theme';
+import { BRAND_RED, GRAY, MUTED, WHITE } from './theme';
 
 /**
- * Analog needle meter: a ±50 cent arc with ticks, a blue in-tune zone, and
- * a needle that swings with a critically-damped spring (rAF, written straight
- * to the SVG transform, no React re-render per frame) - so it glides like a
- * real meter instead of stepping at the ~20 Hz reading rate. Only the outer
- * segment of the needle is drawn: the pivot sits below the visible area, so
- * the meter stays short and nothing crosses the note name under it.
+ * Flat, full-width needle meter (modern hardware-tuner style rather than a
+ * skeuomorphic VU arc, matching the rest of the plugin's flat language): a
+ * ±50 cent linear scale with ticks, a blue in-tune zone around center, and a
+ * red needle - the one analog cue kept on purpose - that glides on a
+ * critically-damped spring (rAF, written straight to the SVG transform, no
+ * React re-render per frame) so it moves like a real meter between the
+ * ~20 Hz readings.
+ *
+ * `overlay` draws only the needle and center line (transparent, no scale),
+ * for laying it over the strobe band in the COMBO display, the way a
+ * Fractal-style tuner rides its marker across the strobe.
  */
 
 const MAX_CENTS = 50;
-/** Arc half-span in degrees for ±MAX_CENTS. */
-const SPREAD_DEG = 45;
-/** Inner end of the drawn needle, as a fraction of the radius. */
-const NEEDLE_INNER = 0.74;
 /** Spring stiffness (1/s): higher = snappier. */
 const SPRING = 14;
-
+/** Label row above the scale (the pointer head sits between it and the ticks). */
+const LABEL_H = 24;
+/** Keeps the ±50 end ticks and their labels inside the box. */
+const SIDE_PAD = 12;
+const NEEDLE_RED = BRAND_RED;
+/** The tuner's shared in-tune blue (strobe stripes, note letter, strings):
+    lighter than BRAND_BLUE, which read as a heavy navy block here. */
 const LIT_BLUE = '#3D7BFF';
-
-const polar = (cx: number, cy: number, r: number, deg: number) => {
-  const rad = (deg * Math.PI) / 180;
-  return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) };
-};
+/** Overlay: how far the needle pokes past the band's top and bottom edges. */
+const OVERHANG = 6;
 
 export const TunerNeedle: React.FC<{
   cents: number;
   hasSignal: boolean;
   inTune: boolean;
   inTuneCents: number;
-  /** Arc radius in design px; the meter's size follows from it. */
-  radius: number;
   width: number;
-}> = ({ cents, hasSignal, inTune, inTuneCents, radius: R, width: W }) => {
-  const pad = 26; // room for the tick labels above the arc
-  const cx = W / 2;
-  const cy = pad + R;
-  const height = Math.ceil(pad + R * (1 - NEEDLE_INNER) + 6);
+  /** Height of the scale (overlay: of the band it sits on). */
+  height: number;
+  overlay?: boolean;
+}> = ({ cents, hasSignal, inTune, inTuneCents, width: W, height: H, overlay = false }) => {
+  const top = overlay ? 0 : LABEL_H;
+  const totalH = top + H;
+  const half = W / 2 - SIDE_PAD;
+  const xOf = (c: number) => W / 2 + (c / MAX_CENTS) * half;
 
   const needleRef = useRef<SVGGElement>(null);
   const target = useRef(0);
@@ -46,99 +51,119 @@ export const TunerNeedle: React.FC<{
   useEffect(() => {
     let frame = 0;
     let last = performance.now();
-    let angle = 0;
+    let pos = 0; // cents
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      const goal = (target.current / MAX_CENTS) * SPREAD_DEG;
-      angle += (goal - angle) * (1 - Math.exp(-SPRING * dt));
-      needleRef.current?.setAttribute('transform', `rotate(${angle.toFixed(3)} ${cx} ${cy})`);
+      pos += (target.current - pos) * (1 - Math.exp(-SPRING * dt));
+      const dx = (pos / MAX_CENTS) * half;
+      needleRef.current?.setAttribute('transform', `translate(${dx.toFixed(2)} 0)`);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [cx, cy]);
-
-  const arcPath = (fromDeg: number, toDeg: number, r: number) => {
-    const a = polar(cx, cy, r, fromDeg);
-    const b = polar(cx, cy, r, toDeg);
-    return `M ${a.x} ${a.y} A ${r} ${r} 0 0 1 ${b.x} ${b.y}`;
-  };
-  const zoneDeg = (inTuneCents / MAX_CENTS) * SPREAD_DEG;
+  }, [half]);
 
   const ticks: React.ReactNode[] = [];
-  for (let c = -MAX_CENTS; c <= MAX_CENTS; c += 5) {
-    const deg = (c / MAX_CENTS) * SPREAD_DEG;
-    const major = c % 25 === 0;
-    const a = polar(cx, cy, R - (major ? 14 : 7), deg);
-    const b = polar(cx, cy, R, deg);
-    ticks.push(
-      <line
-        key={c}
-        x1={a.x}
-        y1={a.y}
-        x2={b.x}
-        y2={b.y}
-        stroke={c === 0 ? WHITE : MUTED}
-        strokeWidth={major ? 2 : 1}
-        strokeLinecap="round"
-      />
-    );
-    if (major) {
-      const t = polar(cx, cy, R + 13, deg);
+  if (!overlay) {
+    for (let c = -MAX_CENTS; c <= MAX_CENTS; c += 5) {
+      const major = c % 25 === 0;
+      const center = c === 0;
+      const len = center ? H : major ? H * 0.62 : H * 0.34;
+      const x = xOf(c);
       ticks.push(
-        <text
-          key={`l${c}`}
-          x={t.x}
-          y={t.y}
-          fill={GRAY}
-          fontSize={11}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          style={{ fontFamily: 'inherit' }}
-        >
-          {c > 0 ? `+${c}` : c}
-        </text>
+        <line
+          key={c}
+          x1={x}
+          x2={x}
+          y1={top + H - len}
+          y2={top + H}
+          stroke={center ? WHITE : major ? MUTED : 'rgba(235,235,245,0.32)'}
+          strokeWidth={center ? 2 : major ? 1.5 : 1}
+        />
       );
+      if (major)
+        ticks.push(
+          <text
+            key={`l${c}`}
+            x={x}
+            y={8}
+            fill={GRAY}
+            fontSize={11}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            style={{ fontFamily: 'inherit' }}
+          >
+            {c > 0 ? `+${c}` : c}
+          </text>
+        );
     }
   }
 
-  const needleColor = !hasSignal ? 'rgba(255,255,255,0.25)' : inTune ? LIT_BLUE : WHITE;
-  const inner = polar(cx, cy, R * NEEDLE_INNER, 0);
-  const outer = polar(cx, cy, R + 4, 0);
+  const zoneX = xOf(-inTuneCents);
+  const zoneW = xOf(inTuneCents) - zoneX;
 
   return (
     <svg
-      viewBox={`0 0 ${W} ${height}`}
-      style={{ width: `${W}rem`, height: `${height}rem`, display: 'block', overflow: 'visible' }}
+      viewBox={`0 0 ${W} ${totalH}`}
+      style={{ width: `${W}rem`, height: `${totalH}rem`, display: 'block', overflow: 'visible' }}
       aria-label="Needle tuner"
     >
-      <path
-        d={arcPath(-SPREAD_DEG, SPREAD_DEG, R)}
-        stroke="rgba(235,235,245,0.18)"
-        strokeWidth={2}
-        fill="none"
-      />
-      <path
-        d={arcPath(-zoneDeg, zoneDeg, R)}
-        stroke={BRAND_BLUE}
-        strokeWidth={6}
-        strokeLinecap="round"
-        fill="none"
-        opacity={hasSignal && inTune ? 1 : 0.55}
-      />
-      {ticks}
+      {!overlay && (
+        <>
+          {/* In-tune zone: always marked, lit when locked. */}
+          <rect
+            x={zoneX}
+            y={top}
+            width={zoneW}
+            height={H}
+            rx={3}
+            fill={LIT_BLUE}
+            opacity={hasSignal && inTune ? 0.4 : 0.12}
+            style={{ transition: 'opacity 120ms linear' }}
+          />
+          <line x1={xOf(-MAX_CENTS)} x2={xOf(MAX_CENTS)} y1={top + H} y2={top + H} stroke={MUTED} />
+          {ticks}
+        </>
+      )}
+      {overlay && (
+        // Center reference as notches just outside the band: a line drawn
+        // across the strobe vanished among its white stripes.
+        <>
+          <path
+            d={`M ${W / 2 - 6} ${-OVERHANG - 8} L ${W / 2 + 6} ${-OVERHANG - 8} L ${W / 2} ${-OVERHANG - 1} Z`}
+            fill={WHITE}
+          />
+          <path
+            d={`M ${W / 2 - 6} ${H + OVERHANG + 8} L ${W / 2 + 6} ${H + OVERHANG + 8} L ${W / 2} ${H + OVERHANG + 1} Z`}
+            fill={WHITE}
+          />
+        </>
+      )}
       <g ref={needleRef}>
-        <line
-          x1={inner.x}
-          y1={inner.y}
-          x2={outer.x}
-          y2={outer.y}
-          stroke={needleColor}
-          strokeWidth={3}
-          strokeLinecap="round"
-          style={{ transition: 'stroke 90ms linear' }}
-        />
+        <g
+          opacity={hasSignal ? 1 : 0.3}
+          style={{
+            filter: hasSignal ? `drop-shadow(0 0 4rem ${NEEDLE_RED})` : 'none',
+            transition: 'opacity 150ms linear',
+          }}
+        >
+          <rect
+            x={W / 2 - 1.5}
+            y={overlay ? -OVERHANG : top}
+            width={3}
+            height={overlay ? H + OVERHANG * 2 : H}
+            rx={1.5}
+            fill={NEEDLE_RED}
+          />
+          {/* Pointer head just above the scale, under the labels. */}
+          {!overlay && (
+            <path
+              d={`M ${W / 2 - 6} ${top - 9} L ${W / 2 + 6} ${top - 9} L ${W / 2} ${top - 1} Z`}
+              fill={NEEDLE_RED}
+            />
+          )}
+        </g>
       </g>
     </svg>
   );

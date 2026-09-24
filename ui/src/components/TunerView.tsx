@@ -69,8 +69,10 @@ const BRAND_BLUE_TEXT = '#5B8CFF';
 /** Quick picks in the reference-pitch menu. */
 const REF_PRESETS = [432, 440, 442, 444];
 
-const STROBE_WIDTH = 620;
+/** Strobe / combo band width; the needle scale adds the ♭/♯ columns' 80. */
+const METER_WIDTH = 780;
 const STROBE_HEIGHT = 132;
+const COMBO_BAND_HEIGHT = 72;
 
 // Cents window considered "in tune" and the full deflection of one side.
 const IN_TUNE_CENTS = 5;
@@ -297,17 +299,20 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   );
 
   // Strobe with ♭/♯ markers either side, lit toward the error.
-  const strobeRow = (width: number, height: number, bands: number) => (
+  const strobeRow = (width: number, height: number, bands: number, overlay?: React.ReactNode) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '18rem' }}>
       <span style={{ color: isFlat ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♭</span>
-      <TunerStrobe
-        cents={cents}
-        hasSignal={hasSignal}
-        inTune={inTune}
-        width={width}
-        height={height}
-        bands={bands}
-      />
+      <div style={{ position: 'relative' }}>
+        <TunerStrobe
+          cents={cents}
+          hasSignal={hasSignal}
+          inTune={inTune}
+          width={width}
+          height={height}
+          bands={bands}
+        />
+        {overlay && <div style={{ position: 'absolute', inset: 0 }}>{overlay}</div>}
+      </div>
       <span style={{ color: isSharp ? WHITE : SURFACE_RAISED, fontSize: '22rem' }}>♯</span>
     </div>
   );
@@ -489,16 +494,17 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           }}
         >
           {noteReadout(76)}
-          {strobeRow(STROBE_WIDTH, STROBE_HEIGHT, 3)}
+          {strobeRow(METER_WIDTH, STROBE_HEIGHT, 3)}
         </div>
       ) : display === 'needle' ? (
+        // Flat full-width meter on top, the note under it.
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '4rem',
-            marginTop: '-16rem',
+            gap: '26rem',
+            marginTop: '-6rem',
           }}
         >
           <TunerNeedle
@@ -506,33 +512,39 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             hasSignal={hasSignal}
             inTune={inTune}
             inTuneCents={IN_TUNE_CENTS}
-            radius={300}
-            width={560}
+            width={METER_WIDTH + 80}
+            height={56}
           />
           {noteReadout(84)}
         </div>
       ) : (
-        // Combo (Fractal-style): the needle for the coarse approach, a
-        // two-band strobe under it for the last cent.
+        // Combo (Fractal-style): the red needle rides across the strobe
+        // band - coarse position from the needle, the last cent from the
+        // stripes - with the note under it.
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '4rem',
-            marginTop: '-22rem',
+            gap: '34rem',
+            marginTop: '-6rem',
           }}
         >
-          <TunerNeedle
-            cents={cents}
-            hasSignal={hasSignal}
-            inTune={inTune}
-            inTuneCents={IN_TUNE_CENTS}
-            radius={230}
-            width={500}
-          />
-          {noteReadout(60)}
-          <div style={{ marginTop: '28rem' }}>{strobeRow(500, 56, 2)}</div>
+          {strobeRow(
+            METER_WIDTH,
+            COMBO_BAND_HEIGHT,
+            2,
+            <TunerNeedle
+              cents={cents}
+              hasSignal={hasSignal}
+              inTune={inTune}
+              inTuneCents={IN_TUNE_CENTS}
+              width={METER_WIDTH}
+              height={COMBO_BAND_HEIGHT}
+              overlay
+            />
+          )}
+          {noteReadout(84)}
         </div>
       )}
 
