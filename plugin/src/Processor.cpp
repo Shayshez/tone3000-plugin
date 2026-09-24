@@ -187,7 +187,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
   // chain snapshot carries the active scene itself.
   layout.add(std::make_unique<juce::AudioParameterChoice>(
       juce::ParameterID{"scene", 38}, "Scene",
-      juce::StringArray{"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
+      juce::StringArray{"1", "2", "3", "4"}, 0));
 
   return layout;
 }

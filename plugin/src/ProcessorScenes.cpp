@@ -3,36 +3,26 @@
 #include <set>
 
 // ####################
-// SCENES
+// SCENES & CHANNELS
 // ####################
 //
-// See the SCENES section in Processor.h for the model. Two rules carry the
-// whole design:
+// See the SCENES & CHANNELS section in Processor.h. Two rules carry the
+// design:
 //
-//  1. The active scene IS the live chain. Its stored slot may be stale; it is
-//     refreshed from the chain when switching away (selectScene) and read
-//     straight off the chain whenever scenes are serialized (effectiveScene),
-//     so every edit lands in the active scene with no per-edit bookkeeping.
-//  2. Switching applies only per-scene values (bypass, model, and the block's
-//     opt-in perSceneParams). Shared values are never written, which is what
-//     makes them shared.
+//  1. Live state is the truth for whatever is active: the active scene is
+//     the live chain, and each block's active channel is the live block.
+//     Slots are refreshed from the live state when switching away and read
+//     straight off it whenever state is serialized, so edits land where they
+//     belong with no per-edit bookkeeping.
+//  2. A scene stores only {bypass, channel} per block; a channel stores the
+//     block's full settings (minus bypass/identity/NAM size) plus its model.
 //
 // Blocks a scene has never seen (added while another scene was active) keep
-// their live state when that scene is applied and are captured into it when
+// their live state when that scene is applied, and are captured into it when
 // it is next left. Entries for blocks that no longer exist are pruned at
 // serialization.
 
 namespace {
-
-// Normalized value of one per-scene-capable continuous param ("eq" is
-// handled separately as a tree).
-float readSceneParam(const ChainBlock& block, const juce::String& name) {
-  if (name == "inputGain") return block.inputGainNormalized;
-  if (name == "outputGain") return block.outputGainNormalized;
-  if (name == "mix") return block.mixNormalized;
-  if (name == "predelay") return block.predelayNormalized;
-  return 0.0f;
-}
 
 bool blockHasModel(const ChainBlock& block) {
   return block.type == ChainBlockType::NAM || block.type == ChainBlockType::IR ||
@@ -48,13 +38,12 @@ juce::var activeModelData(const ChainBlock& block) {
   return {};
 }
 
-}  // namespace
+// Settings that shape an IR kernel: a change needs an off-thread rebuild.
+const char* const kIrShapeProps[] = {"initLevel",  "attackLength", "attackCurve", "decayLength",
+                                     "decayLevel", "decayCurve",   "size",        "width",
+                                     "trimInit",   "trimRelaxed",  "reverse"};
 
-const std::vector<juce::String>& TONE3000Processor::sceneParamNames() {
-  static const std::vector<juce::String> names = {"inputGain", "outputGain", "mix", "predelay",
-                                                   "eq"};
-  return names;
-}
+}  // namespace
 
 void TONE3000Processor::forEachSceneBlockConst(const Lane& lane,
                                                const std::function<void(const ChainBlock&)>& fn) {
@@ -81,28 +70,120 @@ void TONE3000Processor::forEachSceneBlock(Lane& lane, const std::function<void(C
   }
 }
 
-TONE3000Processor::SceneBlockState TONE3000Processor::captureSceneBlock(
-    const ChainBlock& block) const {
-  SceneBlockState state;
-  state.enabled = block.enabled;
+// ---------------------------------------------------------------------------
+// Channels
+
+juce::ValueTree TONE3000Processor::captureChannel(const ChainBlock& block) const {
+  juce::ValueTree channel = serializeBlockSettings(block).createCopy();
+  for (const char* prop : {"id", "type", "enabled", "slimSize", "channel"})
+    channel.removeProperty(prop, nullptr);
+  channel.removeChild(channel.getChildWithName("Channels"), nullptr);
   if (blockHasModel(block)) {
-    state.modelId = block.activeModelId;
-    state.modelData = activeModelData(block);
+    const juce::var model = activeModelData(block);
+    if (model.isObject())
+      channel.setProperty("channelModel", juce::JSON::toString(model, true), nullptr);
   }
-  for (const auto& name : block.perSceneParams) {
-    if (name == "eq")
-      state.eq = block.eq.toValueTree();
-    else
-      state.params[name] = readSceneParam(block, name);
-  }
-  return state;
+  return channel;
 }
+
+void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& channel) {
+  if (!channel.isValid())
+    return;
+  // IR kernel params before, to know whether a rebuild is needed.
+  const juce::ValueTree before = serializeBlockSettings(block);
+
+  // Bypass belongs to the scene, NAM size to the block; no "id" property, so
+  // applyBlockSettings leaves the channel slots alone.
+  juce::ValueTree merged = channel.createCopy();
+  merged.setProperty("enabled", block.enabled, nullptr);
+  merged.setProperty("slimSize", block.namSlimSize, nullptr);
+  applyBlockSettings(block, merged);
+  block.predelay.setDelayMs(block.predelayNormalized * BlockPredelay::kMaxDelayMs);
+
+  // A channel may hold a different tone (capture) than the others.
+  const juce::String toneJson = channel.getProperty("toneJson").toString();
+  if (blockHasModel(block) && toneJson.isNotEmpty() && toneJson != block.toneJson) {
+    const juce::var toneVar = juce::JSON::parse(toneJson);
+    if (toneVar.isObject())
+      setToneOnBlock(block, static_cast<int>(channel.getProperty("toneId", 0)), toneJson, toneVar);
+  }
+
+  const int modelId = static_cast<int>(channel.getProperty("activeModelId", 0));
+  const bool modelChanges = blockHasModel(block) && modelId != 0 && modelId != block.activeModelId;
+  if (modelChanges) {
+    const juce::var modelData = juce::JSON::parse(channel.getProperty("channelModel").toString());
+    if (modelData.isObject() && block.toneVar.isObject() &&
+        !(block.type == ChainBlockType::NAM && swapToWarmNamEngine(block, modelId, modelData)))
+      switchModelLocked(block, modelId, modelData);  // IR shape re-applies after the load
+  } else if (block.type == ChainBlockType::IR || block.type == ChainBlockType::CAB) {
+    bool shapeMoved = false;
+    for (const char* prop : kIrShapeProps)
+      shapeMoved = shapeMoved || before.getProperty(prop) != channel.getProperty(prop, before.getProperty(prop));
+    if (shapeMoved)
+      requestIrShapeRebuild(block);
+  }
+}
+
+void TONE3000Processor::switchBlockChannel(ChainBlock& block, int channel) {
+  channel = juce::jlimit(0, kNumBlockChannels - 1, channel);
+  if (channel == block.activeChannel)
+    return;
+  block.channels[static_cast<size_t>(block.activeChannel)] = captureChannel(block);
+  // An unused channel starts as a copy of the current one.
+  const juce::ValueTree target = block.channels[static_cast<size_t>(channel)].isValid()
+                                     ? block.channels[static_cast<size_t>(channel)]
+                                     : block.channels[static_cast<size_t>(block.activeChannel)];
+  block.activeChannel = channel;
+  applyChannel(block, target);
+}
+
+bool TONE3000Processor::selectBlockChannel(const std::string& blockId, int channel) {
+  if (channel < 0 || channel >= kNumBlockChannels)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+  if (channel == block->activeChannel)
+    return true;
+  pushChainHistory();
+  switchBlockChannel(*block, channel);
+  refreshIrTailLength();
+  refreshWarmEngines();
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::copyBlockChannel(const std::string& blockId, int from, int to) {
+  if (from < 0 || from >= kNumBlockChannels || to < 0 || to >= kNumBlockChannels || from == to)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+  pushChainHistory();
+  const juce::ValueTree& stored = block->channels[static_cast<size_t>(from)];
+  const juce::ValueTree source =
+      from == block->activeChannel || !stored.isValid() ? captureChannel(*block) : stored.createCopy();
+  if (to == block->activeChannel)
+    applyChannel(*block, source);
+  else
+    block->channels[static_cast<size_t>(to)] = source;
+  refreshWarmEngines();
+  bumpChainRevision();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Scenes
 
 TONE3000Processor::Scene TONE3000Processor::captureLiveScene() const {
   Scene live;
   live.name = scenes[static_cast<size_t>(activeScene)].name;
   live.levelDb = scenes[static_cast<size_t>(activeScene)].levelDb;
-  forEachSceneBlockConst(chain, [&](const ChainBlock& b) { live.blocks[b.id] = captureSceneBlock(b); });
+  forEachSceneBlockConst(chain, [&](const ChainBlock& b) {
+    live.blocks[b.id] = SceneBlockState{b.enabled, b.activeChannel};
+  });
   return live;
 }
 
@@ -110,41 +191,145 @@ TONE3000Processor::Scene TONE3000Processor::effectiveScene(int index) const {
   return index == activeScene ? captureLiveScene() : scenes[static_cast<size_t>(index)];
 }
 
-void TONE3000Processor::applySceneBlock(const SceneBlockState& state, ChainBlock& block) {
-  // Bypass: the block's own wet fade glides it (see processChainOnBuffer).
-  block.enabled = state.enabled;
-
-  for (const auto& name : block.perSceneParams) {
-    if (name == "eq") {
-      if (state.eq.isValid())
-        block.eq.restoreFromValueTree(state.eq);
-      continue;
-    }
-    const auto it = state.params.find(name);
-    if (it == state.params.end())
-      continue;
-    const float v = juce::jlimit(0.0f, 1.0f, it->second);
-    // Continuous params ride the block's smoothers, so these glide too.
-    if (name == "inputGain") block.inputGainNormalized = v;
-    else if (name == "outputGain") block.outputGainNormalized = v;
-    else if (name == "mix") block.mixNormalized = v;
-    else if (name == "predelay") {
-      block.predelayNormalized = v;
-      block.predelay.setDelayMs(v * BlockPredelay::kMaxDelayMs);
-    }
-  }
-
-  // Model: only when it actually differs and we know its catalog object.
-  // NAM swaps in its warm engine with a crossfade (gapless); anything not
-  // warm yet (just after a preset load, or IR/Cab for now) takes the regular
-  // load path.
-  if (blockHasModel(block) && state.modelId != 0 && state.modelId != block.activeModelId &&
-      state.modelData.isObject() && block.toneVar.isObject()) {
-    if (!(block.type == ChainBlockType::NAM &&
-          swapToWarmNamEngine(block, state.modelId, state.modelData)))
-      switchModelLocked(block, state.modelId, state.modelData);
-  }
+void TONE3000Processor::applyScene(const Scene& scene) {
+  forEachSceneBlock(chain, [&](ChainBlock& b) {
+    const auto it = scene.blocks.find(b.id);
+    if (it == scene.blocks.end())
+      return;
+    b.enabled = it->second.enabled;  // glides on the block's wet fade
+    switchBlockChannel(b, it->second.channel);
+  });
+  refreshIrTailLength();
+  sceneLevelDb.store(scene.levelDb);
 }
+
+bool TONE3000Processor::selectScene(int index) {
+  if (index < 0 || index >= kNumScenes)
+    return false;
+  {
+    juce::ScopedLock lock(chainMutex);
+    if (index != activeScene) {
+      scenes[static_cast<size_t>(activeScene)] = captureLiveScene();
+      activeScene = index;
+      applyScene(scenes[static_cast<size_t>(index)]);
+      refreshWarmEngines();
+      bumpChainRevision();
+    }
+  }
+  // Outside the lock: host notification can call back into us.
+  if (juce::MessageManager::getInstanceWithoutCreating() != nullptr &&
+      juce::MessageManager::getInstance()->isThisTheMessageThread())
+    syncSceneParam();
+  else {
+    sceneParamDirty.store(true);
+    triggerAsyncUpdate();
+  }
+  return true;
+}
+
+void TONE3000Processor::syncSceneParam() {
+  auto* param = parameters.getParameter("scene");
+  if (param == nullptr)
+    return;
+  const int active = getActiveScene();
+  const float normalized = param->convertTo0to1(static_cast<float>(active));
+  if (std::abs(param->getValue() - normalized) < 1.0e-4f)
+    return;
+  syncingSceneParam.store(true);
+  param->setValueNotifyingHost(normalized);
+  syncingSceneParam.store(false);
+}
+
+int TONE3000Processor::getActiveScene() const {
+  juce::ScopedLock lock(chainMutex);
+  return activeScene;
+}
+
+bool TONE3000Processor::renameScene(int index, const juce::String& name) {
+  if (index < 0 || index >= kNumScenes)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  pushChainHistory();
+  scenes[static_cast<size_t>(index)].name = name.trim().substring(0, 24);
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::setSceneLevel(int index, double levelDb) {
+  if (index < 0 || index >= kNumScenes)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  pushChainHistory("sceneLevel:" + juce::String(index));
+  const float db = static_cast<float>(juce::jlimit(-24.0, 12.0, levelDb));
+  scenes[static_cast<size_t>(index)].levelDb = db;
+  if (index == activeScene)
+    sceneLevelDb.store(db);
+  deferredRevisionBump();
+  return true;
+}
+
+bool TONE3000Processor::copyScene(int from, int to) {
+  if (from < 0 || from >= kNumScenes || to < 0 || to >= kNumScenes || from == to)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  pushChainHistory();
+  Scene source = effectiveScene(from);
+  source.name = scenes[static_cast<size_t>(to)].name;  // content, not the name
+  scenes[static_cast<size_t>(to)] = source;
+  if (to == activeScene)
+    applyScene(source);
+  refreshWarmEngines();
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::setSceneBlockEnabled(int sceneIndex, const std::string& blockId,
+                                             bool enabled) {
+  if (sceneIndex < 0 || sceneIndex >= kNumScenes)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+  pushChainHistory();
+  if (sceneIndex == activeScene) {
+    block->enabled = enabled;
+  } else {
+    auto [it, inserted] = scenes[static_cast<size_t>(sceneIndex)].blocks.try_emplace(
+        blockId, SceneBlockState{block->enabled, block->activeChannel});
+    it->second.enabled = enabled;
+  }
+  bumpChainRevision();
+  return true;
+}
+
+bool TONE3000Processor::setSceneBlockChannel(int sceneIndex, const std::string& blockId,
+                                             int channel) {
+  if (sceneIndex < 0 || sceneIndex >= kNumScenes || channel < 0 || channel >= kNumBlockChannels)
+    return false;
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr || block->type == ChainBlockType::INSERT)
+    return false;
+  pushChainHistory();
+  if (sceneIndex == activeScene) {
+    switchBlockChannel(*block, channel);
+    refreshIrTailLength();
+  } else {
+    // A channel picked for another scene must exist to be warmed up.
+    if (!block->channels[static_cast<size_t>(channel)].isValid() && channel != block->activeChannel)
+      block->channels[static_cast<size_t>(channel)] = captureChannel(*block);
+    auto [it, inserted] = scenes[static_cast<size_t>(sceneIndex)].blocks.try_emplace(
+        blockId, SceneBlockState{block->enabled, block->activeChannel});
+    it->second.channel = channel;
+  }
+  refreshWarmEngines();
+  bumpChainRevision();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Warm engines (gapless NAM model changes between channels)
 
 bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
                                             const juce::var& modelData) {
@@ -203,28 +388,23 @@ bool TONE3000Processor::isSceneModelWarm(const std::string& blockId, int modelId
 }
 
 bool TONE3000Processor::sceneReferencesModel(const std::string& blockId, int modelId) const {
-  for (int s = 0; s < kNumScenes; ++s) {
-    if (s == activeScene)
-      continue;  // the live chain: its model is the block's own active one
-    const auto& blocks = scenes[static_cast<size_t>(s)].blocks;
-    if (auto it = blocks.find(blockId); it != blocks.end() && it->second.modelId == modelId)
-      return true;
-  }
-  return false;
+  const ChainBlock* block = const_cast<TONE3000Processor*>(this)->findBlockById(blockId);
+  return block != nullptr && block->channelReferencesModel(modelId);
 }
 
 void TONE3000Processor::refreshWarmEngines() {
   forEachSceneBlock(chain, [&](ChainBlock& b) {
     if (b.type != ChainBlockType::NAM)
       return;
+    // Models of this block's OTHER used channels (at most 3 per block).
     std::map<int, juce::var> needed;  // model id -> catalog object
-    for (int s = 0; s < kNumScenes; ++s) {
-      if (s == activeScene)
+    for (int c = 0; c < kNumBlockChannels; ++c) {
+      const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
+      if (c == b.activeChannel || !slot.isValid())
         continue;
-      const auto& blocks = scenes[static_cast<size_t>(s)].blocks;
-      if (auto it = blocks.find(b.id); it != blocks.end() && it->second.modelId != 0 &&
-                                       it->second.modelId != b.activeModelId)
-        needed.emplace(it->second.modelId, it->second.modelData);
+      const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
+      if (modelId != 0 && modelId != b.activeModelId)
+        needed.emplace(modelId, juce::JSON::parse(slot.getProperty("channelModel").toString()));
     }
 
     // A finished crossfade's engine goes back to the pool if still needed.
@@ -312,141 +492,9 @@ void TONE3000Processor::prewarmModelInBackground(const std::string& blockId, int
   block->warmNamEngines[modelId] = std::move(prepared.namEngine);
 }
 
-void TONE3000Processor::applyScene(const Scene& scene) {
-  forEachSceneBlock(chain, [&](ChainBlock& b) {
-    const auto it = scene.blocks.find(b.id);
-    if (it != scene.blocks.end())
-      applySceneBlock(it->second, b);
-  });
-  refreshIrTailLength();  // predelay may have moved
-  sceneLevelDb.store(scene.levelDb);
-}
-
-bool TONE3000Processor::selectScene(int index) {
-  if (index < 0 || index >= kNumScenes)
-    return false;
-  {
-    juce::ScopedLock lock(chainMutex);
-    if (index != activeScene) {
-      scenes[static_cast<size_t>(activeScene)] = captureLiveScene();
-      activeScene = index;
-      applyScene(scenes[static_cast<size_t>(index)]);
-      refreshWarmEngines();
-      bumpChainRevision();
-    }
-  }
-  // Outside the lock: host notification can call back into us.
-  if (juce::MessageManager::getInstanceWithoutCreating() != nullptr &&
-      juce::MessageManager::getInstance()->isThisTheMessageThread())
-    syncSceneParam();
-  else {
-    sceneParamDirty.store(true);
-    triggerAsyncUpdate();
-  }
-  return true;
-}
-
-void TONE3000Processor::syncSceneParam() {
-  auto* param = parameters.getParameter("scene");
-  if (param == nullptr)
-    return;
-  const int active = getActiveScene();
-  const float normalized = param->convertTo0to1(static_cast<float>(active));
-  if (std::abs(param->getValue() - normalized) < 1.0e-4f)
-    return;
-  syncingSceneParam.store(true);
-  param->setValueNotifyingHost(normalized);
-  syncingSceneParam.store(false);
-}
-
-int TONE3000Processor::getActiveScene() const {
-  juce::ScopedLock lock(chainMutex);
-  return activeScene;
-}
-
-bool TONE3000Processor::renameScene(int index, const juce::String& name) {
-  if (index < 0 || index >= kNumScenes)
-    return false;
-  juce::ScopedLock lock(chainMutex);
-  pushChainHistory();
-  scenes[static_cast<size_t>(index)].name = name.trim().substring(0, 24);
-  bumpChainRevision();
-  return true;
-}
-
-bool TONE3000Processor::setSceneLevel(int index, double levelDb) {
-  if (index < 0 || index >= kNumScenes)
-    return false;
-  juce::ScopedLock lock(chainMutex);
-  pushChainHistory("sceneLevel:" + juce::String(index));
-  const float db = static_cast<float>(juce::jlimit(-24.0, 12.0, levelDb));
-  scenes[static_cast<size_t>(index)].levelDb = db;
-  if (index == activeScene)
-    sceneLevelDb.store(db);
-  deferredRevisionBump();
-  return true;
-}
-
-bool TONE3000Processor::copyScene(int from, int to) {
-  if (from < 0 || from >= kNumScenes || to < 0 || to >= kNumScenes || from == to)
-    return false;
-  juce::ScopedLock lock(chainMutex);
-  pushChainHistory();
-  Scene source = effectiveScene(from);
-  source.name = scenes[static_cast<size_t>(to)].name;  // content, not the name
-  scenes[static_cast<size_t>(to)] = source;
-  if (to == activeScene)
-    applyScene(source);
-  refreshWarmEngines();
-  bumpChainRevision();
-  return true;
-}
-
-bool TONE3000Processor::setBlockParamPerScene(const std::string& blockId, const juce::String& param,
-                                              bool perScene) {
-  const auto& names = sceneParamNames();
-  if (std::find(names.begin(), names.end(), param) == names.end())
-    return false;
-  juce::ScopedLock lock(chainMutex);
-  ChainBlock* block = findBlockById(blockId);
-  if (block == nullptr || block->type == ChainBlockType::INSERT)
-    return false;
-  if ((block->perSceneParams.count(param) > 0) == perScene)
-    return true;
-
-  pushChainHistory();
-  if (perScene) {
-    block->perSceneParams.insert(param);
-    // Seed every stored scene with the current value, so the param starts
-    // identical everywhere and only diverges when edited in a scene.
-    for (int s = 0; s < kNumScenes; ++s) {
-      if (s == activeScene)
-        continue;
-      auto& entry = scenes[static_cast<size_t>(s)].blocks[block->id];
-      if (param == "eq")
-        entry.eq = block->eq.toValueTree();
-      else
-        entry.params[param] = readSceneParam(*block, param);
-    }
-  } else {
-    // Shared again: the current (active scene's) value simply stays for all.
-    block->perSceneParams.erase(param);
-    for (auto& scene : scenes) {
-      auto it = scene.blocks.find(block->id);
-      if (it == scene.blocks.end())
-        continue;
-      if (param == "eq")
-        it->second.eq = juce::ValueTree();
-      else
-        it->second.params.erase(param);
-    }
-  }
-  bumpChainRevision();
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // Persistence: rides the chain snapshot (session state, presets, undo).
+// Channels ride each block's own settings (serializeBlockSettings).
 
 void TONE3000Processor::serializeScenes(juce::ValueTree& snapshot) const {
   std::set<std::string> liveIds;
@@ -465,15 +513,7 @@ void TONE3000Processor::serializeScenes(juce::ValueTree& snapshot) const {
       juce::ValueTree b("SceneBlock");
       b.setProperty("id", juce::String(id), nullptr);
       b.setProperty("enabled", state.enabled, nullptr);
-      if (state.modelId != 0) {
-        b.setProperty("modelId", state.modelId, nullptr);
-        if (state.modelData.isObject())
-          b.setProperty("modelData", juce::JSON::toString(state.modelData, true), nullptr);
-      }
-      for (const auto& [name, value] : state.params)
-        b.setProperty("p_" + name, value, nullptr);
-      if (state.eq.isValid())
-        b.appendChild(state.eq.createCopy(), nullptr);
+      b.setProperty("channel", state.channel, nullptr);
       sceneTree.appendChild(b, nullptr);
     }
     scenesTree.appendChild(sceneTree, nullptr);
@@ -499,26 +539,14 @@ void TONE3000Processor::restoreScenes(const juce::ValueTree& snapshot) {
       for (const auto& b : sceneTree) {
         if (!b.hasType("SceneBlock"))
           continue;
-        SceneBlockState state;
-        state.enabled = static_cast<bool>(b.getProperty("enabled", true));
-        state.modelId = static_cast<int>(b.getProperty("modelId", 0));
-        if (b.hasProperty("modelData"))
-          state.modelData = juce::JSON::parse(b.getProperty("modelData").toString());
-        for (int i = 0; i < b.getNumProperties(); ++i) {
-          const juce::String prop = b.getPropertyName(i).toString();
-          if (prop.startsWith("p_"))
-            state.params[prop.substring(2)] = static_cast<float>(b.getProperty(prop));
-        }
-        if (b.getNumChildren() > 0)
-          state.eq = b.getChild(0).createCopy();
-        scene.blocks[b.getProperty("id").toString().toStdString()] = std::move(state);
+        scene.blocks[b.getProperty("id").toString().toStdString()] = SceneBlockState{
+            static_cast<bool>(b.getProperty("enabled", true)),
+            juce::jlimit(0, kNumBlockChannels - 1, static_cast<int>(b.getProperty("channel", 0)))};
       }
     }
   }
   // The restored chain already IS the active scene; only the level needs
-  // pushing to the audio thread.
+  // pushing to the audio thread. Warm engines are refreshed by the caller
+  // once the chain is rebuilt (restoreChainSnapshot).
   sceneLevelDb.store(scenes[static_cast<size_t>(activeScene)].levelDb);
-  // Warm engines are refreshed by the caller once the chain is rebuilt
-  // (restoreChainSnapshot): restoreScenes runs first so the rebuild keeps
-  // the cached bytes of models other scenes select.
 }

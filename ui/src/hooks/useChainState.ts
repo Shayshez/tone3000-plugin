@@ -88,7 +88,10 @@ export function useChainState() {
       renameScene: backend.getPluginFunction('renameScene'),
       setSceneLevel: backend.getPluginFunction('setSceneLevel'),
       copyScene: backend.getPluginFunction('copyScene'),
-      setBlockParamPerScene: backend.getPluginFunction('setBlockParamPerScene'),
+      selectBlockChannel: backend.getPluginFunction('selectBlockChannel'),
+      copyBlockChannel: backend.getPluginFunction('copyBlockChannel'),
+      setSceneBlockEnabled: backend.getPluginFunction('setSceneBlockEnabled'),
+      setSceneBlockChannel: backend.getPluginFunction('setSceneBlockChannel'),
       pasteBlockEq: backend.getPluginFunction('pasteBlockEq'),
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
@@ -428,10 +431,22 @@ export function useChainState() {
       /** Overwrite scene `to` with scene `from`'s content (keeps `to`'s name). */
       copyScene: (from: number, to: number) =>
         run<boolean>('copyScene', () => native.copyScene(from, to)),
-      /** Make one of a block's params per scene (true) or shared (false). */
-      setBlockParamPerScene: (blockId: string, param: string, perScene: boolean) =>
-        run<boolean>('setBlockParamPerScene', () =>
-          native.setBlockParamPerScene(blockId, param, perScene)
+      /** Switch a block's active channel (0-3); the active scene now uses
+          it. An unused channel starts as a copy of the current one. */
+      selectBlockChannel: (blockId: string, channel: number) =>
+        run<boolean>('selectBlockChannel', () => native.selectBlockChannel(blockId, channel)),
+      /** Overwrite channel `to` with channel `from`'s settings. */
+      copyBlockChannel: (blockId: string, from: number, to: number) =>
+        run<boolean>('copyBlockChannel', () => native.copyBlockChannel(blockId, from, to)),
+      /** A block's bypass in one scene (the live block, for the active one). */
+      setSceneBlockEnabled: (scene: number, blockId: string, enabled: boolean) =>
+        run<boolean>('setSceneBlockEnabled', () =>
+          native.setSceneBlockEnabled(scene, blockId, enabled)
+        ),
+      /** Which channel a block uses in one scene. */
+      setSceneBlockChannel: (scene: number, blockId: string, channel: number) =>
+        run<boolean>('setSceneBlockChannel', () =>
+          native.setSceneBlockChannel(scene, blockId, channel)
         ),
       /** Step the chain edit history. No-ops (false) at the stack ends. */
       undo: () => run<boolean>('undoChain', () => native.undoChain()),

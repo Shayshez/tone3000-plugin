@@ -78,7 +78,9 @@ const rowStyle = (disabled?: boolean): React.CSSProperties => ({
     right edge of the plugin window). Measured after mount
     (useLayoutEffect, before paint) against the flyout's own rendered rect
     rather than computed from rem/px conversions, so it's correct
-    regardless of UI scale. */
+    regardless of UI scale. Vertically it slides up just enough to stay
+    inside the window when its parent row sits low (never above the top
+    margin). */
 const SubmenuFlyout: React.FC<{
   items: TileMenuItem[];
   onCommit: () => void;
@@ -89,10 +91,15 @@ const SubmenuFlyout: React.FC<{
 }> = ({ items, onCommit, autoFocus, onBack }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [openLeft, setOpenLeft] = useState(false);
+  /** Real px the flyout moves up to fit the window. */
+  const [liftPx, setLiftPx] = useState(0);
 
   useLayoutEffect(() => {
     const rect = ref.current?.getBoundingClientRect();
-    if (rect && rect.right > window.innerWidth) setOpenLeft(true);
+    if (!rect) return;
+    if (rect.right > window.innerWidth) setOpenLeft(true);
+    const overflow = rect.bottom - (window.innerHeight - VIEWPORT_MARGIN);
+    if (overflow > 0) setLiftPx(Math.max(0, Math.min(overflow, rect.top - VIEWPORT_MARGIN)));
   }, []);
 
   return (
@@ -100,7 +107,7 @@ const SubmenuFlyout: React.FC<{
       ref={ref}
       style={{
         position: 'absolute',
-        top: `-${PANEL_PADDING}rem`,
+        top: `calc(-${PANEL_PADDING}rem - ${liftPx}px)`,
         ...(openLeft
           ? { right: `calc(100% + ${SUBMENU_OFFSET_X}rem)` }
           : { left: `calc(100% + ${SUBMENU_OFFSET_X}rem)` }),

@@ -3,7 +3,7 @@ import { useTileMenu } from '../hooks/useTileMenu';
 import { useMidiMenuItems } from '../hooks/useMidiLearn';
 import { TileMenu } from './TileMenu';
 import type { TileMenuItem } from './TileMenu';
-import { Copy, Pencil, Volume2 } from './icons';
+import { Copy, LayoutGrid, Pencil } from './icons';
 import { HELP, helpProps } from './helpText';
 import { BLACK, BORDER, BRAND_YELLOW, FONT_MONO, GRAY, MUTED, WHITE } from './theme';
 import { NUM_SCENES } from '../types/chain';
@@ -11,17 +11,18 @@ import type { ScenesState } from '../types/chain';
 
 /**
  * Faceplate scene selector (see ScenesState): the active scene's name on top
- * (click: pick a scene from a list), and eight numbered switches in two rows
- * of four - the one-hand, mouse-first way to flip scenes while playing.
- * Right-click a number for Rename / Copy To / Level / MIDI Learn.
+ * (click: pick a scene from a list, or open the Scene Manager), and four
+ * numbered switches in a row - the one-hand, mouse-first way to flip scenes
+ * while playing - plus the Scene Manager button. Right-click a number for
+ * Rename / Copy To / MIDI Learn; levels live in the Scene Manager.
  *
  * Active scene is optimistic: the pressed number lights at once, native
  * converges through the chain resync.
  */
 
 const BTN_W = 26;
-const BTN_H = 20;
-const LEVEL_STEPS = [-6, -3, 0, 3, 6];
+const BTN_H = 22;
+const GAP = 4;
 
 const sceneLabel = (names: string[], i: number) => names[i] || `Scene ${i + 1}`;
 const levelLabel = (db: number) => (db === 0 ? '0 dB' : `${db > 0 ? '+' : ''}${db} dB`);
@@ -30,9 +31,9 @@ export const ScenesStrip: React.FC<{
   scenes: ScenesState;
   onSelect: (index: number) => void;
   onRename: (index: number, name: string) => void;
-  onLevel: (index: number, levelDb: number) => void;
   onCopy: (from: number, to: number) => void;
-}> = ({ scenes, onSelect, onRename, onLevel, onCopy }) => {
+  onOpenManager: () => void;
+}> = ({ scenes, onSelect, onRename, onCopy, onOpenManager }) => {
   const [active, setActive] = useState(scenes.active);
   useEffect(() => setActive(scenes.active), [scenes.active]);
   const select = (i: number) => {
@@ -81,17 +82,6 @@ export const ScenesStrip: React.FC<{
           onSelect: () => onCopy(i, to),
         })),
     },
-    {
-      label: `Level (${levelLabel(scenes.levels[i] ?? 0)})`,
-      icon: <Volume2 size={16} />,
-      help: HELP.sceneLevel,
-      submenu: LEVEL_STEPS.map((db) => ({
-        label: levelLabel(db),
-        icon: <span style={{ width: '16rem' }}>{(scenes.levels[i] ?? 0) === db ? '✓' : ''}</span>,
-        help: HELP.sceneLevel,
-        onSelect: () => onLevel(i, db),
-      })),
-    },
     ...midiItems,
   ];
 
@@ -114,6 +104,12 @@ export const ScenesStrip: React.FC<{
       help: HELP.sceneRename,
       onSelect: () => startRename(active),
     },
+    {
+      label: 'Scene Manager',
+      icon: <LayoutGrid size={16} />,
+      help: HELP.sceneManager,
+      onSelect: onOpenManager,
+    },
   ];
 
   const level = scenes.levels[active] ?? 0;
@@ -125,7 +121,7 @@ export const ScenesStrip: React.FC<{
         flexDirection: 'column',
         alignItems: 'stretch',
         gap: '5rem',
-        width: `${BTN_W * 4 + 3 * 4}rem`,
+        width: `${BTN_W * 5 + GAP * 4}rem`,
       }}
     >
       {renaming !== null ? (
@@ -186,8 +182,8 @@ export const ScenesStrip: React.FC<{
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(4, ${BTN_W}rem)`,
-          gap: '4rem',
+          gridTemplateColumns: `repeat(5, ${BTN_W}rem)`,
+          gap: `${GAP}rem`,
         }}
       >
         {Array.from({ length: NUM_SCENES }, (_, i) => {
@@ -221,6 +217,26 @@ export const ScenesStrip: React.FC<{
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={onOpenManager}
+          aria-label="Scene Manager"
+          {...helpProps(HELP.sceneManager)}
+          style={{
+            width: `${BTN_W}rem`,
+            height: `${BTN_H}rem`,
+            padding: 0,
+            borderRadius: '4rem',
+            cursor: 'pointer',
+            display: 'grid',
+            placeItems: 'center',
+            color: WHITE,
+            background: 'transparent',
+            border: BORDER,
+          }}
+        >
+          <LayoutGrid size={13} />
+        </button>
       </div>
       {nameMenu.menuAnchor && (
         <TileMenu anchor={nameMenu.menuAnchor} onClose={nameMenu.closeMenu} items={nameMenuItems} />

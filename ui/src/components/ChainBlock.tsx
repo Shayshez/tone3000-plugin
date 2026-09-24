@@ -11,7 +11,6 @@ import {
   Gauge,
   Headphones,
   Info,
-  Layers,
   Link,
   Plus,
   Power,
@@ -55,7 +54,7 @@ import { BlockInfoPanel } from './BlockInfoPanel';
 import { meterId, useBlockCorrelation } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { useParameter } from '../hooks/useParameter';
-import type { BlockParamName, ChainItem, SceneParam, ToneBlock, ToneSummary } from '../types/chain';
+import type { BlockParamName, ChainItem, ToneBlock, ToneSummary } from '../types/chain';
 import { catalogModelCount, type Model, type Tone } from '../types/tone';
 import {
   isEqFlat,
@@ -78,11 +77,9 @@ import { formatLabel, gearLabel } from '../t3k/labels';
 import { AvatarImage } from './AvatarFallback';
 import { FormatBadge } from './FormatBadge';
 import { HELP, helpProps } from './helpText';
+import { ChannelSelector } from './channels';
 import { useBlockNormalizeControlEnabled, useBlockSizeControlEnabled } from './uiPreferences';
 import { useToast } from './Toast';
-import { TileMenu } from './TileMenu';
-import type { TileMenuItem } from './TileMenu';
-import { useTileMenu } from '../hooks/useTileMenu';
 import { ChromeIconButton, ChromeTextButton, chromeIcon } from './ChromeIconButton';
 import { T3K_API } from '../t3k/config';
 import { useDetailViewStack, type DetailView } from '../hooks/useDetailViewStack';
@@ -1899,36 +1896,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
     actions.resetBlockEq(blockId);
   }, [actions, blockId]);
 
-  // Scenes: "Per Scene" toggle for this block's scene-capable params (see
-  // SCENE_PARAMS), offered on the knob's right-click menu; a per-scene knob
-  // carries a small dot next to its label.
-  const perSceneList = block.params.perScene ?? [];
-  const isPerScene = (param: SceneParam) => perSceneList.includes(param);
-  // Right-click on the header's EQ area: EQ Per Scene (the whole block EQ).
-  const eqSceneMenu = useTileMenu();
-  const eqSceneMenuEl = eqSceneMenu.menuAnchor ? (
-    <TileMenu
-      anchor={eqSceneMenu.menuAnchor}
-      onClose={eqSceneMenu.closeMenu}
-      items={[
-        {
-          label: isPerScene('eq') ? 'EQ Per Scene ✓' : 'EQ Per Scene',
-          icon: <Layers size={16} />,
-          help: HELP.perScene,
-          onSelect: () => actions.setBlockParamPerScene(blockId, 'eq', !isPerScene('eq')),
-        },
-      ]}
-    />
-  ) : null;
-  const perSceneMenu = (param: SceneParam): TileMenuItem[] => [
-    {
-      label: isPerScene(param) ? 'Per Scene ✓' : 'Per Scene',
-      icon: <Layers size={16} />,
-      help: HELP.perScene,
-      onSelect: () => actions.setBlockParamPerScene(blockId, param, !isPerScene(param)),
-    },
-  ];
-
   const handleShare = useCallback(async () => {
     if (await actions.shareBlock(block)) toast.show('Link Copied');
   }, [actions, block, toast]);
@@ -2288,34 +2255,17 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 >
                   <Power />
                 </ChromeIconButton>
+                <ChannelSelector block={block} actions={actions} />
                 <span
-                  onContextMenu={eqSceneMenu.openMenu}
-                  {...helpProps(HELP.perScene)}
                   style={{
                     fontFamily: FONT_MONO,
                     fontSize: '16rem',
                     fontWeight: 400,
                     color: WHITE,
-                    cursor: 'context-menu',
                   }}
                 >
-                  {isPerScene('eq') && (
-                    <span
-                      aria-hidden
-                      style={{
-                        display: 'inline-block',
-                        width: '6rem',
-                        height: '6rem',
-                        borderRadius: '50%',
-                        background: BRAND_YELLOW,
-                        marginRight: '6rem',
-                        verticalAlign: 'middle',
-                      }}
-                    />
-                  )}
                   EQ
                 </span>
-                {eqSceneMenuEl}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '16rem', flexShrink: 0 }}>
                 <EqClipboardButtons blockId={blockId} />
@@ -2391,8 +2341,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 <KnobControl
                   label="Out"
                   value={outputGain}
-                  menuItems={perSceneMenu('outputGain')}
-                  marked={isPerScene('outputGain')}
                   onChange={(val) => {
                     setOutputGain(val);
                     setParam('outputGain', val);
@@ -2641,6 +2589,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                 >
                   <Power />
                 </ChromeIconButton>
+                <ChannelSelector block={block} actions={actions} />
                 <span
                   style={{
                     fontFamily: FONT_MONO,
@@ -2663,7 +2612,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     pill already does, since params.eq here is this
                     wrapper's own BlockEq (every ChainBlock carries one). */}
                 <div
-                  onContextMenu={eqSceneMenu.openMenu}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -2676,7 +2624,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     boxSizing: 'border-box',
                   }}
                 >
-                  {eqSceneMenuEl}
                   {showEq && (
                     <>
                       <ChromeIconButton
@@ -3546,6 +3493,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               >
                 <Power />
               </ChromeIconButton>
+              <ChannelSelector block={block} actions={actions} />
 
               {/* With per-block choice off, a block matching the new-block
                 default has nothing to say: the chip only appears on a
@@ -3617,7 +3565,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
               relative to info. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '24rem', flexShrink: 0 }}>
               <div
-                onContextMenu={eqSceneMenu.openMenu}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -3631,7 +3578,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                   boxSizing: 'border-box',
                 }}
               >
-                {eqSceneMenuEl}
                 {showEq && (
                   <>
                     <ChromeIconButton
@@ -3853,8 +3799,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       <KnobControl
                         label="In"
                         value={inputGain}
-                        menuItems={perSceneMenu('inputGain')}
-                        marked={isPerScene('inputGain')}
                         onChange={(val) => {
                           setInputGain(val);
                           setParam('inputGain', val);
@@ -4496,8 +4440,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           <KnobControl
                             label="Delay"
                             value={predelay}
-                            menuItems={perSceneMenu('predelay')}
-                            marked={isPerScene('predelay')}
                             onChange={(val) => {
                               setPredelay(val);
                               setParam('predelay', val);
@@ -4666,8 +4608,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                           <KnobControl
                             label="Mix"
                             value={mix}
-                            menuItems={perSceneMenu('mix')}
-                            marked={isPerScene('mix')}
                             onChange={(val) => {
                               setMix(val);
                               setParam('mix', val);
@@ -4741,8 +4681,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                     <KnobControl
                       label="Mix"
                       value={mix}
-                      menuItems={perSceneMenu('mix')}
-                      marked={isPerScene('mix')}
                       onChange={(val) => {
                         setMix(val);
                         setParam('mix', val);
@@ -4827,8 +4765,6 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
                       <KnobControl
                         label="Out"
                         value={outputGain}
-                        menuItems={perSceneMenu('outputGain')}
-                        marked={isPerScene('outputGain')}
                         onChange={(val) => {
                           setOutputGain(val);
                           setParam('outputGain', val);

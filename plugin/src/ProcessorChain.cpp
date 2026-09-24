@@ -943,11 +943,19 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
   // processing until the new model is spliced in by
   // applyPreparedModelToChainBlock (which also stamps the new type);
   // `modelLoading` drives the UI's loading state meanwhile.
+  // Channels hold versions of the same kind of block: a swap to another
+  // kind (amp <-> IR) drops the other channels; otherwise they keep their
+  // own tones, and their cached model bytes survive the swap.
+  if (parsed.type != block->type)
+    for (int c = 0; c < kNumBlockChannels; ++c)
+      if (c != block->activeChannel)
+        block->channels[static_cast<size_t>(c)] = juce::ValueTree();
+  for (auto it = block->modelCache.begin(); it != block->modelCache.end();)
+    it = sceneReferencesModel(block->id, it->first) ? std::next(it) : block->modelCache.erase(it);
   setToneOnBlock(*block, parsed.toneId, parsed.toneJson, parsed.toneVar);
   block->activeModelId = parsed.firstModelId;
   block->modelLoading = true;
   block->loadFailed = false;
-  block->modelCache.clear();
 
   // Bug fix, 2026-09-17: a *local* file drop onto an already-occupied tile
   // (GalleryBlock.tsx's own drop, including the split IR/Cab zone) kept
@@ -991,6 +999,7 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
 
   bumpChainRevision();
   queueToneLoad(blockId, parsed.firstModelId, parsed.modelUrl, parsed.modelName, parsed.type);
+  refreshWarmEngines();
 
   return true;
 }
@@ -1787,7 +1796,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     bool reverse = false;
     int irNumChannels = 1;
     juce::var eq;
-    juce::Array<juce::var> perScene;  // params stored per scene (see Scenes)
+    int channel = 0;                  // active channel A-D (see Scenes)
+    juce::Array<juce::var> channelsUsed;  // per slot: holds settings?
     bool rtFailed = false;
     // DUAL_MONO only: the two fixed child slots (each 0 or 1 row - see
     // ChainBlock::dualLeft/dualRight) and recombine controls.
@@ -1808,7 +1818,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   bool canUndo = false, canRedo = false;
   bool canPaste = false, canPasteEq = false, atDefault = false;
   int sceneActive = 0;
-  juce::Array<juce::var> sceneNames, sceneLevels;
+  juce::Array<juce::var> sceneNames, sceneLevels, sceneBlocks;
   juce::String presetId, presetName;
 
   {
@@ -1922,8 +1932,10 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.trimRelaxed = block->trimRelaxed;
         row.reverse = block->reverseEnabled;
         row.eq = block->eq.toVar();
-        for (const auto& name : block->perSceneParams)
-          row.perScene.add(name);
+        row.channel = block->activeChannel;
+        for (int c = 0; c < kNumBlockChannels; ++c)
+          row.channelsUsed.add(c == block->activeChannel ||
+                               block->channels[static_cast<size_t>(c)].isValid());
 
         if (block->type == ChainBlockType::DUAL_MONO) {
           copyLane(block->dualLeft, row.dualLeft);
@@ -1959,9 +1971,20 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     canPaste = blockClipboardSettings.isValid();
     canPasteEq = eqClipboardBands.isArray();
     sceneActive = activeScene;
-    for (const auto& scene : scenes) {
+    for (int s = 0; s < kNumScenes; ++s) {
+      const Scene scene = effectiveScene(s);
       sceneNames.add(scene.name);
       sceneLevels.add(scene.levelDb);
+      // Per block {enabled, channel} (the Scene Manager's matrix). Blocks a
+      // scene hasn't seen yet are omitted; the UI shows the live state then.
+      auto* blocksObj = new juce::DynamicObject();
+      for (const auto& [id, state] : scene.blocks) {
+        auto* cell = new juce::DynamicObject();
+        cell->setProperty("enabled", state.enabled);
+        cell->setProperty("channel", state.channel);
+        blocksObj->setProperty(juce::Identifier(juce::String(id)), juce::var(cell));
+      }
+      sceneBlocks.add(juce::var(blocksObj));
     }
     atDefault = isChainAtDefault();
     presetId = activePresetId;
@@ -2063,7 +2086,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("trimRelaxed", row.trimRelaxed);
       params->setProperty("reverse", row.reverse);
       params->setProperty("eq", row.eq);
-      params->setProperty("perScene", row.perScene);
+      params->setProperty("channel", row.channel);
+      params->setProperty("channelsUsed", row.channelsUsed);
       params->setProperty("dualLeftPan", row.dualLeftPan);
       params->setProperty("dualRightPan", row.dualRightPan);
       params->setProperty("dualWidth", row.dualWidth);
@@ -2120,6 +2144,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     scenesObj->setProperty("active", sceneActive);
     scenesObj->setProperty("names", sceneNames);
     scenesObj->setProperty("levels", sceneLevels);
+    scenesObj->setProperty("blocks", sceneBlocks);
     state->setProperty("scenes", juce::var(scenesObj));
   }
   // True when nothing distinguishes this state from a fresh instance (see
@@ -2303,6 +2328,10 @@ bool TONE3000Processor::setBlockSlimSize(const std::string& blockId, double slim
 
   bumpChainRevision();
   return true;
+}
+
+void TONE3000Processor::requestIrShapeRebuild(ChainBlock& block) {
+  queueIrShapeRebuild(*this, block, loadingThreadPool);
 }
 
 namespace {

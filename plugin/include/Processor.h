@@ -617,44 +617,46 @@ public:
   juce::String restoreDeletedPreset();
 
   // ####################
-  // SCENES
+  // SCENES & CHANNELS
   // ####################
-  // Eight scenes per chain (the chain's structure never changes between
-  // them - that's what presets are for). A scene stores, per block: bypass,
-  // the selected model (the dropdown), and any parameter the user marked
-  // "Per Scene" (see ChainBlock::perSceneParams); plus a scene name and a
-  // scene output level. Everything else is shared by all scenes, so editing
-  // it changes every scene - the selected model plays the role of a
-  // Fractal-style "channel".
+  // Fractal-style. Every block has up to kNumBlockChannels CHANNELS (A-D):
+  // full versions of the block - model, knobs, EQ, IR shape, Dual Mono
+  // image... - everything but bypass. A SCENE stores, per block, only bypass
+  // and which channel; plus a scene name and a scene output level. Editing a
+  // block edits its active channel, i.e. every scene that uses that channel.
+  // The chain's structure never changes between scenes (presets do that).
   //
-  // The ACTIVE scene is always the live chain itself: nothing is copied on
-  // every edit. The live chain is captured into the active scene's slot when
-  // switching away and whenever scenes are serialized (session, presets,
-  // undo), so edits persist per scene automatically. Switching applies only
-  // the target scene's per-scene values; shared values are never touched.
-  static constexpr int kNumScenes = 8;
-  // Per-scene-capable parameters (bypass and model are always per scene).
-  static const std::vector<juce::String>& sceneParamNames();
+  // The ACTIVE scene and each block's ACTIVE channel are the live state
+  // itself: nothing is copied per edit. Live state is captured into its
+  // slot when switching away and whenever state is serialized (session,
+  // presets, undo). Switches are gapless: params glide on the blocks'
+  // smoothers, bypass on its wet fade, a different NAM model crossfades from
+  // a warm engine (see ChainBlock::warmNamEngines).
+  static constexpr int kNumScenes = 4;
 
-  // Switch to scene `index` (0-based). Gapless: parameter moves glide on the
-  // blocks' own smoothers, bypass on its wet fade. Not an undo step. Returns
-  // false for a bad index; true (no-op) if already active.
+  // Switch to scene `index` (0-based). Not an undo step. False for a bad
+  // index; true (no-op) if already active.
   bool selectScene(int index);
   int getActiveScene() const;
   bool renameScene(int index, const juce::String& name);
   // Scene output level in dB (-24..+12), applied after the Output knob.
   bool setSceneLevel(int index, double levelDb);
-  // Overwrite scene `to` with scene `from` (the live chain if `from` is
-  // active). If `to` is the active scene, the chain is re-applied.
+  // Overwrite scene `to` with scene `from` (keeps `to`'s name). If `to` is
+  // active, the chain is re-applied.
   bool copyScene(int from, int to);
-  // Make one of a block's parameters (see sceneParamNames) per-scene or
-  // shared. Turning it per-scene seeds every scene with the current value;
-  // turning it shared keeps the current value for all scenes. Undoable.
-  bool setBlockParamPerScene(const std::string& blockId, const juce::String& param,
-                             bool perScene);
-  // Whether a scene switch to `modelId` on this block will be gapless right
-  // now (its warm engine is ready). The UI can show a "preparing" state.
-  bool isSceneModelWarm(const std::string& blockId, int modelId) const;
+  // Set a block's bypass in one scene (the scene manager's grid); the
+  // active scene is the live block (same as setBlockParam "enabled").
+  bool setSceneBlockEnabled(int sceneIndex, const std::string& blockId, bool enabled);
+  // Choose a block's channel in one scene (the scene manager's grid).
+  bool setSceneBlockChannel(int sceneIndex, const std::string& blockId, int channel);
+
+  // Switch a block to channel `channel` (0-3), in the active scene. An
+  // unused channel starts as a copy of the current one. Undoable.
+  bool selectBlockChannel(const std::string& blockId, int channel);
+  // Overwrite channel `to` with channel `from` (the live block when active).
+  bool copyBlockChannel(const std::string& blockId, int from, int to);
+
+
   // Move a preset by `delta` steps within its browser section (negative =
   // earlier). The custom order is user-facing truth: prev/next stepping and
   // MIDI program-change numbers follow it (see loadPresetAtIndex).
@@ -1168,21 +1170,12 @@ private:
   bool isChainAtDefault() const;
 
   PresetManager presetManager;
-  // Scenes (see the public SCENES section). Guarded by chainMutex. Slot
-  // `activeScene` may be stale: the live chain is its truth (see
-  // effectiveScene / captureLiveScene).
+  // Scenes (see the public SCENES & CHANNELS section). Guarded by
+  // chainMutex. Slot `activeScene` may be stale: the live chain is its
+  // truth (see effectiveScene / captureLiveScene).
   struct SceneBlockState {
     bool enabled = true;
-    // Selected model; 0 = none (EQ / Dual Mono wrapper / not captured).
-    int modelId = 0;
-    // That model's catalog object ({id, name, model_url, ...}) so a switch
-    // can re-point the block even after its tone JSON forgot it (native
-    // only keeps the active model's metadata).
-    juce::var modelData;
-    // Values of the block's per-scene params (normalized 0..1).
-    std::map<juce::String, float> params;
-    // The block's EQ, when "eq" is per scene (BlockEq::toValueTree).
-    juce::ValueTree eq;
+    int channel = 0;
   };
   struct Scene {
     juce::String name;
@@ -1193,6 +1186,7 @@ private:
   int activeScene = 0;
   // Output-stage scene level (host rate; see processBlock's output stage).
   std::atomic<float> sceneLevelDb{0.0f};
+  juce::SmoothedValue<float> sceneGainSmoother;
   // Host "scene" parameter plumbing (message thread; see parameterChanged).
   std::atomic<bool> osSettingsDirty{false};
   std::atomic<int> pendingSceneFromParam{-1};
@@ -1201,32 +1195,43 @@ private:
   // Push the active scene into the "scene" parameter (host sees it) without
   // re-triggering a switch. Message thread, chainMutex NOT held.
   void syncSceneParam();
-  juce::SmoothedValue<float> sceneGainSmoother;
 
-  SceneBlockState captureSceneBlock(const ChainBlock& block) const;
-  // The live chain as a Scene (name/level from the active slot).
   Scene captureLiveScene() const;
-  // Scene `index` as it currently stands (live chain when active).
   Scene effectiveScene(int index) const;
-  void applySceneBlock(const SceneBlockState& state, ChainBlock& block);
-  // Gapless NAM model change: swap in a warm engine and crossfade from the
-  // current one. False when no warm engine for `modelId` is ready (the
-  // caller then falls back to a regular load).
-  bool swapToWarmNamEngine(ChainBlock& block, int modelId, const juce::var& modelData);
-  // Keep every NAM block's warm pool matching the models its OTHER scenes
-  // select: queue background prepares for missing ones, drop unneeded ones,
-  // reclaim finished crossfade engines. Caller holds chainMutex.
-  void refreshWarmEngines();
-  // Worker-thread half of a prewarm (fetch-or-cache, prepare, install).
-  void prewarmModelInBackground(const std::string& blockId, int modelId, juce::var modelData);
-  // Model bytes a stored scene needs, so presets/sessions embed them.
-  bool sceneReferencesModel(const std::string& blockId, int modelId) const;
   void applyScene(const Scene& scene);
   void serializeScenes(juce::ValueTree& snapshot) const;
   void restoreScenes(const juce::ValueTree& snapshot);
   static void forEachSceneBlockConst(const Lane& lane,
                                      const std::function<void(const ChainBlock&)>& fn);
   static void forEachSceneBlock(Lane& lane, const std::function<void(ChainBlock&)>& fn);
+
+  // Channels: a block's live state as a channel tree (settings minus
+  // identity/bypass/NAM size, plus the active model's catalog object).
+  juce::ValueTree captureChannel(const ChainBlock& block) const;
+  // Apply a channel tree to the live block (keeps bypass and NAM size);
+  // model changes crossfade from a warm engine when possible.
+  void applyChannel(ChainBlock& block, const juce::ValueTree& channel);
+  // Switch without a history entry (scene switches); caller holds the lock.
+  void switchBlockChannel(ChainBlock& block, int channel);
+  // Queue the off-thread IR kernel rebuild after shape params moved.
+  void requestIrShapeRebuild(ChainBlock& block);
+
+  // Gapless NAM model change: swap in a warm engine and crossfade from the
+  // current one. False when no warm engine for `modelId` is ready (the
+  // caller then falls back to a regular load).
+  bool swapToWarmNamEngine(ChainBlock& block, int modelId, const juce::var& modelData);
+  // Keep every NAM block's warm pool matching the models its OTHER channels
+  // use: queue background prepares for missing ones, drop unneeded ones,
+  // reclaim finished crossfade engines. Caller holds chainMutex.
+  void refreshWarmEngines();
+  void prewarmModelInBackground(const std::string& blockId, int modelId, juce::var modelData);
+  // Model bytes a non-active channel needs, so presets/sessions embed them.
+  bool sceneReferencesModel(const std::string& blockId, int modelId) const;
+public:
+  // Whether switching to `modelId` on this block will be gapless right now
+  // (its warm engine is ready) - the UI can show a "preparing" state.
+  bool isSceneModelWarm(const std::string& blockId, int modelId) const;
+private:
 
   // Most recent deletePreset, for restoreDeletedPreset (message thread only).
   juce::String lastDeletedPresetId;

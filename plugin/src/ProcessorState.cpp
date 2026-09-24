@@ -174,22 +174,39 @@ juce::ValueTree TONE3000Processor::serializeBlockSettings(const ChainBlock& bloc
     blockState.appendChild(block.eq.toValueTree(), nullptr);
   }
 
-  if (!block.perSceneParams.empty()) {
-    juce::StringArray names;
-    for (const auto& name : block.perSceneParams)
-      names.add(name);
-    blockState.setProperty("perScene", names.joinIntoString(","), nullptr);
-  }
+  // Channels: the active index plus every OTHER used slot (the active one
+  // is this very tree). Stored slots are channel trees (captureChannel).
+  if (block.activeChannel != 0)
+    blockState.setProperty("channel", block.activeChannel, nullptr);
+  juce::ValueTree channelsTree("Channels");
+  for (int c = 0; c < kNumBlockChannels; ++c)
+    if (c != block.activeChannel && block.channels[static_cast<size_t>(c)].isValid()) {
+      juce::ValueTree slot = block.channels[static_cast<size_t>(c)].createCopy();
+      slot.setProperty("index", c, nullptr);
+      channelsTree.appendChild(slot, nullptr);
+    }
+  if (channelsTree.getNumChildren() > 0)
+    blockState.appendChild(channelsTree, nullptr);
 
   return blockState;
 }
 
 void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueTree& blockState) {
-  block.perSceneParams.clear();
-  for (const auto& name :
-       juce::StringArray::fromTokens(blockState.getProperty("perScene").toString(), ",", ""))
-    if (name.isNotEmpty())
-      block.perSceneParams.insert(name);
+  // Channels only when the tree carries block identity (a full block
+  // state); a bare channel tree applied by a channel switch (see
+  // applyChannel) must leave the slots alone.
+  if (blockState.hasProperty("id")) {
+    block.activeChannel =
+        juce::jlimit(0, kNumBlockChannels - 1, static_cast<int>(blockState.getProperty("channel", 0)));
+    for (auto& slot : block.channels)
+      slot = juce::ValueTree();
+    const juce::ValueTree channelsTree = blockState.getChildWithName("Channels");
+    for (const auto& slot : channelsTree) {
+      const int index = static_cast<int>(slot.getProperty("index", -1));
+      if (index >= 0 && index < kNumBlockChannels && index != block.activeChannel)
+        block.channels[static_cast<size_t>(index)] = slot.createCopy();
+    }
+  }
   block.enabled = static_cast<bool>(blockState.getProperty("enabled", true));
   block.normalizeEnabled = static_cast<bool>(blockState.getProperty("normalize", true));
   block.inputGainNormalized = static_cast<float>(blockState.getProperty("inputGain", 0.5f));

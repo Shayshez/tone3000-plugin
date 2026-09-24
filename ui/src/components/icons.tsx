@@ -30,10 +30,12 @@ import {
   Info as LInfo,
   Laptop as LLaptop,
   Layers as LLayers,
+  LayoutGrid as LLayoutGrid,
   Link as LLink,
   LogIn as LLogIn,
   LogOut as LLogOut,
   MidiPort as LMidiPort,
+  Minus as LMinus,
   Pencil as LPencil,
   Plus as LPlus,
   PlusCircle as LPlusCircle,
@@ -105,10 +107,12 @@ export const Home = scaled(LHome, 'Home');
 export const Info = scaled(LInfo, 'Info');
 export const Laptop = scaled(LLaptop, 'Laptop');
 export const Layers = scaled(LLayers, 'Layers');
+export const LayoutGrid = scaled(LLayoutGrid, 'LayoutGrid');
 export const Link = scaled(LLink, 'Link');
 export const LogIn = scaled(LLogIn, 'LogIn');
 export const LogOut = scaled(LLogOut, 'LogOut');
 export const MidiPort = scaled(LMidiPort, 'MidiPort');
+export const Minus = scaled(LMinus, 'Minus');
 export const Pencil = scaled(LPencil, 'Pencil');
 export const Plus = scaled(LPlus, 'Plus');
 export const PlusCircle = scaled(LPlusCircle, 'PlusCircle');

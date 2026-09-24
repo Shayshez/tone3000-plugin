@@ -277,8 +277,8 @@ interface FaceplateProps {
   scenes?: ScenesState;
   onSelectScene?: (index: number) => void;
   onRenameScene?: (index: number, name: string) => void;
-  onSceneLevel?: (index: number, levelDb: number) => void;
   onCopyScene?: (from: number, to: number) => void;
+  onOpenSceneManager?: () => void;
   /** Plugin is fed a real stereo source; shows the input-mode button. */
   stereoInput: boolean;
   inputMode: InputMode;
@@ -294,8 +294,8 @@ export const Faceplate = React.memo(function Faceplate({
   scenes,
   onSelectScene,
   onRenameScene,
-  onSceneLevel,
   onCopyScene,
+  onOpenSceneManager,
 }: FaceplateProps) {
   const [inputLevel, setInputLevel, onInputDrag] = useParameter('inputLevel', 'slider');
   const [toneBass, setToneBass, onBassDrag] = useParameter('toneBass', 'slider');
@@ -458,15 +458,15 @@ export const Faceplate = React.memo(function Faceplate({
           gap: '28rem',
         }}
       >
-        {scenes && onSelectScene && onRenameScene && onSceneLevel && onCopyScene && (
+        {scenes && onSelectScene && onRenameScene && onCopyScene && onOpenSceneManager && (
           // Between the tone stack and the output section: scenes are the
           // live, one-hand switches, next to the output they shape.
           <ScenesStrip
             scenes={scenes}
             onSelect={onSelectScene}
             onRename={onRenameScene}
-            onLevel={onSceneLevel}
             onCopy={onCopyScene}
+            onOpenManager={onOpenSceneManager}
           />
         )}
         <OutputGainKnob />

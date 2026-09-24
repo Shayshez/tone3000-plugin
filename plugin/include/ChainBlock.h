@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <map>
@@ -176,6 +177,8 @@ inline IrCategory irCategoryFromString(const juce::String& s) {
 constexpr double kWetFadeSeconds = 0.025;
 // Scene switch crossfade between two warm NAM engines (both run meanwhile).
 constexpr double kSceneXfadeSeconds = 0.03;
+// Channels per block (see ChainBlock::channels).
+constexpr int kNumBlockChannels = 4;
 
 // Minimum tiles in the chain. The chain always presents at least this many
 // blocks (tones + insert placeholders), and always at least one insert
@@ -223,6 +226,17 @@ struct ChainBlock {
       for (const auto& model : *models)
         if (static_cast<int>(model["id"]) == modelId)
           return true;
+    return false;
+  }
+
+  // True when one of the block's other (inactive) channels uses modelId: its
+  // bytes must stay cached and its engine warm (see Scenes & Channels).
+  bool channelReferencesModel(int modelId) const {
+    for (int c = 0; c < static_cast<int>(channels.size()); ++c)
+      if (c != activeChannel && channels[static_cast<size_t>(c)].isValid() &&
+          static_cast<int>(channels[static_cast<size_t>(c)].getProperty("activeModelId", 0)) ==
+              modelId)
+        return true;
     return false;
   }
 
@@ -559,12 +573,15 @@ struct ChainBlock {
   // skipped entirely (single branch per audio block).
   BlockEq eq;
 
-  // Scenes: which of this block's parameters are stored per scene rather
-  // than shared by all scenes (see TONE3000Processor's scene section).
-  // Bypass and the selected model are always per scene; these are the
-  // opt-in extras - any of kSceneParams ("inputGain", "outputGain", "mix",
-  // "predelay", "eq"). Persisted with the block's settings.
-  std::set<juce::String> perSceneParams;
+  // Channels (Fractal-style): up to kNumBlockChannels full versions of this
+  // block - model, knobs, EQ, IR shape, Dual Mono image... everything except
+  // bypass (a scene's call) and identity/tone. Scenes pick a channel per
+  // block. The ACTIVE channel is the live block itself; its slot here may be
+  // stale and is refreshed on switch-away/serialize. An invalid slot has
+  // never been used and starts as a copy of the live block when selected.
+  // See TONE3000Processor's CHANNELS section (ProcessorScenes.cpp).
+  int activeChannel = 0;
+  std::array<juce::ValueTree, 4> channels;
 
   // Spectrum analyzer for the EQ editor backdrop. Only fed by the audio thread
   // while the UI has this block's EQ view open (atomic enabled flag).

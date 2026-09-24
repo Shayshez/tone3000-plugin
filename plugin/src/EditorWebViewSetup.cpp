@@ -690,11 +690,34 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 editor->processor.copyScene(static_cast<int>(args[0]), static_cast<int>(args[1])));
           }))
       .withNativeFunction(
-          // (blockId, param, bool): make a block param per-scene or shared.
-          "setBlockParamPerScene",
+          // (blockId, channel 0-3): switch a block's active channel.
+          "selectBlockChannel",
+          guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.selectBlockChannel(
+                args[0].toString().toStdString(), static_cast<int>(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, from, to): copy one channel's settings over another.
+          "copyBlockChannel",
           guarded(3, false, [editor](const juce::Array<juce::var>& args) {
-            return juce::var(editor->processor.setBlockParamPerScene(
-                args[0].toString().toStdString(), args[1].toString(), coerceBool(args[2])));
+            return juce::var(editor->processor.copyBlockChannel(args[0].toString().toStdString(),
+                                                                static_cast<int>(args[1]),
+                                                                static_cast<int>(args[2])));
+          }))
+      .withNativeFunction(
+          // (scene, blockId, bool): a block's bypass state in one scene.
+          "setSceneBlockEnabled",
+          guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setSceneBlockEnabled(
+                static_cast<int>(args[0]), args[1].toString().toStdString(), coerceBool(args[2])));
+          }))
+      .withNativeFunction(
+          // (scene, blockId, channel): which channel a block uses in one scene.
+          "setSceneBlockChannel",
+          guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setSceneBlockChannel(
+                static_cast<int>(args[0]), args[1].toString().toStdString(),
+                static_cast<int>(args[2])));
           }))
       .withNativeFunction(
           // (): undo the most recent preset delete (the toast's Undo).

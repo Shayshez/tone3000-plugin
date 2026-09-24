@@ -7,6 +7,7 @@ import { arrayMove } from '@dnd-kit/helpers';
 import { ArrowLeftRight, ClipboardPaste, Home, Plus, Power, Trash2 } from './icons';
 import { ChromeIconButton, ChromeTextButton } from './ChromeIconButton';
 import { HELP, helpProps } from './helpText';
+import { ChannelBadge, channelMenuItems } from './channels';
 import { useHorizontalWheelScroll } from '../hooks/useHorizontalWheelScroll';
 import { getUiScale } from '../hooks/useUiScale';
 import { useChainActions } from '../hooks/useChainActions';
@@ -536,6 +537,12 @@ const ChainMapTile: React.FC<{
             {BLOCK_TYPE_LABEL[item.blockType]}
           </ChromeTextButton>
         )}
+        {/* Channel letter (only once the block uses 2+ channels). */}
+        <ChannelBadge
+          block={item}
+          onLight={isCurrent}
+          style={{ position: 'absolute', top: '3rem', right: '4rem' }}
+        />
         {/* EQ shortcut: always present and always clickable (jumps in AND
           opens the EQ view directly, unlike the rest of the chip), so it
           reads as a standing affordance rather than something that only
@@ -618,6 +625,7 @@ const ChainMapTile: React.FC<{
                   },
                 ]
               : []),
+            ...channelMenuItems(item, actions),
             ...addSlotMenuItems(index, slotLeft, slotRight, actions),
             {
               label: 'Delete',

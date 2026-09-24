@@ -20,6 +20,7 @@ import { RetryLoadBadge } from './RetryLoadBadge';
 import { meterId } from '../hooks/useMeters';
 import { useChainActions } from '../hooks/useChainActions';
 import { HELP, helpProps, toneTileHelp } from './helpText';
+import { channelLetter, channelMenuItems, usesChannels } from './channels';
 import type { ChainItem, ToneBlock } from '../types/chain';
 import { BLOCK_TYPE_LABEL, isEqFlat, isInsertSlot } from '../types/chain';
 import { ChromeIconButton } from './ChromeIconButton';
@@ -30,7 +31,16 @@ export { useTileMenu };
 import type { TileMenuItem } from './TileMenu';
 import type { ChainActions } from '../hooks/useChainActions';
 import { useToast } from './Toast';
-import { FONT_MONO, HIGHLIGHT, ICON_SIZE, SURFACE, SURFACE_RAISED, WHITE } from './theme';
+import {
+  BLACK,
+  BRAND_YELLOW,
+  FONT_MONO,
+  HIGHLIGHT,
+  ICON_SIZE,
+  SURFACE,
+  SURFACE_RAISED,
+  WHITE,
+} from './theme';
 
 /**
  * Gallery view of a chain block: a square tone image with quick actions
@@ -361,10 +371,12 @@ export const StereoGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
     a lone glyph with no readable text broke the pattern every other block
     type already followed. Clear of the hover-only top action strip and
     BlockLed's own bottom-right corner. */
-const TileChannelBadge: React.FC<{ mode: 'dual' | 'stereo' | 'mono'; typeLabel?: string }> = ({
-  mode,
-  typeLabel,
-}) => (
+const TileChannelBadge: React.FC<{
+  mode: 'dual' | 'stereo' | 'mono';
+  typeLabel?: string;
+  /** Active channel letter, once the block has more than one channel. */
+  channel?: string;
+}> = ({ mode, typeLabel, channel }) => (
   <div
     style={{
       position: 'absolute',
@@ -395,6 +407,22 @@ const TileChannelBadge: React.FC<{ mode: 'dual' | 'stereo' | 'mono'; typeLabel?:
         {typeLabel}
       </span>
     )}
+    {channel && (
+      <span
+        style={{
+          fontFamily: FONT_MONO,
+          fontSize: '11rem',
+          fontWeight: 700,
+          lineHeight: 1,
+          color: BLACK,
+          backgroundColor: BRAND_YELLOW,
+          borderRadius: '2rem',
+          padding: '1rem 3rem',
+        }}
+      >
+        {channel}
+      </span>
+    )}
   </div>
 );
 
@@ -417,7 +445,11 @@ const DualMonoTileImage: React.FC<{ block: ToneBlock; size: number }> = ({ block
         block" at a glance the way the old generic glyph did. Same
         abbreviated label ChainMapStrip's BLOCK_TYPE_LABEL already uses for
         this type. */}
-    <TileChannelBadge mode="dual" typeLabel={BLOCK_TYPE_LABEL.dualMono} />
+    <TileChannelBadge
+      mode="dual"
+      typeLabel={BLOCK_TYPE_LABEL.dualMono}
+      channel={usesChannels(block) ? channelLetter(block.params.channel) : undefined}
+    />
   </div>
 );
 
@@ -564,6 +596,7 @@ const TileSurface: React.FC<{
                 <TileChannelBadge
                   mode={stereo || isTrueStereoIr ? 'stereo' : 'mono'}
                   typeLabel={BLOCK_TYPE_LABEL[block.blockType]}
+                  channel={usesChannels(block) ? channelLetter(block.params.channel) : undefined}
                 />
               </>
             )}
@@ -887,6 +920,7 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
                 help: HELP.duplicateBlock,
                 onSelect: () => actions.duplicateBlock(blockId, index + 1),
               },
+              ...channelMenuItems(block, actions),
               ...addSlotMenuItems(index, slotLeft, slotRight, actions),
               ...blockTypeMenuItems(blockId, actions, toast),
               ...powerMidi,

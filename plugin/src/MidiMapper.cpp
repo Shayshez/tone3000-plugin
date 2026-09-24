@@ -13,7 +13,7 @@ int MidiMapper::sceneSelectTargetFor(const juce::String& targetId) {
   if (digits.isEmpty() || !digits.containsOnly("0123456789"))
     return -1;
   const int n = digits.getIntValue();  // 1-based in the id
-  return n >= 1 && n <= 8 ? n - 1 : -1;
+  return n >= 1 && n <= 4 ? n - 1 : -1;
 }
 
 MidiMapper::BlockPowerTarget MidiMapper::blockPowerTargetFor(const juce::String& targetId) {

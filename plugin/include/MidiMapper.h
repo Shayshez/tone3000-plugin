@@ -111,7 +111,7 @@ private:
       ids). Triggers, not toggles: each press walks the preset list. */
   static constexpr const char* kPresetPrevTarget = "presetPrevious";
   static constexpr const char* kPresetNextTarget = "presetNext";
-  /** Scene triggers: "scene1".."scene8" jump to a scene, prev/next step. */
+  /** Scene triggers: "scene1".."scene4" jump to a scene, prev/next step. */
   static constexpr const char* kScenePrevTarget = "scenePrevious";
   static constexpr const char* kSceneNextTarget = "sceneNext";
   static int sceneSelectTargetFor(const juce::String& targetId);  // -1 if not one

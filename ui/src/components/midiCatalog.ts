@@ -40,7 +40,7 @@ export const MAPPABLE_TARGETS: MappableTarget[] = [
   { id: 'scenePrevious', name: 'Previous Scene', group: 'Scenes', kind: 'trigger' },
   { id: 'sceneNext', name: 'Next Scene', group: 'Scenes', kind: 'trigger' },
   ...Array.from(
-    { length: 8 },
+    { length: 4 },
     (_, i): MappableTarget => ({
       id: `scene${i + 1}`,
       name: `Scene ${i + 1}`,

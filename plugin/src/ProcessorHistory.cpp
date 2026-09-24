@@ -252,7 +252,7 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
       for (int j = 0; j < cacheState.getNumChildren(); ++j) {
         const juce::ValueTree cachedModel = cacheState.getChild(j);
         const int modelId = cachedModel.getProperty("modelId");
-        if (!block->referencesModel(modelId) && !sceneReferencesModel(block->id, modelId))
+        if (!block->referencesModel(modelId) && !block->channelReferencesModel(modelId))
           continue;
         if (block->modelCache.find(modelId) != block->modelCache.end())
           continue;
@@ -304,10 +304,10 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   // removed) are simply never read here - the old right-lane content and
   // branch/solo/invert/align state silently fold away, leaving only the old
   // Left lane, with no error and no user-facing message.
-  // Scenes first: the rebuild below filters each block's cached model bytes
-  // and must keep the ones other scenes select (sceneReferencesModel). A
-  // snapshot without scenes (older presets/sessions, reset to default)
-  // leaves all eight empty: each starts as the live chain when visited.
+  // A snapshot without scenes (older presets/sessions, reset to default)
+  // leaves all four empty: each starts as the live chain when visited.
+  // (Channels ride the blocks; the rebuild keeps the cached model bytes
+  // their other channels use - ChainBlock::channelReferencesModel.)
   restoreScenes(snapshot);
   reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
   refreshWarmEngines();

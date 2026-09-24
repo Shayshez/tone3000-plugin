@@ -24,6 +24,7 @@ import { AppBanner, useAppBanner, type BannerAction } from './AppBanner';
 import { useChromeChoreography, BANNER_ANIM_MS } from '../hooks/useChromeChoreography';
 import { DbMeter } from './DbMeter';
 import { TunerView } from './TunerView';
+import { SceneManager } from './SceneManager';
 import { OAuthOverlay } from './OAuthOverlay';
 import { ConnectionModal } from './ConnectionModal';
 import { ToneBrowser } from './ToneBrowser';
@@ -39,6 +40,7 @@ export const Plugin: React.FC = () => {
   // Which tab Settings opens on; banner / gear land on System (setup first).
   const settingsTabRef = useRef<SettingsTab>('system');
   const [showTuner, setShowTuner] = useState(false);
+  const [showSceneManager, setShowSceneManager] = useState(false);
   // Global Bypass dims the chain and faceplate (opacity only - still
   // editable) so a bypassed plugin reads as "off" at a glance, same visual
   // language as a powered-off block. Meters stay bright: they show the dry
@@ -151,7 +153,14 @@ export const Plugin: React.FC = () => {
   // Toggle the full tuner screen; detection itself is always on (see above).
   const handleToggleTuner = useCallback((show: boolean) => {
     setShowTuner(show);
+    if (show) setShowSceneManager(false);
   }, []);
+  // Scene Manager takeover (same middle-band slot as the tuner).
+  const openSceneManager = useCallback(() => {
+    setShowTuner(false);
+    setShowSceneManager(true);
+  }, []);
+  const closeSceneManager = useCallback(() => setShowSceneManager(false), []);
   const closeTuner = useCallback(() => handleToggleTuner(false), [handleToggleTuner]);
 
   // Top-bar actions whose effect lands on the main screen (undo/redo,
@@ -213,6 +222,7 @@ export const Plugin: React.FC = () => {
     <A extends unknown[], R>(fn: (...args: A) => R) =>
       (...args: A): R => {
         if (showTuner) void handleToggleTuner(false);
+        setShowSceneManager(false);
         if (showToneBrowser) {
           loadFlow.clearPendingTargets();
           setShowToneBrowser(false);
@@ -402,7 +412,8 @@ export const Plugin: React.FC = () => {
       setBlockEqPre: actions.setBlockEqPre,
       resetBlockEq: actions.resetBlockEq,
       copyBlockEq: actions.copyBlockEq,
-      setBlockParamPerScene: actions.setBlockParamPerScene,
+      selectBlockChannel: actions.selectBlockChannel,
+      copyBlockChannel: actions.copyBlockChannel,
       pasteBlockEq: actions.pasteBlockEq,
       canPasteEq,
       authenticated,
@@ -503,6 +514,13 @@ export const Plugin: React.FC = () => {
           bottom pad and uses its own scroll padding instead. */}
           {showTuner ? (
             <TunerView onClose={closeTuner} />
+          ) : showSceneManager ? (
+            <SceneManager
+              chain={chain}
+              scenes={scenes}
+              actions={actions}
+              onClose={closeSceneManager}
+            />
           ) : (
             <div
               style={{
@@ -609,8 +627,8 @@ export const Plugin: React.FC = () => {
               scenes={scenes}
               onSelectScene={actions.selectScene}
               onRenameScene={actions.renameScene}
-              onSceneLevel={actions.setSceneLevel}
               onCopyScene={actions.copyScene}
+              onOpenSceneManager={openSceneManager}
             />
           </div>
           <HintBar />
