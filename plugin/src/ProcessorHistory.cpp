@@ -311,6 +311,10 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   restoreScenes(snapshot);
   reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
   refreshWarmEngines();
+  // The host's "scene" parameter follows the restored active scene (async:
+  // we hold chainMutex here, and a host notification may call back in).
+  sceneParamDirty.store(true);
+  triggerAsyncUpdate();
 
   // Restores can add/remove/retire IR blocks wholesale (undo/redo, presets,
   // project load), so resync the host-facing tail length.

@@ -5,7 +5,7 @@ import type { KnobThumb, KnobVariant } from './KnobInner';
 import type { KnobScale } from './knobScale';
 import { percentScale } from './knobScale';
 import { HELP, helpProps, pinHelp, unpinHelp } from './helpText';
-import { GRAY, KNOB_LABEL_GAP, SURFACE_RAISED, WHITE } from './theme';
+import { BRAND_YELLOW, GRAY, KNOB_LABEL_GAP, SURFACE_RAISED, WHITE } from './theme';
 import { getUiScale, rem } from '../hooks/useUiScale';
 import { useTileMenu } from '../hooks/useTileMenu';
 import { TileMenu } from './TileMenu';
@@ -75,6 +75,8 @@ interface KnobControlProps {
   /** Extra right-click menu rows after the built-in Reset / Type Value
       (e.g. MIDI Learn on host-parameter knobs). */
   menuItems?: TileMenuItem[];
+  /** Small accent dot before the label (a block knob marked Per Scene). */
+  marked?: boolean;
 }
 
 /** Every knob label is 14px; faceplate chrome lift and secondary-knob
@@ -134,6 +136,7 @@ export const KnobControl: React.FC<KnobControlProps> = ({
   onReset,
   onDragStateChange,
   menuItems,
+  marked = false,
 }) => {
   const knobRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -526,6 +529,20 @@ export const KnobControl: React.FC<KnobControlProps> = ({
         fontVariantNumeric: 'tabular-nums',
       }}
     >
+      {marked && !showReadout && (
+        <span
+          aria-hidden
+          style={{
+            display: 'inline-block',
+            width: '5rem',
+            height: '5rem',
+            borderRadius: '50%',
+            background: BRAND_YELLOW,
+            marginRight: '4rem',
+            verticalAlign: 'middle',
+          }}
+        />
+      )}
       {showReadout ? scale.format(shownValue) : label}
     </span>
   );

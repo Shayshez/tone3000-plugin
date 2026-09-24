@@ -230,4 +230,31 @@ TEST(MidiMapperTest, ProgramChangeDeliversProgramNumber) {
   EXPECT_EQ(programs[0], 5);
 }
 
+TEST(MidiMapperTest, SceneTargetsJumpAndStep) {
+  // Footswitch-style scene control: "Scene N" jumps, Next/Previous steps
+  // (wrapping 8 -> 1), each press once (a momentary 127 then 0 fires once).
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("scene3", 20));
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("sceneNext", 21));
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("scenePrevious", 22));
+  pumpMessages();
+
+  proc.midiMapper.processMidi(ccEvent(20, 127));
+  proc.midiMapper.processMidi(ccEvent(20, 0));
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 2);
+
+  proc.midiMapper.processMidi(ccEvent(21, 127));
+  proc.midiMapper.processMidi(ccEvent(21, 0));
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 3);
+
+  proc.selectScene(0);
+  proc.midiMapper.processMidi(ccEvent(22, 127));
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 7) << "previous from scene 1 wraps to scene 8";
+
+  EXPECT_FALSE(proc.midiMapper.setCcMapping("scene9", 23));
+}
+
 }  // namespace

@@ -236,6 +236,13 @@ const HELP_DESKTOP = {
   tunerOffset:
     'Tuning offset: target N semitones down/up while still reading EADGBE (e.g. E♭ Std). Right-click for presets.',
   tunerMute: 'Mute while tuning: silence the output whenever this tuner screen is open.',
+  sceneName: 'Scene: click to pick a scene from the list, or rename the active one.',
+  sceneButton: 'click: switch scene (gapless). Right-click: rename, copy, level, MIDI.',
+  sceneSelect: 'Switch to this scene.',
+  sceneRename: 'Rename: give this scene a name (Enter to save, Esc to cancel).',
+  sceneCopy: "Copy To: overwrite another scene with this one's settings (keeps its name).",
+  sceneLevel: 'Scene level: output boost/cut for this scene only (e.g. +3 dB for a solo).',
+  perScene: 'Per Scene: store this value separately in each scene (otherwise shared by all).',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',
   knobMenuReset: 'Reset to Default: put this knob back to its default value (same as ⌥-click).',
   knobMenuType: 'Type Value: enter an exact value (same as double-click).',

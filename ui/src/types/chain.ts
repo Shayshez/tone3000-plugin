@@ -221,6 +221,9 @@ export interface BlockParams {
   reverse: boolean;
   /** Per-block 8-band EQ. Flat = skipped entirely on the audio thread. */
   eq: BlockEqParams;
+  /** Params stored per scene instead of shared (see ScenesState); any of
+      SCENE_PARAMS. Bypass and the selected model are always per scene. */
+  perScene?: string[];
   /** DUAL_MONO only: recombine controls for the block's two fixed child
       slots (see ToneBlock.dualLeft/dualRight). Normalized 0..1, constant-
       power pan (0 = hard left, 1 = hard right); defaults hard-left/hard-
@@ -464,6 +467,8 @@ export interface ChainState {
   canPasteBlock?: boolean;
   /** Whether the native EQ clipboard holds copied bands (EQ Paste enabled). */
   canPasteEq?: boolean;
+  /** The 8 scenes (see ScenesState). */
+  scenes?: ScenesState;
   /** True when nothing distinguishes the state from a fresh instance: empty
       mono chain, faceplate params at defaults, no active preset. Greys out
       the top bar's New button. */
@@ -533,3 +538,27 @@ export interface MeterLevels {
   /** Audio-callback load, 0..1 proportion of the real-time budget. */
   cpu: number;
 }
+
+/** Scenes: eight settings snapshots of the same chain (see the native
+    SCENES section in Processor.h). Per block a scene stores bypass, the
+    selected model and any param marked Per Scene; everything else is shared
+    by all scenes. */
+export interface ScenesState {
+  /** Active scene, 0-7. */
+  active: number;
+  /** Per-slot names ('' = unnamed; show the number). */
+  names: string[];
+  /** Per-slot output level in dB (-24..+12). */
+  levels: number[];
+}
+
+export const NUM_SCENES = 8;
+/** Block params that can be made Per Scene (native sceneParamNames). */
+export const SCENE_PARAMS = ['inputGain', 'outputGain', 'mix', 'predelay', 'eq'] as const;
+export type SceneParam = (typeof SCENE_PARAMS)[number];
+
+export const EMPTY_SCENES: ScenesState = {
+  active: 0,
+  names: Array(NUM_SCENES).fill(''),
+  levels: Array(NUM_SCENES).fill(0),
+};

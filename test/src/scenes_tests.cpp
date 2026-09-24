@@ -245,4 +245,22 @@ TEST(ScenesTest, NamModelSwitchIsGaplessOnceWarm) {
       << "scene 2's model was not restored from the saved bytes";
 }
 
+TEST(ScenesTest, HostSceneParameterFollowsAndDrivesTheActiveScene) {
+  ChainTestProcessor proc;
+  seedChain(proc, {"a"});
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  auto* param = proc.parameters.getParameter("scene");
+  ASSERT_NE(param, nullptr);
+
+  // Host automation -> switch (deferred to the message thread).
+  param->setValueNotifyingHost(param->convertTo0to1(5.0f));
+  juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+  EXPECT_EQ(proc.getActiveScene(), 5);
+
+  // UI/MIDI switch -> the parameter follows, so the host can record it.
+  ASSERT_TRUE(proc.selectScene(2));
+  juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+  EXPECT_EQ(juce::roundToInt(param->convertFrom0to1(param->getValue())), 2);
+}
+
 }  // namespace

@@ -97,22 +97,31 @@ public:
   /** Mapped preset prev/next controls fired; delta is the net step count
       (+1 per next press, -1 per previous, coalesced like the toggles). */
   std::function<void(int delta)> onPresetStep;
+  /** A mapped "Scene N" control fired (0-based; last press wins). */
+  std::function<void(int sceneIndex)> onSceneSelect;
+  /** Mapped scene prev/next controls fired; net step count, like presets. */
+  std::function<void(int delta)> onSceneStep;
 
 private:
   enum class Source : int { cc = 0, note = 1 };
-  enum class Kind : int { parameter = 0, blockPower = 1, presetStep = 3 };
+  enum class Kind : int { parameter = 0, blockPower = 1, presetStep = 3, sceneSelect = 4,
+                          sceneStep = 5 };
 
   /** Virtual target ids for preset stepping (the UI catalog uses the same
       ids). Triggers, not toggles: each press walks the preset list. */
   static constexpr const char* kPresetPrevTarget = "presetPrevious";
   static constexpr const char* kPresetNextTarget = "presetNext";
+  /** Scene triggers: "scene1".."scene8" jump to a scene, prev/next step. */
+  static constexpr const char* kScenePrevTarget = "scenePrevious";
+  static constexpr const char* kSceneNextTarget = "sceneNext";
+  static int sceneSelectTargetFor(const juce::String& targetId);  // -1 if not one
 
   struct Mapping {
     juce::String targetId;
     Kind kind = Kind::parameter;
     juce::RangedAudioParameter* param = nullptr;  // Kind::parameter only
     int blockIndex = -1;                          // Kind::blockPower only
-    int presetDelta = 0;                          // Kind::presetStep only: +1 / -1
+    int presetDelta = 0;  // Kind::presetStep / sceneStep: +1 / -1; sceneSelect: scene index
     Source source = Source::cc;
     int number = 0;       // CC number or note number
     bool toggle = false;  // derived: non-parameter kind, boolean param, or note source
@@ -137,7 +146,9 @@ private:
 
   bool isValidTarget(const juce::String& targetId) const {
     return blockPowerTargetFor(targetId).index >= 0 || targetId == kPresetPrevTarget ||
-           targetId == kPresetNextTarget || parameters.getParameter(targetId) != nullptr;
+           targetId == kPresetNextTarget || targetId == kScenePrevTarget ||
+           targetId == kSceneNextTarget || sceneSelectTargetFor(targetId) >= 0 ||
+           parameters.getParameter(targetId) != nullptr;
   }
 
   Mapping makeMapping(const juce::String& targetId, Source source, int number) const;
@@ -171,6 +182,8 @@ private:
   // XOR-coalesced block-power toggles, bit = block position.
   std::atomic<juce::uint64> pendingBlockToggles{0};
   std::atomic<int> pendingPresetSteps{0};    // signed sum of ±1 steps
+  std::atomic<int> pendingSceneSelect{-1};   // last "Scene N" press wins
+  std::atomic<int> pendingSceneSteps{0};     // signed sum of ±1 steps
   std::atomic<bool> mapDirty{false};                 // gate for onChanged
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiMapper)

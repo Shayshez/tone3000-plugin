@@ -237,6 +237,9 @@ export interface ChainActions {
   pasteBlockEq: (blockId: string) => void;
   /** Whether the EQ clipboard holds copied bands. */
   canPasteEq: boolean;
+  /** Make one of a block's params per scene (true) or shared (false); any
+      of SCENE_PARAMS. */
+  setBlockParamPerScene: (blockId: string, param: string, perScene: boolean) => void;
   /**
    * Whether a TONE3000 session is present. Auth-dependent block actions
    * (model switching, where native re-downloads the model with a Bearer token)

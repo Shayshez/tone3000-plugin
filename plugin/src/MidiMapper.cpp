@@ -6,6 +6,16 @@ MidiMapper::~MidiMapper() {
   cancelPendingUpdate();
 }
 
+int MidiMapper::sceneSelectTargetFor(const juce::String& targetId) {
+  if (!targetId.startsWith("scene"))
+    return -1;
+  const auto digits = targetId.substring(5);
+  if (digits.isEmpty() || !digits.containsOnly("0123456789"))
+    return -1;
+  const int n = digits.getIntValue();  // 1-based in the id
+  return n >= 1 && n <= 8 ? n - 1 : -1;
+}
+
 MidiMapper::BlockPowerTarget MidiMapper::blockPowerTargetFor(const juce::String& targetId) {
   if (!targetId.startsWith("block") || !targetId.endsWith("Power"))
     return {};
@@ -100,6 +110,15 @@ void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
         // Preset loads are heavyweight message-thread work; the signed sum
         // nets rapid prev/next stomps to the right landing spot.
         pendingPresetSteps.fetch_add(mapping.presetDelta);
+        triggerAsyncUpdate();
+        return;
+      case Kind::sceneSelect:
+        // Scene switches touch the chain (message thread, chainMutex).
+        pendingSceneSelect.store(mapping.presetDelta);
+        triggerAsyncUpdate();
+        return;
+      case Kind::sceneStep:
+        pendingSceneSteps.fetch_add(mapping.presetDelta);
         triggerAsyncUpdate();
         return;
       case Kind::parameter: {
@@ -198,12 +217,22 @@ bool MidiMapper::setCcMapping(const juce::String& targetId, int ccNumber) {
 MidiMapper::Mapping MidiMapper::makeMapping(const juce::String& targetId, Source source,
                                             int number) const {
   const auto block = blockPowerTargetFor(targetId);
-  const int presetDelta = targetId == kPresetNextTarget   ? 1
-                          : targetId == kPresetPrevTarget ? -1
-                                                          : 0;
-  const Kind kind = presetDelta != 0 ? Kind::presetStep
+  const int sceneIndex = sceneSelectTargetFor(targetId);
+  const int sceneDelta = targetId == kSceneNextTarget   ? 1
+                         : targetId == kScenePrevTarget ? -1
+                                                        : 0;
+  int presetDelta = targetId == kPresetNextTarget   ? 1
+                    : targetId == kPresetPrevTarget ? -1
+                                                    : 0;
+  const Kind kind = presetDelta != 0   ? Kind::presetStep
+                    : sceneIndex >= 0  ? Kind::sceneSelect
+                    : sceneDelta != 0  ? Kind::sceneStep
                     : block.index >= 0 ? Kind::blockPower
                                        : Kind::parameter;
+  if (kind == Kind::sceneSelect)
+    presetDelta = sceneIndex;  // the field doubles as the scene payload
+  else if (kind == Kind::sceneStep)
+    presetDelta = sceneDelta;
   auto* param = kind == Kind::parameter ? parameters.getParameter(targetId) : nullptr;
   jassert(kind != Kind::parameter || param != nullptr);  // callers validate the id first
   const bool toggle = kind != Kind::parameter || source == Source::note ||
@@ -243,6 +272,11 @@ void MidiMapper::handleAsyncUpdate() {
 
   if (const int steps = pendingPresetSteps.exchange(0); steps != 0 && onPresetStep)
     onPresetStep(steps);
+
+  if (const int scene = pendingSceneSelect.exchange(-1); scene >= 0 && onSceneSelect)
+    onSceneSelect(scene);
+  if (const int steps = pendingSceneSteps.exchange(0); steps != 0 && onSceneStep)
+    onSceneStep(steps);
 
   // 3. Tell the UI, but only when the map/learn state actually moved;
   //    performance events alone shouldn't cause settings re-pulls.

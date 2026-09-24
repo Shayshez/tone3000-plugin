@@ -29,6 +29,7 @@ import {
   Home as LHome,
   Info as LInfo,
   Laptop as LLaptop,
+  Layers as LLayers,
   Link as LLink,
   LogIn as LLogIn,
   LogOut as LLogOut,
@@ -103,6 +104,7 @@ export const Headphones = scaled(LHeadphones, 'Headphones');
 export const Home = scaled(LHome, 'Home');
 export const Info = scaled(LInfo, 'Info');
 export const Laptop = scaled(LLaptop, 'Laptop');
+export const Layers = scaled(LLayers, 'Layers');
 export const Link = scaled(LLink, 'Link');
 export const LogIn = scaled(LLogIn, 'LogIn');
 export const LogOut = scaled(LLogOut, 'LogOut');

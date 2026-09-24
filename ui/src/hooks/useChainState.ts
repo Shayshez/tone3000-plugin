@@ -7,7 +7,7 @@ import type {
   EqBand,
   InputMode,
 } from '../types/chain';
-import { isUnchanged, SLIM_SIZE_LITE } from '../types/chain';
+import { EMPTY_SCENES, isUnchanged, SLIM_SIZE_LITE } from '../types/chain';
 
 /**
  * Fallback poll cadence for chain state. The primary sync channel is the
@@ -84,6 +84,11 @@ export function useChainState() {
       setBlockEqPre: backend.getPluginFunction('setBlockEqPre'),
       resetBlockEq: backend.getPluginFunction('resetBlockEq'),
       copyBlockEq: backend.getPluginFunction('copyBlockEq'),
+      selectScene: backend.getPluginFunction('selectScene'),
+      renameScene: backend.getPluginFunction('renameScene'),
+      setSceneLevel: backend.getPluginFunction('setSceneLevel'),
+      copyScene: backend.getPluginFunction('copyScene'),
+      setBlockParamPerScene: backend.getPluginFunction('setBlockParamPerScene'),
       pasteBlockEq: backend.getPluginFunction('pasteBlockEq'),
       setInputMode: backend.getPluginFunction('setInputMode'),
       setBlockSlimSize: backend.getPluginFunction('setBlockSlimSize'),
@@ -414,6 +419,20 @@ export function useChainState() {
           as one undo step. */
       pasteBlockEq: (blockId: string) =>
         run<boolean>('pasteBlockEq', () => native.pasteBlockEq(blockId)),
+      /** Scenes (see ScenesState). Switching is gapless and not an undo step. */
+      selectScene: (index: number) => run<boolean>('selectScene', () => native.selectScene(index)),
+      renameScene: (index: number, name: string) =>
+        run<boolean>('renameScene', () => native.renameScene(index, name)),
+      setSceneLevel: (index: number, levelDb: number) =>
+        run<boolean>('setSceneLevel', () => native.setSceneLevel(index, levelDb)),
+      /** Overwrite scene `to` with scene `from`'s content (keeps `to`'s name). */
+      copyScene: (from: number, to: number) =>
+        run<boolean>('copyScene', () => native.copyScene(from, to)),
+      /** Make one of a block's params per scene (true) or shared (false). */
+      setBlockParamPerScene: (blockId: string, param: string, perScene: boolean) =>
+        run<boolean>('setBlockParamPerScene', () =>
+          native.setBlockParamPerScene(blockId, param, perScene)
+        ),
       /** Step the chain edit history. No-ops (false) at the stack ends. */
       undo: () => run<boolean>('undoChain', () => native.undoChain()),
       redo: () => run<boolean>('redoChain', () => native.redoChain()),
@@ -430,6 +449,7 @@ export function useChainState() {
     canRedo: state.canRedo ?? false,
     canPaste: state.canPasteBlock ?? false,
     canPasteEq: state.canPasteEq ?? false,
+    scenes: state.scenes ?? EMPTY_SCENES,
     atDefault: state.atDefault,
     activePreset: state.preset ?? null,
     stereoInput: state.stereoInput ?? false,

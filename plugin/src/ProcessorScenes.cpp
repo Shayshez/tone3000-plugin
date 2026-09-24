@@ -325,15 +325,38 @@ void TONE3000Processor::applyScene(const Scene& scene) {
 bool TONE3000Processor::selectScene(int index) {
   if (index < 0 || index >= kNumScenes)
     return false;
-  juce::ScopedLock lock(chainMutex);
-  if (index == activeScene)
-    return true;
-  scenes[static_cast<size_t>(activeScene)] = captureLiveScene();
-  activeScene = index;
-  applyScene(scenes[static_cast<size_t>(index)]);
-  refreshWarmEngines();
-  bumpChainRevision();
+  {
+    juce::ScopedLock lock(chainMutex);
+    if (index != activeScene) {
+      scenes[static_cast<size_t>(activeScene)] = captureLiveScene();
+      activeScene = index;
+      applyScene(scenes[static_cast<size_t>(index)]);
+      refreshWarmEngines();
+      bumpChainRevision();
+    }
+  }
+  // Outside the lock: host notification can call back into us.
+  if (juce::MessageManager::getInstanceWithoutCreating() != nullptr &&
+      juce::MessageManager::getInstance()->isThisTheMessageThread())
+    syncSceneParam();
+  else {
+    sceneParamDirty.store(true);
+    triggerAsyncUpdate();
+  }
   return true;
+}
+
+void TONE3000Processor::syncSceneParam() {
+  auto* param = parameters.getParameter("scene");
+  if (param == nullptr)
+    return;
+  const int active = getActiveScene();
+  const float normalized = param->convertTo0to1(static_cast<float>(active));
+  if (std::abs(param->getValue() - normalized) < 1.0e-4f)
+    return;
+  syncingSceneParam.store(true);
+  param->setValueNotifyingHost(normalized);
+  syncingSceneParam.store(false);
 }
 
 int TONE3000Processor::getActiveScene() const {

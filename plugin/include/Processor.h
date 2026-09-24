@@ -1193,6 +1193,14 @@ private:
   int activeScene = 0;
   // Output-stage scene level (host rate; see processBlock's output stage).
   std::atomic<float> sceneLevelDb{0.0f};
+  // Host "scene" parameter plumbing (message thread; see parameterChanged).
+  std::atomic<bool> osSettingsDirty{false};
+  std::atomic<int> pendingSceneFromParam{-1};
+  std::atomic<bool> sceneParamDirty{false};
+  std::atomic<bool> syncingSceneParam{false};
+  // Push the active scene into the "scene" parameter (host sees it) without
+  // re-triggering a switch. Message thread, chainMutex NOT held.
+  void syncSceneParam();
   juce::SmoothedValue<float> sceneGainSmoother;
 
   SceneBlockState captureSceneBlock(const ChainBlock& block) const;

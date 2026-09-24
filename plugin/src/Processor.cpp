@@ -59,6 +59,7 @@ TONE3000Processor::TONE3000Processor()
   // applyOversamplingSettings); the relays can fire from any thread.
   parameters.addParameterListener("osEnabled", this);
   parameters.addParameterListener("osFactor", this);
+  parameters.addParameterListener("scene", this);
 
   // The preset-managed faceplate params feed getChainState's atDefault flag,
   // so their changes must reach pollers (see parameterChanged).
@@ -71,6 +72,10 @@ TONE3000Processor::TONE3000Processor()
   // path.
   midiMapper.onProgramChange = [this](int program) { loadPresetAtIndex(program); };
   midiMapper.onPresetStep = [this](int delta) { stepPreset(delta); };
+  midiMapper.onSceneSelect = [this](int index) { selectScene(index); };
+  midiMapper.onSceneStep = [this](int delta) {
+    selectScene(((getActiveScene() + delta) % kNumScenes + kNumScenes) % kNumScenes);
+  };
   midiMapper.onBlockPowerToggle = [this](int index) { toggleBlockPower(index); };
 
   // Starts at its minimum slot layout (kMinLaneSlots pass-through insert
@@ -177,6 +182,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout TONE3000Processor::createPar
   layout.add(std::make_unique<juce::AudioParameterBool>(
       juce::ParameterID{"outputMute", 37}, "Mute", false));
 
+  // Active scene (see the SCENES section in Processor.h). Automatable, so a
+  // DAW can record scene changes across a song. Not a preset parameter: the
+  // chain snapshot carries the active scene itself.
+  layout.add(std::make_unique<juce::AudioParameterChoice>(
+      juce::ParameterID{"scene", 38}, "Scene",
+      juce::StringArray{"1", "2", "3", "4", "5", "6", "7", "8"}, 0));
+
   return layout;
 }
 
@@ -190,11 +202,20 @@ int TONE3000Processor::resolvedOversampleFactor() const {
 }
 
 void TONE3000Processor::parameterChanged(const juce::String& parameterID, float newValue) {
-  juce::ignoreUnused(newValue);
   if (parameterID == "osEnabled" || parameterID == "osFactor") {
     // Defer to the message thread: this can fire from the UI relays or host
     // restore, and the apply is heavy.
+    osSettingsDirty.store(true);
     triggerAsyncUpdate();
+    return;
+  }
+  if (parameterID == "scene") {
+    // Host automation / MIDI CC / UI relay: switch on the message thread.
+    // Our own echo (syncSceneParam) is ignored.
+    if (!syncingSceneParam.load()) {
+      pendingSceneFromParam.store(juce::jlimit(0, kNumScenes - 1, juce::roundToInt(newValue)));
+      triggerAsyncUpdate();
+    }
     return;
   }
   // A preset-managed faceplate param moved, so getChainState's atDefault may
@@ -204,7 +225,13 @@ void TONE3000Processor::parameterChanged(const juce::String& parameterID, float 
 }
 
 void TONE3000Processor::handleAsyncUpdate() {
-  applyOversamplingSettings();
+  if (osSettingsDirty.exchange(false))
+    applyOversamplingSettings();
+  const int requestedScene = pendingSceneFromParam.exchange(-1);
+  if (requestedScene >= 0)
+    selectScene(requestedScene);
+  if (sceneParamDirty.exchange(false))
+    syncSceneParam();
 }
 
 // Message thread. Re-rates the whole chain domain after an osEnabled/osFactor

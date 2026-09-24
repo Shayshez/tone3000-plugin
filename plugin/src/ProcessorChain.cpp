@@ -1787,6 +1787,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     bool reverse = false;
     int irNumChannels = 1;
     juce::var eq;
+    juce::Array<juce::var> perScene;  // params stored per scene (see Scenes)
     bool rtFailed = false;
     // DUAL_MONO only: the two fixed child slots (each 0 or 1 row - see
     // ChainBlock::dualLeft/dualRight) and recombine controls.
@@ -1806,6 +1807,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   std::vector<BlockRow> left;
   bool canUndo = false, canRedo = false;
   bool canPaste = false, canPasteEq = false, atDefault = false;
+  int sceneActive = 0;
+  juce::Array<juce::var> sceneNames, sceneLevels;
   juce::String presetId, presetName;
 
   {
@@ -1919,6 +1922,8 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.trimRelaxed = block->trimRelaxed;
         row.reverse = block->reverseEnabled;
         row.eq = block->eq.toVar();
+        for (const auto& name : block->perSceneParams)
+          row.perScene.add(name);
 
         if (block->type == ChainBlockType::DUAL_MONO) {
           copyLane(block->dualLeft, row.dualLeft);
@@ -1953,6 +1958,11 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     canRedo = chainHistory.canRedo();
     canPaste = blockClipboardSettings.isValid();
     canPasteEq = eqClipboardBands.isArray();
+    sceneActive = activeScene;
+    for (const auto& scene : scenes) {
+      sceneNames.add(scene.name);
+      sceneLevels.add(scene.levelDb);
+    }
     atDefault = isChainAtDefault();
     presetId = activePresetId;
     presetName = activePresetName;
@@ -2053,6 +2063,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("trimRelaxed", row.trimRelaxed);
       params->setProperty("reverse", row.reverse);
       params->setProperty("eq", row.eq);
+      params->setProperty("perScene", row.perScene);
       params->setProperty("dualLeftPan", row.dualLeftPan);
       params->setProperty("dualRightPan", row.dualRightPan);
       params->setProperty("dualWidth", row.dualWidth);
@@ -2103,6 +2114,14 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
   state->setProperty("canPasteBlock", canPaste);
   // Whether the in-app EQ clipboard holds copied bands (EQ Paste enabled).
   state->setProperty("canPasteEq", canPasteEq);
+  // Scenes: active index + per-slot name/level (see the SCENES section).
+  {
+    auto* scenesObj = new juce::DynamicObject();
+    scenesObj->setProperty("active", sceneActive);
+    scenesObj->setProperty("names", sceneNames);
+    scenesObj->setProperty("levels", sceneLevels);
+    state->setProperty("scenes", juce::var(scenesObj));
+  }
   // True when nothing distinguishes this state from a fresh instance (see
   // isChainAtDefault); the top bar's New button greys out on it.
   state->setProperty("atDefault", atDefault);

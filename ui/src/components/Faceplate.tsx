@@ -4,7 +4,8 @@ import { ChevronDown, Power } from './icons';
 import { KnobControl } from './KnobControl';
 import { dualPanScale, gainDbScale, gateDbScale, toneScale } from './knobScale';
 import { useParameter } from '../hooks/useParameter';
-import type { InputMode } from '../types/chain';
+import type { InputMode, ScenesState } from '../types/chain';
+import { ScenesStrip } from './ScenesStrip';
 import { useDismissable } from '../hooks/useDismissable';
 import { HELP, helpProps } from './helpText';
 import { ChromeIconButton } from './ChromeIconButton';
@@ -272,6 +273,12 @@ const OutputGainKnob: React.FC = () => {
 };
 
 interface FaceplateProps {
+  /** Scenes strip (see ScenesStrip); omitted = no strip. */
+  scenes?: ScenesState;
+  onSelectScene?: (index: number) => void;
+  onRenameScene?: (index: number, name: string) => void;
+  onSceneLevel?: (index: number, levelDb: number) => void;
+  onCopyScene?: (from: number, to: number) => void;
   /** Plugin is fed a real stereo source; shows the input-mode button. */
   stereoInput: boolean;
   inputMode: InputMode;
@@ -284,6 +291,11 @@ export const Faceplate = React.memo(function Faceplate({
   stereoInput,
   inputMode,
   onInputModeChange,
+  scenes,
+  onSelectScene,
+  onRenameScene,
+  onSceneLevel,
+  onCopyScene,
 }: FaceplateProps) {
   const [inputLevel, setInputLevel, onInputDrag] = useParameter('inputLevel', 'slider');
   const [toneBass, setToneBass, onBassDrag] = useParameter('toneBass', 'slider');
@@ -438,7 +450,25 @@ export const Faceplate = React.memo(function Faceplate({
         />
       </div>
 
-      <div style={{ justifySelf: 'end' }}>
+      <div
+        style={{
+          justifySelf: 'end',
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: '28rem',
+        }}
+      >
+        {scenes && onSelectScene && onRenameScene && onSceneLevel && onCopyScene && (
+          // Between the tone stack and the output section: scenes are the
+          // live, one-hand switches, next to the output they shape.
+          <ScenesStrip
+            scenes={scenes}
+            onSelect={onSelectScene}
+            onRename={onRenameScene}
+            onLevel={onSceneLevel}
+            onCopy={onCopyScene}
+          />
+        )}
         <OutputGainKnob />
       </div>
     </div>

@@ -68,6 +68,7 @@ export const Plugin: React.FC = () => {
     canRedo,
     canPaste,
     canPasteEq,
+    scenes,
     atDefault,
     activePreset,
     stereoInput,
@@ -401,6 +402,7 @@ export const Plugin: React.FC = () => {
       setBlockEqPre: actions.setBlockEqPre,
       resetBlockEq: actions.resetBlockEq,
       copyBlockEq: actions.copyBlockEq,
+      setBlockParamPerScene: actions.setBlockParamPerScene,
       pasteBlockEq: actions.pasteBlockEq,
       canPasteEq,
       authenticated,
@@ -604,6 +606,11 @@ export const Plugin: React.FC = () => {
               stereoInput={stereoInput}
               inputMode={inputMode}
               onInputModeChange={actions.setInputMode}
+              scenes={scenes}
+              onSelectScene={actions.selectScene}
+              onRenameScene={actions.renameScene}
+              onSceneLevel={actions.setSceneLevel}
+              onCopyScene={actions.copyScene}
             />
           </div>
           <HintBar />

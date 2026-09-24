@@ -666,6 +666,36 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           "deletePreset", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
             return juce::var(editor->processor.deletePreset(args[0].toString()));
           }))
+      // --- Scenes (see the SCENES section in Processor.h) -------------------
+      .withNativeFunction(
+          // (index 0-7): switch scene - gapless; not an undo step.
+          "selectScene", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.selectScene(static_cast<int>(args[0])));
+          }))
+      .withNativeFunction(
+          "renameScene", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.renameScene(static_cast<int>(args[0]), args[1].toString()));
+          }))
+      .withNativeFunction(
+          // (index, dB -24..+12): scene output level.
+          "setSceneLevel", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.setSceneLevel(static_cast<int>(args[0]), coerceDouble(args[1])));
+          }))
+      .withNativeFunction(
+          // (from, to): overwrite scene `to` with scene `from`'s content.
+          "copyScene", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(
+                editor->processor.copyScene(static_cast<int>(args[0]), static_cast<int>(args[1])));
+          }))
+      .withNativeFunction(
+          // (blockId, param, bool): make a block param per-scene or shared.
+          "setBlockParamPerScene",
+          guarded(3, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.setBlockParamPerScene(
+                args[0].toString().toStdString(), args[1].toString(), coerceBool(args[2])));
+          }))
       .withNativeFunction(
           // (): undo the most recent preset delete (the toast's Undo).
           // Returns the restored id, "" when nothing to restore.

@@ -37,6 +37,17 @@ export const MAPPABLE_TARGETS: MappableTarget[] = [
   { id: 'outputLevel', name: 'Output Level', group: 'Global', kind: 'continuous' },
   { id: 'outputPan', name: 'Output Pan', group: 'Global', kind: 'continuous' },
   { id: 'bypass', name: 'Bypass', group: 'Global', kind: 'toggle' },
+  { id: 'scenePrevious', name: 'Previous Scene', group: 'Scenes', kind: 'trigger' },
+  { id: 'sceneNext', name: 'Next Scene', group: 'Scenes', kind: 'trigger' },
+  ...Array.from(
+    { length: 8 },
+    (_, i): MappableTarget => ({
+      id: `scene${i + 1}`,
+      name: `Scene ${i + 1}`,
+      group: 'Scenes',
+      kind: 'trigger',
+    })
+  ),
   { id: 'outputMute', name: 'Mute', group: 'Global', kind: 'toggle' },
   { id: 'gateEnabled', name: 'Gate Power', group: 'Noise Gate', kind: 'toggle' },
   { id: 'gateThreshold', name: 'Gate Threshold', group: 'Noise Gate', kind: 'continuous' },
