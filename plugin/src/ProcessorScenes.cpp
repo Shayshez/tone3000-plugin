@@ -135,9 +135,181 @@ void TONE3000Processor::applySceneBlock(const SceneBlockState& state, ChainBlock
   }
 
   // Model: only when it actually differs and we know its catalog object.
+  // NAM swaps in its warm engine with a crossfade (gapless); anything not
+  // warm yet (just after a preset load, or IR/Cab for now) takes the regular
+  // load path.
   if (blockHasModel(block) && state.modelId != 0 && state.modelId != block.activeModelId &&
-      state.modelData.isObject() && block.toneVar.isObject())
-    switchModelLocked(block, state.modelId, state.modelData);
+      state.modelData.isObject() && block.toneVar.isObject()) {
+    if (!(block.type == ChainBlockType::NAM &&
+          swapToWarmNamEngine(block, state.modelId, state.modelData)))
+      switchModelLocked(block, state.modelId, state.modelData);
+  }
+}
+
+bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
+                                            const juce::var& modelData) {
+  std::unique_ptr<NamEngine> incoming;
+  if (auto it = block.warmNamEngines.find(modelId); it != block.warmNamEngines.end()) {
+    incoming = std::move(it->second);
+    block.warmNamEngines.erase(it);
+  } else if (block.xfadeOutgoingNam != nullptr && block.xfadeOutgoingModelId == modelId) {
+    // Switching straight back mid-crossfade: the engine still fading out is
+    // the one we want.
+    incoming = std::move(block.xfadeOutgoingNam);
+    block.xfadeActive = false;
+  }
+  if (incoming == nullptr || block.namEngine == nullptr || !block.loaded)
+    return false;
+  if (incoming->getOversampleFactor() != chainOversampleFactor.load())
+    return false;  // stale after an oversampling change; refresh rebuilds it
+
+  // A crossfade still running hands its outgoing engine back to the pool.
+  if (block.xfadeOutgoingNam != nullptr)
+    block.warmNamEngines[block.xfadeOutgoingModelId] = std::move(block.xfadeOutgoingNam);
+
+  const int domain = chainDomainBlockSize();
+  incoming->resetState();  // no leftovers from when it last played
+  if (block.xfadeScratch.getNumSamples() < domain)
+    block.xfadeScratch.setSize(2, juce::jmax(1, domain), false, false, true);
+  block.xfadeOutgoingNam = std::move(block.namEngine);
+  block.xfadeOutgoingModelId = block.activeModelId;
+  block.namEngine = std::move(incoming);
+  block.xfadeGain.reset(chainSampleRate(), kSceneXfadeSeconds);
+  block.xfadeGain.setCurrentAndTargetValue(0.0f);
+  block.xfadeGain.setTargetValue(1.0f);
+  block.xfadeActive = true;
+
+  // Same bookkeeping switchModelLocked does, minus the load.
+  if (!static_cast<bool>(block.toneVar["local"])) {
+    juce::Array<juce::var> models;
+    models.add(modelData);
+    block.toneVar.getDynamicObject()->setProperty("models", models);
+    block.toneJson = juce::JSON::toString(block.toneVar);
+    block.toneSummary = makeToneSummary(block.toneVar);
+  }
+  block.activeModelId = modelId;
+  block.modelLoading = false;
+  block.loadFailed = false;
+  return true;
+}
+
+bool TONE3000Processor::isSceneModelWarm(const std::string& blockId, int modelId) const {
+  juce::ScopedLock lock(chainMutex);
+  const ChainBlock* block = const_cast<TONE3000Processor*>(this)->findBlockById(blockId);
+  if (block == nullptr)
+    return false;
+  return block->warmNamEngines.count(modelId) > 0 ||
+         (block->xfadeOutgoingNam != nullptr && block->xfadeOutgoingModelId == modelId);
+}
+
+bool TONE3000Processor::sceneReferencesModel(const std::string& blockId, int modelId) const {
+  for (int s = 0; s < kNumScenes; ++s) {
+    if (s == activeScene)
+      continue;  // the live chain: its model is the block's own active one
+    const auto& blocks = scenes[static_cast<size_t>(s)].blocks;
+    if (auto it = blocks.find(blockId); it != blocks.end() && it->second.modelId == modelId)
+      return true;
+  }
+  return false;
+}
+
+void TONE3000Processor::refreshWarmEngines() {
+  forEachSceneBlock(chain, [&](ChainBlock& b) {
+    if (b.type != ChainBlockType::NAM)
+      return;
+    std::map<int, juce::var> needed;  // model id -> catalog object
+    for (int s = 0; s < kNumScenes; ++s) {
+      if (s == activeScene)
+        continue;
+      const auto& blocks = scenes[static_cast<size_t>(s)].blocks;
+      if (auto it = blocks.find(b.id); it != blocks.end() && it->second.modelId != 0 &&
+                                       it->second.modelId != b.activeModelId)
+        needed.emplace(it->second.modelId, it->second.modelData);
+    }
+
+    // A finished crossfade's engine goes back to the pool if still needed.
+    if (!b.xfadeActive && b.xfadeOutgoingNam != nullptr) {
+      if (needed.count(b.xfadeOutgoingModelId) > 0 &&
+          b.warmNamEngines.count(b.xfadeOutgoingModelId) == 0)
+        b.warmNamEngines[b.xfadeOutgoingModelId] = std::move(b.xfadeOutgoingNam);
+      else
+        b.xfadeOutgoingNam.reset();
+    }
+
+    for (auto it = b.warmNamEngines.begin(); it != b.warmNamEngines.end();) {
+      const bool stale = it->second == nullptr ||
+                         it->second->getOversampleFactor() != chainOversampleFactor.load();
+      if (needed.count(it->first) == 0 || stale)
+        it = b.warmNamEngines.erase(it);
+      else
+        ++it;
+    }
+
+    for (const auto& [modelId, modelData] : needed) {
+      const bool inFade = b.xfadeOutgoingNam != nullptr && b.xfadeOutgoingModelId == modelId;
+      if (b.warmNamEngines.count(modelId) > 0 || b.warmPending.count(modelId) > 0 || inFade ||
+          !modelData.isObject())
+        continue;
+      b.warmPending.insert(modelId);
+      struct PrewarmJob : public juce::ThreadPoolJob {
+        TONE3000Processor& processor;
+        std::string blockId;
+        int modelId;
+        juce::var modelData;
+        PrewarmJob(TONE3000Processor& p, std::string bid, int mid, juce::var data)
+            : ThreadPoolJob("Prewarm Scene Model"), processor(p), blockId(std::move(bid)),
+              modelId(mid), modelData(std::move(data)) {}
+        JobStatus runJob() override {
+          processor.prewarmModelInBackground(blockId, modelId, modelData);
+          return jobHasFinished;
+        }
+      };
+      loadingThreadPool.addJob(new PrewarmJob(*this, b.id, modelId, modelData), true);
+    }
+  });
+}
+
+void TONE3000Processor::prewarmModelInBackground(const std::string& blockId, int modelId,
+                                                 juce::var modelData) {
+  std::vector<uint8_t> bytes;
+  double slimSize = 1.0;
+  {
+    juce::ScopedLock lock(chainMutex);
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr)
+      return;
+    slimSize = block->namSlimSize;
+    if (auto it = block->modelCache.find(modelId); it != block->modelCache.end())
+      bytes = it->second;
+  }
+  const bool fetched = bytes.empty();
+  if (fetched)
+    bytes = fetchModelFromUrl(modelData["model_url"].toString());
+
+  PreparedBlockModel prepared;
+  if (!bytes.empty())
+    prepared = prepareBlockModelOffThread(ChainBlockType::NAM, bytes,
+                                          modelData["name"].toString() + ".nam", slimSize,
+                                          std::nullopt);
+
+  juce::ScopedLock lock(chainMutex);
+  ChainBlock* block = findBlockById(blockId);
+  if (block == nullptr)
+    return;
+  block->warmPending.erase(modelId);
+  if (fetched && !bytes.empty())
+    block->modelCache[modelId] = bytes;  // so presets/sessions can embed it
+  if (!prepared.success || prepared.namEngine == nullptr) {
+    juce::Logger::writeToLog("[Scenes] Prewarm failed for model " + juce::String(modelId) +
+                             " (block " + juce::String(blockId) + ")");
+    return;
+  }
+  if (!sceneReferencesModel(blockId, modelId) || modelId == block->activeModelId ||
+      prepared.namEngine->getOversampleFactor() != chainOversampleFactor.load())
+    return;  // no longer needed (or stale); dropped with `prepared`
+  if (prepared.preparedBlockSize < chainDomainBlockSize())
+    prepared.namEngine->prepare(chainDomainBlockSize());
+  block->warmNamEngines[modelId] = std::move(prepared.namEngine);
 }
 
 void TONE3000Processor::applyScene(const Scene& scene) {
@@ -159,6 +331,7 @@ bool TONE3000Processor::selectScene(int index) {
   scenes[static_cast<size_t>(activeScene)] = captureLiveScene();
   activeScene = index;
   applyScene(scenes[static_cast<size_t>(index)]);
+  refreshWarmEngines();
   bumpChainRevision();
   return true;
 }
@@ -201,6 +374,7 @@ bool TONE3000Processor::copyScene(int from, int to) {
   scenes[static_cast<size_t>(to)] = source;
   if (to == activeScene)
     applyScene(source);
+  refreshWarmEngines();
   bumpChainRevision();
   return true;
 }
@@ -321,4 +495,7 @@ void TONE3000Processor::restoreScenes(const juce::ValueTree& snapshot) {
   // The restored chain already IS the active scene; only the level needs
   // pushing to the audio thread.
   sceneLevelDb.store(scenes[static_cast<size_t>(activeScene)].levelDb);
+  // Warm engines are refreshed by the caller once the chain is rebuilt
+  // (restoreChainSnapshot): restoreScenes runs first so the rebuild keeps
+  // the cached bytes of models other scenes select.
 }

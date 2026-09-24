@@ -1067,6 +1067,9 @@ bool TONE3000Processor::switchModel(const std::string& blockId, int modelId,
 
   pushChainHistory();
   switchModelLocked(*block, modelId, modelData);
+  // The model this scene just left may still be selected by other scenes:
+  // keep it warm (rebuilt from the cached bytes).
+  refreshWarmEngines();
   return true;
 }
 

@@ -652,6 +652,9 @@ public:
   // turning it shared keeps the current value for all scenes. Undoable.
   bool setBlockParamPerScene(const std::string& blockId, const juce::String& param,
                              bool perScene);
+  // Whether a scene switch to `modelId` on this block will be gapless right
+  // now (its warm engine is ready). The UI can show a "preparing" state.
+  bool isSceneModelWarm(const std::string& blockId, int modelId) const;
   // Move a preset by `delta` steps within its browser section (negative =
   // earlier). The custom order is user-facing truth: prev/next stepping and
   // MIDI program-change numbers follow it (see loadPresetAtIndex).
@@ -1080,8 +1083,13 @@ private:
   // the full API payload (model URLs, tags, counts…) per block per sync is
   // waste.
   static juce::var makeToneSummary(const juce::var& toneVar);
+  // `alsoKeepModel` (optional): extra (blockId, modelId) pairs whose cached
+  // bytes must be embedded besides the ones the block's tone references -
+  // the models other scenes select.
+  using ModelKeepPredicate = std::function<bool(const std::string&, int)>;
   static void serializeChainToTree(const std::vector<std::unique_ptr<ChainBlock>>& blocks,
-                                   juce::ValueTree& chainState, bool includeModelData);
+                                   juce::ValueTree& chainState, bool includeModelData,
+                                   const ModelKeepPredicate* alsoKeepModel = nullptr);
 
   // Undo/redo internals (ProcessorHistory.cpp).
   // Snapshot both chains + stereo mode as a ValueTree. History snapshots stay
@@ -1193,6 +1201,18 @@ private:
   // Scene `index` as it currently stands (live chain when active).
   Scene effectiveScene(int index) const;
   void applySceneBlock(const SceneBlockState& state, ChainBlock& block);
+  // Gapless NAM model change: swap in a warm engine and crossfade from the
+  // current one. False when no warm engine for `modelId` is ready (the
+  // caller then falls back to a regular load).
+  bool swapToWarmNamEngine(ChainBlock& block, int modelId, const juce::var& modelData);
+  // Keep every NAM block's warm pool matching the models its OTHER scenes
+  // select: queue background prepares for missing ones, drop unneeded ones,
+  // reclaim finished crossfade engines. Caller holds chainMutex.
+  void refreshWarmEngines();
+  // Worker-thread half of a prewarm (fetch-or-cache, prepare, install).
+  void prewarmModelInBackground(const std::string& blockId, int modelId, juce::var modelData);
+  // Model bytes a stored scene needs, so presets/sessions embed them.
+  bool sceneReferencesModel(const std::string& blockId, int modelId) const;
   void applyScene(const Scene& scene);
   void serializeScenes(juce::ValueTree& snapshot) const;
   void restoreScenes(const juce::ValueTree& snapshot);

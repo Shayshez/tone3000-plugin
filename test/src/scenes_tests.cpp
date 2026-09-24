@@ -144,4 +144,105 @@ TEST(ScenesTest, UndoRestoresScenes) {
   EXPECT_EQ(proc.getActiveScene(), 1);
 }
 
+// Gapless model switching: the other scene's model is kept warm, and the
+// switch crossfades between two running engines - no dip, no load state.
+// Both "models" are the same capture bytes under two ids, so a gapless
+// switch leaves the output level untouched; the old wet-mute swap would
+// have dropped it to near silence for ~50 ms.
+TEST(ScenesTest, NamModelSwitchIsGaplessOnceWarm) {
+  ChainTestProcessor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, 512);
+  proc.prepareToPlay(kFs, 512);
+
+  juce::ValueTree block = makeNamBlockTree("amp", 1, 100);
+  {
+    juce::MemoryBlock bytes;
+    ASSERT_TRUE(testFile("a2-amp-test.nam").loadFileAsData(bytes));
+    juce::ValueTree cached("CachedModel");
+    cached.setProperty("modelId", 101, nullptr);
+    cached.setProperty("data", juce::var(bytes), nullptr);
+    block.getChildWithName("ModelCache").appendChild(cached, nullptr);
+    // List both models on the tone, so the restore keeps 101's cached bytes
+    // (unreferenced cache entries are dropped on restore).
+    block.setProperty(
+        "toneJson",
+        "{\"id\":1,\"title\":\"Test Amp\",\"format\":\"nam\",\"models\":["
+        "{\"id\":100,\"name\":\"amp\",\"model_url\":\"https://test.invalid/amp.nam\"},"
+        "{\"id\":101,\"name\":\"amp-b\",\"model_url\":\"https://test.invalid/amp-b.nam\"}]}",
+        nullptr);
+  }
+  juce::ValueTree state("ChainSnapshot");
+  juce::ValueTree lane("ChainBlocks");
+  lane.appendChild(block, nullptr);
+  state.appendChild(lane, nullptr);
+  proc.restoreFromTree(state);
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  // Scene 2 selects model 101 (a regular load the first time).
+  ASSERT_TRUE(proc.selectScene(1));
+  auto* model101 = new juce::DynamicObject();
+  model101->setProperty("id", 101);
+  model101->setProperty("name", "amp-b");
+  model101->setProperty("model_url", "https://test.invalid/amp-b.nam");
+  ASSERT_TRUE(proc.switchModel("amp", 101, juce::var(model101)));
+  // loaded stays true while a switch loads (the old engine keeps playing),
+  // so wait for modelLoading to clear instead.
+  {
+    const auto until = juce::Time::getMillisecondCounter() + 10000;
+    while (static_cast<bool>(proc.getChainState(-1)["chain"][0]["modelLoading"]) &&
+           juce::Time::getMillisecondCounter() < until)
+      juce::Thread::sleep(20);
+    ASSERT_FALSE(static_cast<bool>(proc.getChainState(-1)["chain"][0]["modelLoading"]));
+  }
+  ASSERT_TRUE(waitForChainLoaded(proc));
+
+  // Scene 1's model (100) must warm up in the background.
+  const auto deadline = juce::Time::getMillisecondCounter() + 10000;
+  while (!proc.isSceneModelWarm("amp", 100) && juce::Time::getMillisecondCounter() < deadline)
+    juce::Thread::sleep(20);
+  ASSERT_TRUE(proc.isSceneModelWarm("amp", 100)) << "scene 1's model never warmed up";
+
+  const auto sine = makeSine(80 * 512, 220.0, 0.3f);
+  const std::vector<float> first(sine.begin(), sine.begin() + 40 * 512);
+  const std::vector<float> second(sine.begin() + 40 * 512, sine.end());
+  processStereo(proc, first);                       // steady state on model 101
+  ASSERT_TRUE(proc.selectScene(0));                 // switch while "playing"
+  const auto after = processStereo(proc, second).first;
+
+  const juce::var row = proc.getChainState(-1)["chain"][0];
+  EXPECT_EQ(static_cast<int>(row["activeModelId"]), 100);
+  EXPECT_TRUE(static_cast<bool>(row["loaded"])) << "warm swap must not enter a loading state";
+
+  // 5 ms windows across the switch: none may dip (a wet-mute swap would).
+  auto rms = [&](size_t start, size_t len) {
+    double sum = 0.0;
+    for (size_t i = start; i < start + len; ++i) sum += static_cast<double>(after[i]) * after[i];
+    return std::sqrt(sum / static_cast<double>(len));
+  };
+  const size_t win = 240;  // 5 ms at 48 kHz
+  const double steady = rms(after.size() - 8 * win, 8 * win);
+  double worst = 1e9;
+  for (size_t w = 0; w < 20; ++w) worst = std::min(worst, rms(w * win, win));
+  std::printf("[ScenesTest] steady rms %.4f, worst 5ms window after switch %.4f (%.2f dB)\n",
+              steady, worst, 20.0 * std::log10(worst / steady));
+  EXPECT_GT(worst, steady * 0.7) << "the switch dipped - not gapless";
+
+  // Session round trip: scene 2's model bytes must ride the state (the URL
+  // is fake, so a warm engine can only come from the embedded bytes) and
+  // warm up again on load, ready for a gapless switch.
+  juce::MemoryBlock data;
+  proc.getStateInformation(data);
+  ChainTestProcessor restored;
+  restored.setPlayConfigDetails(2, 2, kFs, 512);
+  restored.prepareToPlay(kFs, 512);
+  restored.setStateInformation(data.getData(), static_cast<int>(data.getSize()));
+  ASSERT_TRUE(waitForChainLoaded(restored));
+  EXPECT_EQ(restored.getActiveScene(), 0);
+  const auto until = juce::Time::getMillisecondCounter() + 10000;
+  while (!restored.isSceneModelWarm("amp", 101) && juce::Time::getMillisecondCounter() < until)
+    juce::Thread::sleep(20);
+  EXPECT_TRUE(restored.isSceneModelWarm("amp", 101))
+      << "scene 2's model was not restored from the saved bytes";
+}
+
 }  // namespace

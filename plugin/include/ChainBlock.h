@@ -174,6 +174,8 @@ inline IrCategory irCategoryFromString(const juce::String& s) {
 // splicing the waveform (audible click). Also the ramp for the global
 // chain-edit fade (reorder/cross-lane moves mute-splice the chain output).
 constexpr double kWetFadeSeconds = 0.025;
+// Scene switch crossfade between two warm NAM engines (both run meanwhile).
+constexpr double kSceneXfadeSeconds = 0.03;
 
 // Minimum tiles in the chain. The chain always presents at least this many
 // blocks (tones + insert placeholders), and always at least one insert
@@ -289,6 +291,23 @@ struct ChainBlock {
 
   // NAM-specific processing (runs at the chain rate; see ChainDomain.h)
   std::unique_ptr<NamEngine> namEngine;
+
+  // Scenes, gapless model switching (see ProcessorScenes.cpp). Prepared NAM
+  // engines for the other models this block's scenes select, keyed by model
+  // id, ready to swap in without a load. Message thread only (under
+  // chainMutex); the audio thread never touches the map.
+  std::map<int, std::unique_ptr<NamEngine>> warmNamEngines;
+  std::set<int> warmPending;  // prewarm jobs in flight
+  // Crossfade after a scene switch: the previous engine keeps running on a
+  // copy of the block's input while the new one fades in over
+  // kSceneXfadeSeconds, so the switch has no gap. The audio thread clears
+  // xfadeActive when the fade completes; the message thread then returns
+  // the outgoing engine to the warm pool (or drops it).
+  std::unique_ptr<NamEngine> xfadeOutgoingNam;
+  int xfadeOutgoingModelId = 0;
+  bool xfadeActive = false;
+  juce::LinearSmoothedValue<float> xfadeGain{1.0f};
+  juce::AudioBuffer<float> xfadeScratch;
   juce::LinearSmoothedValue<float> namNormalizationSmoother;
 
   // IR-specific processing.

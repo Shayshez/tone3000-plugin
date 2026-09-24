@@ -298,7 +298,7 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
 
 void TONE3000Processor::serializeChainToTree(
     const std::vector<std::unique_ptr<ChainBlock>>& blocks, juce::ValueTree& chainState,
-    bool includeModelData) {
+    bool includeModelData, const ModelKeepPredicate* alsoKeepModel) {
   for (const auto& block : blocks) {
     juce::ValueTree blockState = serializeBlockSettings(*block);
 
@@ -309,11 +309,11 @@ void TONE3000Processor::serializeChainToTree(
     // top-level lane since dualLeft/dualRight share Lane's own type.
     if (block->type == ChainBlockType::DUAL_MONO) {
       juce::ValueTree dualLeftState("DualLeftBlocks");
-      serializeChainToTree(block->dualLeft, dualLeftState, includeModelData);
+      serializeChainToTree(block->dualLeft, dualLeftState, includeModelData, alsoKeepModel);
       blockState.appendChild(dualLeftState, nullptr);
 
       juce::ValueTree dualRightState("DualRightBlocks");
-      serializeChainToTree(block->dualRight, dualRightState, includeModelData);
+      serializeChainToTree(block->dualRight, dualRightState, includeModelData, alsoKeepModel);
       blockState.appendChild(dualRightState, nullptr);
     }
 
@@ -328,7 +328,10 @@ void TONE3000Processor::serializeChainToTree(
         // bytes); persisting them wrote 50-224 MB states nothing could ever
         // read again, which hosts then multiplied across autosaves and
         // backups (issue #127).
-        if (!block->referencesModel(modelId))
+        // Scenes add the models their other slots select (still bounded:
+        // at most one model per scene per block).
+        if (!block->referencesModel(modelId) &&
+            !(alsoKeepModel != nullptr && (*alsoKeepModel)(block->id, modelId)))
           continue;
 
         juce::ValueTree cachedModel("CachedModel");

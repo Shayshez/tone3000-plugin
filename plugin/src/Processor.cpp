@@ -256,6 +256,15 @@ void TONE3000Processor::applyOversamplingSettings() {
     }
   }
 
+  // Scene warm engines carry the old phase count: drop them (and any
+  // crossfade in flight) and prepare them again at the new factor.
+  forEachSceneBlock(chain, [](ChainBlock& b) {
+    b.warmNamEngines.clear();
+    b.xfadeActive = false;
+    b.xfadeOutgoingNam.reset();
+  });
+  refreshWarmEngines();
+
   bumpChainRevision();
 }
 
@@ -349,6 +358,17 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
       } else {
         DBG("Warning: NAM block " << block->id << " has no engine to prepare");
       }
+      // Scene warm pool + any crossfade-outgoing engine follow the domain
+      // size too, so a scene switch after a rate/buffer change stays gapless.
+      for (auto& [modelId, warm] : block->warmNamEngines)
+        if (warm != nullptr)
+          warm->prepare(domainBlockSize);
+      if (block->xfadeOutgoingNam != nullptr)
+        block->xfadeOutgoingNam->prepare(domainBlockSize);
+      block->xfadeScratch.setSize(2, juce::jmax(1, domainBlockSize), false, false, true);
+      block->xfadeGain.reset(chainRate, kSceneXfadeSeconds);
+      block->xfadeGain.setCurrentAndTargetValue(1.0f);
+      block->xfadeActive = false;
     } else if ((block->type == ChainBlockType::IR || block->type == ChainBlockType::CAB) &&
                block->convolverMono != nullptr) {
       // Convolvers always run at the base rate behind the block's island
@@ -1315,6 +1335,21 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // instances across the worker pool (rtPhasePool, resolved per
         // callback); nested inside a lane fork this is the pool's supported
         // one-deep nesting. Null = phases run serially on this thread.
+        // Scene-switch crossfade (see ChainBlock::xfadeOutgoingNam): the
+        // previous engine runs on a copy of the same (calibrated) input, and
+        // the two outputs are blended below, each with its own model's
+        // normalization, so a model change between scenes has no gap.
+        const bool xfading = block->xfadeActive && block->xfadeOutgoingNam != nullptr &&
+                             block->xfadeScratch.getNumSamples() >= numSamples &&
+                             block->xfadeScratch.getNumChannels() >= numChannels;
+        if (xfading) {
+          for (int ch = 0; ch < numChannels; ++ch)
+            block->xfadeScratch.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+          juce::AudioBuffer<float> outgoingView(block->xfadeScratch.getArrayOfWritePointers(),
+                                                numChannels, numSamples);
+          block->xfadeOutgoingNam->process(outgoingView, rtPhasePool);
+        }
+
         block->namEngine->process(buffer, rtPhasePool);
 
         // Post-model gain: calibrated hand-off OR loudness normalization,
@@ -1341,38 +1376,57 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // The smoother was prepared off the RT path (prepareChain / model
         // apply); here we only ever move its target.
         const float targetLufs = cacheTargetLoudness;  // use live target
-        float blockGain = 1.0f;
-        bool calibratedHandOff = false;
-        if (cacheCalibrateInput && idx < lastNamIndex && block->namEngine->hasOutputLevel()) {
-          const float modelOutputLevel = static_cast<float>(block->namEngine->getOutputLevel());
-          if (std::isfinite(modelOutputLevel) && modelOutputLevel >= -60.0f &&
-              modelOutputLevel <= 60.0f) {
-            blockGain =
-                juce::Decibels::decibelsToGain(modelOutputLevel - cacheInputCalibrationLevel);
-            calibratedHandOff = true;
+        // Per-engine so a crossfading outgoing engine gets its own model's
+        // gain (different captures sit at different levels).
+        const auto postModelGain = [&](const NamEngine& engine) {
+          float gain = 1.0f;
+          bool calibratedHandOff = false;
+          if (cacheCalibrateInput && idx < lastNamIndex && engine.hasOutputLevel()) {
+            const float modelOutputLevel = static_cast<float>(engine.getOutputLevel());
+            if (std::isfinite(modelOutputLevel) && modelOutputLevel >= -60.0f &&
+                modelOutputLevel <= 60.0f) {
+              gain = juce::Decibels::decibelsToGain(modelOutputLevel - cacheInputCalibrationLevel);
+              calibratedHandOff = true;
+            }
           }
-        }
-        if (!calibratedHandOff && block->normalizeEnabled) {
-          float modelLoudnessDb = targetLufs;  // Default fallback
-          if (block->namEngine->hasLoudness()) {
-            modelLoudnessDb = static_cast<float>(block->namEngine->getLoudness());
+          if (!calibratedHandOff && block->normalizeEnabled) {
+            float modelLoudnessDb = targetLufs;  // Default fallback
+            if (engine.hasLoudness())
+              modelLoudnessDb = static_cast<float>(engine.getLoudness());
+            if (!std::isfinite(modelLoudnessDb) || modelLoudnessDb < -100.0f ||
+                modelLoudnessDb > 0.0f)
+              modelLoudnessDb = targetLufs;
+            const float gainAdjustmentDb =
+                juce::jlimit(-12.0f, 12.0f, targetLufs - modelLoudnessDb);
+            gain = juce::Decibels::decibelsToGain(gainAdjustmentDb);
           }
-          if (!std::isfinite(modelLoudnessDb) || modelLoudnessDb < -100.0f || modelLoudnessDb > 0.0f) {
-            modelLoudnessDb = targetLufs;
-          }
-          const float gainAdjustmentDb = juce::jlimit(-12.0f, 12.0f, targetLufs - modelLoudnessDb);
-          blockGain = juce::Decibels::decibelsToGain(gainAdjustmentDb);
-        }
+          return gain;
+        };
+        const float blockGain = postModelGain(*block->namEngine);
         block->namNormalizationSmoother.setTargetValue(blockGain);
 
         // Apply per-block normalization / hand-off gain to the buffer
         auto* left = buffer.getWritePointer(0);
         auto* right = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
 
-        for (int i = 0; i < numSamples; ++i) {
-          const float g = block->namNormalizationSmoother.getNextValue();
-          left[i] *= g;
-          if (right) right[i] *= g;
+        if (xfading) {
+          const float outgoingGain = postModelGain(*block->xfadeOutgoingNam);
+          const float* oldLeft = block->xfadeScratch.getReadPointer(0);
+          const float* oldRight = right ? block->xfadeScratch.getReadPointer(1) : nullptr;
+          for (int i = 0; i < numSamples; ++i) {
+            const float g = block->namNormalizationSmoother.getNextValue();
+            const float x = block->xfadeGain.getNextValue();
+            left[i] = left[i] * g * x + oldLeft[i] * outgoingGain * (1.0f - x);
+            if (right) right[i] = right[i] * g * x + oldRight[i] * outgoingGain * (1.0f - x);
+          }
+          if (!block->xfadeGain.isSmoothing())
+            block->xfadeActive = false;  // done; the message thread reclaims the engine
+        } else {
+          for (int i = 0; i < numSamples; ++i) {
+            const float g = block->namNormalizationSmoother.getNextValue();
+            left[i] *= g;
+            if (right) right[i] *= g;
+          }
         }
       } catch (const std::exception&) {
         // RT-safe failure path: disable the block (stops it re-throwing every

@@ -17,7 +17,10 @@ juce::ValueTree TONE3000Processor::captureChainSnapshot(bool includeModelData) c
   juce::ValueTree snapshot("ChainSnapshot");
 
   juce::ValueTree blocks("ChainBlocks");
-  serializeChainToTree(chain, blocks, includeModelData);
+  const ModelKeepPredicate keepSceneModels = [this](const std::string& blockId, int modelId) {
+    return sceneReferencesModel(blockId, modelId);
+  };
+  serializeChainToTree(chain, blocks, includeModelData, &keepSceneModels);
   snapshot.appendChild(blocks, nullptr);
   // Scenes ride every snapshot (undo, presets, session state).
   serializeScenes(snapshot);
@@ -249,7 +252,7 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
       for (int j = 0; j < cacheState.getNumChildren(); ++j) {
         const juce::ValueTree cachedModel = cacheState.getChild(j);
         const int modelId = cachedModel.getProperty("modelId");
-        if (!block->referencesModel(modelId))
+        if (!block->referencesModel(modelId) && !sceneReferencesModel(block->id, modelId))
           continue;
         if (block->modelCache.find(modelId) != block->modelCache.end())
           continue;
@@ -301,11 +304,13 @@ TONE3000Processor::Lane TONE3000Processor::restoreChainSnapshot(const juce::Valu
   // removed) are simply never read here - the old right-lane content and
   // branch/solo/invert/align state silently fold away, leaving only the old
   // Left lane, with no error and no user-facing message.
-  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
-  // A snapshot without scenes (older presets/sessions, reset to default)
-  // leaves all eight empty: each starts as the live chain the first time
-  // it's visited.
+  // Scenes first: the rebuild below filters each block's cached model bytes
+  // and must keep the ones other scenes select (sceneReferencesModel). A
+  // snapshot without scenes (older presets/sessions, reset to default)
+  // leaves all eight empty: each starts as the live chain when visited.
   restoreScenes(snapshot);
+  reconcileChainFromTree(snapshot.getChildWithName("ChainBlocks"), chain, retired);
+  refreshWarmEngines();
 
   // Restores can add/remove/retire IR blocks wholesale (undo/redo, presets,
   // project load), so resync the host-facing tail length.
