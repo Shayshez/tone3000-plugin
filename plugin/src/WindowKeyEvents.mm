@@ -11,6 +11,10 @@ namespace EditorWebViewSetup {
 // no-op rather than teaching the UI a second platform check.
 void forwardKeyToHost(void*, HostKey) {}
 
+bool isPrimaryMouseButtonDown() {
+  return false;  // no resize grip on iOS (the window is the screen)
+}
+
 }  // namespace EditorWebViewSetup
 
 #else
@@ -59,6 +63,10 @@ void forwardKeyToHost(void* nsViewPtr, HostKey key) {
   // hang their transport shortcut off one.
   [NSApp postEvent:keyEvent(NSEventTypeKeyDown) atStart:NO];
   [NSApp postEvent:keyEvent(NSEventTypeKeyUp) atStart:NO];
+}
+
+bool isPrimaryMouseButtonDown() {
+  return ([NSEvent pressedMouseButtons] & 1) != 0;
 }
 
 }  // namespace EditorWebViewSetup

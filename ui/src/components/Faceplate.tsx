@@ -8,6 +8,9 @@ import type { InputMode } from '../types/chain';
 import { useDismissable } from '../hooks/useDismissable';
 import { HELP, helpProps } from './helpText';
 import { ChromeIconButton } from './ChromeIconButton';
+import { useMidiMenuItems } from '../hooks/useMidiLearn';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
 import {
   BORDER,
   HIGHLIGHT,
@@ -52,11 +55,20 @@ const PowerButton: React.FC<{
   on: boolean;
   help: string;
   onClick: () => void;
-}> = ({ on, help, onClick }) => (
-  <ChromeIconButton tone="power" on={on} help={help} onClick={onClick} offsetY={CHROME_LIFT}>
-    <Power size={ICON_SIZE} />
-  </ChromeIconButton>
-);
+  /** APVTS parameter id, for the right-click MIDI Learn menu. */
+  midiTarget: string;
+}> = ({ on, help, onClick, midiTarget }) => {
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const midiItems = useMidiMenuItems(midiTarget);
+  return (
+    <span onContextMenu={openMenu} style={{ display: 'inline-flex' }}>
+      <ChromeIconButton tone="power" on={on} help={help} onClick={onClick} offsetY={CHROME_LIFT}>
+        <Power size={ICON_SIZE} />
+      </ChromeIconButton>
+      {menuAnchor && <TileMenu anchor={menuAnchor} onClose={closeMenu} items={midiItems} />}
+    </span>
+  );
+};
 
 /** Two overlapping circles, the classic stereo glyph (lucide has none). */
 const StereoIcon: React.FC<{ style?: React.CSSProperties }> = ({ style }) => (
@@ -226,6 +238,8 @@ const InputModeButton: React.FC<{
 const OutputGainKnob: React.FC = () => {
   const [level, setLevel, onLevelDrag] = useParameter('outputLevel', 'slider');
   const [pan, setPan, onPanDrag] = useParameter('outputPan', 'slider');
+  const panMidi = useMidiMenuItems('outputPan');
+  const levelMidi = useMidiMenuItems('outputLevel');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '10rem' }}>
@@ -240,6 +254,7 @@ const OutputGainKnob: React.FC = () => {
         defaultValue={0.5}
         help={HELP.outputPan}
         onDragStateChange={onPanDrag}
+        menuItems={panMidi}
       />
       <KnobControl
         label="Output"
@@ -250,6 +265,7 @@ const OutputGainKnob: React.FC = () => {
         defaultValue={0.5}
         help={HELP.outputLevel}
         onDragStateChange={onLevelDrag}
+        menuItems={levelMidi}
       />
     </div>
   );
@@ -276,6 +292,11 @@ export const Faceplate = React.memo(function Faceplate({
   const [noiseGate, setNoiseGate, onGateDrag] = useParameter('gateThreshold', 'slider');
   const [gateEnabled, setGateEnabled] = useParameter('gateEnabled', 'toggle');
   const [toneEqEnabled, setToneEqEnabled] = useParameter('toneEqEnabled', 'toggle');
+  const inputMidi = useMidiMenuItems('inputLevel');
+  const gateMidi = useMidiMenuItems('gateThreshold');
+  const bassMidi = useMidiMenuItems('toneBass');
+  const midMidi = useMidiMenuItems('toneMid');
+  const trebleMidi = useMidiMenuItems('toneTreble');
 
   return (
     <div
@@ -319,6 +340,7 @@ export const Faceplate = React.memo(function Faceplate({
             defaultValue={0.5}
             help={HELP.inputLevel}
             onDragStateChange={onInputDrag}
+            menuItems={inputMidi}
           />
           {stereoInput && <InputModeButton mode={inputMode} onChange={onInputModeChange} />}
         </div>
@@ -345,12 +367,14 @@ export const Faceplate = React.memo(function Faceplate({
               defaultValue={gateDbScale.fromDisplay(-80)}
               help={HELP.gate}
               onDragStateChange={onGateDrag}
+              menuItems={gateMidi}
             />
           </div>
           <PowerButton
             on={gateEnabled}
             help={HELP.gatePower}
             onClick={() => setGateEnabled(!gateEnabled)}
+            midiTarget="gateEnabled"
           />
         </div>
       </div>
@@ -381,6 +405,7 @@ export const Faceplate = React.memo(function Faceplate({
             defaultValue={toneScale.fromDisplay(5)}
             help={HELP.toneBass}
             onDragStateChange={onBassDrag}
+            menuItems={bassMidi}
           />
           <KnobControl
             label="Middle"
@@ -391,6 +416,7 @@ export const Faceplate = React.memo(function Faceplate({
             defaultValue={toneScale.fromDisplay(5)}
             help={HELP.toneMiddle}
             onDragStateChange={onMidDrag}
+            menuItems={midMidi}
           />
           <KnobControl
             label="Treble"
@@ -401,12 +427,14 @@ export const Faceplate = React.memo(function Faceplate({
             defaultValue={toneScale.fromDisplay(5)}
             help={HELP.toneTreble}
             onDragStateChange={onTrebleDrag}
+            menuItems={trebleMidi}
           />
         </div>
         <PowerButton
           on={toneEqEnabled}
           help={HELP.tonePower}
           onClick={() => setToneEqEnabled(!toneEqEnabled)}
+          midiTarget="toneEqEnabled"
         />
       </div>
 

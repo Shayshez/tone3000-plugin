@@ -12,6 +12,9 @@ import {
 import { curveScale, percentScale } from './knobScale';
 import type { KnobScale } from './knobScale';
 import { HELP, helpProps, pinHelp, unpinHelp } from './helpText';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
+import { RotateCcw } from './icons';
 
 /**
  * Interactive replacement for WaveformDisplay in the IR block's main editor
@@ -303,10 +306,21 @@ export const IrEnvelopeGraph: React.FC<{
     [onChange]
   );
 
+  // Right-click on a point or curve: Reset (the mouse-only route to the
+  // ⌥-click / double-click reset).
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const [menuTarget, setMenuTarget] = useState<DragTarget | null>(null);
+  const openTargetMenu = (target: DragTarget) => (e: React.MouseEvent) => {
+    setMenuTarget(target);
+    openMenu(e);
+  };
+
   // Alt/Option-click resets without engaging a drag - mirrors BlockEqView's
   // resetBand-then-early-return.
   const handlePointerDown = useCallback(
     (target: DragTarget) => (e: React.PointerEvent<SVGCircleElement | SVGPathElement>) => {
+      // Right/middle mouse never drags (right-click opens the reset menu).
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.preventDefault();
       if (e.altKey) {
         resetTarget(target);
@@ -420,6 +434,7 @@ export const IrEnvelopeGraph: React.FC<{
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onDoubleClick={() => resetTarget(target)}
+      onContextMenu={openTargetMenu(target)}
     />
   );
 
@@ -474,6 +489,7 @@ export const IrEnvelopeGraph: React.FC<{
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onDoubleClick={() => resetTarget(target)}
+      onContextMenu={openTargetMenu(target)}
     />
   );
 
@@ -708,6 +724,21 @@ export const IrEnvelopeGraph: React.FC<{
         )}
       </svg>
       {readout}
+      {menuAnchor && menuTarget && (
+        <TileMenu
+          anchor={menuAnchor}
+          onClose={closeMenu}
+          items={[
+            {
+              label:
+                menuTarget === 'attack' || menuTarget === 'decay' ? 'Reset Curve' : 'Reset Point',
+              icon: <RotateCcw size={16} />,
+              help: HELP.irPointMenuReset,
+              onSelect: () => resetTarget(menuTarget),
+            },
+          ]}
+        />
+      )}
     </div>
   );
 };

@@ -667,6 +667,12 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(editor->processor.deletePreset(args[0].toString()));
           }))
       .withNativeFunction(
+          // (): undo the most recent preset delete (the toast's Undo).
+          // Returns the restored id, "" when nothing to restore.
+          "restoreDeletedPreset", guarded(0, juce::var(""), [editor](const juce::Array<juce::var>&) {
+            return juce::var(editor->processor.restoreDeletedPreset());
+          }))
+      .withNativeFunction(
           // (id, delta): N steps within the preset's browser section
           // (negative = earlier). Prev/next and MIDI follow it.
           "movePreset", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
@@ -830,6 +836,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             const int persistent =
                 args.size() > 1 ? static_cast<int>(coerceDouble(args[1])) : total;
             editor->setExtraContentHeight(total, persistent);
+            return juce::var(true);
+          }))
+      .withNativeFunction(
+          // (): the UI's resize grip was pressed; native follows the mouse
+          // until release (see TONE3000Editor::beginResizeDrag).
+          "beginEditorResizeDrag", guarded(0, false, [editor](const juce::Array<juce::var>&) {
+            editor->beginResizeDrag();
             return juce::var(true);
           }))
       // --- Meters / tuner / auto-balance -------------------------------------

@@ -69,7 +69,12 @@ export const ChainBlockHeaderNav: React.FC<ChainBlockHeaderNavProps> = ({
       // rather than a separate row segment, so it sits close the same way
       // the strip's own chips sit close to each other (6rem).
       gap: '8rem',
-      marginBottom: '16rem',
+      // 6, not 16: at the 1x floor (1024x578 design box) the detail view's
+      // column is 406 tall - 24 pad + 28 strip + gap + 322 card + 24 pad -
+      // and a 16 gap overran it by 8px, clipping the card's bottom behind
+      // the faceplate (the column scrolls, but with hidden scrollbars it
+      // just read as cut off). 6 leaves 2px of rounding slack.
+      marginBottom: '6rem',
       flexShrink: 0,
     }}
   >

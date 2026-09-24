@@ -83,6 +83,15 @@ enum class HostKey { space, enter };
 void forwardKeyToHost(void* nativeHandle, HostKey key);
 
 /**
+ * Whether the primary mouse button is physically down right now, asked of
+ * the OS directly. The web UI's resize grip needs this: the press lands in
+ * the native WebView, so JUCE never sees the mouse-down and its own
+ * ModifierKeys::getCurrentModifiersRealtime() reports the button as up.
+ * Same files as forwardKeyToHost.
+ */
+bool isPrimaryMouseButtonDown();
+
+/**
  * Main-UI WebView with a navigation allowlist.
  *
  * Native integration (loadTone, presets, clipboard, auth token, ...) is

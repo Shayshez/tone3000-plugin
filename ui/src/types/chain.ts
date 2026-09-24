@@ -58,6 +58,16 @@ export function adjacentInsertSlots(
   return { left: isSlot(index - 1), right: isSlot(index + 1) };
 }
 
+/** Positional MIDI target for lane item `index`'s power ("block3Power" =
+    the lane's third non-slot block, matching the native MidiMapper's own
+    count), or null past the mappable range / on an empty slot. */
+export const BLOCK_POWER_MIDI_TARGETS = 12;
+export function blockPowerMidiTarget(items: ChainItem[], index: number): string | null {
+  if (isInsertSlot(items[index])) return null;
+  const position = items.slice(0, index + 1).filter((i) => !isInsertSlot(i)).length;
+  return position <= BLOCK_POWER_MIDI_TARGETS ? `block${position}Power` : null;
+}
+
 export const EQ_NUM_BANDS = 8;
 export const EQ_MIN_FREQ_HZ = 20;
 export const EQ_MAX_FREQ_HZ = 20000;

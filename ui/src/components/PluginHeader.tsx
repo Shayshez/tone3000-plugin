@@ -4,6 +4,9 @@ import { AccountMenu } from './AccountMenu';
 import { IconButton } from './IconButton';
 import { chromeIcon } from './ChromeIconButton';
 import { useParameter } from '../hooks/useParameter';
+import { useMidiMenuItems } from '../hooks/useMidiLearn';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
 import { MiniTuner } from './MiniTuner';
 import { PresetBar, PRESET_BAR_TRAILING_WIDTH } from './PresetBar';
 import { HELP, helpProps } from './helpText';
@@ -21,18 +24,28 @@ const GlobalSwitch: React.FC<{
   look: Pick<React.CSSProperties, 'color' | 'background'>;
   help: string;
   onClick: () => void;
+  /** APVTS parameter id, for the right-click MIDI Learn menu. */
+  midiTarget: string;
   children: React.ReactNode;
-}> = ({ pressed, look, help, onClick, children }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    aria-pressed={pressed}
-    {...helpProps(help)}
-    style={{ ...iconButtonStyle(28), ...look }}
-  >
-    {chromeIcon(children, 18)}
-  </button>
-);
+}> = ({ pressed, look, help, onClick, midiTarget, children }) => {
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const midiItems = useMidiMenuItems(midiTarget);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onClick}
+        onContextMenu={openMenu}
+        aria-pressed={pressed}
+        {...helpProps(help)}
+        style={{ ...iconButtonStyle(28), ...look }}
+      >
+        {chromeIcon(children, 18)}
+      </button>
+      {menuAnchor && <TileMenu anchor={menuAnchor} onClose={closeMenu} items={midiItems} />}
+    </>
+  );
+};
 
 /** Global Bypass + Mute pair (APVTS bools `bypass` / `outputMute`, so they
     automate, MIDI-map and follow the host's own bypass button). Own
@@ -51,6 +64,7 @@ const GlobalSwitches: React.FC = () => {
         look={bypass ? { color: GRAY, background: HIGHLIGHT } : { color: WHITE }}
         help={HELP.bypass}
         onClick={() => setBypass(!bypass)}
+        midiTarget="bypass"
       >
         <Power size={18} />
       </GlobalSwitch>
@@ -59,6 +73,7 @@ const GlobalSwitches: React.FC = () => {
         look={mute ? { color: WHITE, background: BRAND_RED } : { color: MUTED }}
         help={HELP.mute}
         onClick={() => setMute(!mute)}
+        midiTarget="outputMute"
       >
         <VolumeX size={18} />
       </GlobalSwitch>
@@ -156,6 +171,7 @@ export const PluginHeader = React.memo(function PluginHeader({
           onLoad={presetStore.actions.load}
           onRename={presetStore.actions.rename}
           onDelete={presetStore.actions.remove}
+          onRestoreDeleted={presetStore.actions.restoreDeleted}
           onMove={presetStore.actions.move}
           onReset={onReset}
         />

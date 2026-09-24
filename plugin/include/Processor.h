@@ -607,6 +607,10 @@ public:
   bool loadPreset(const juce::String& presetId);   // undoable (chain part)
   bool renamePreset(const juce::String& presetId, const juce::String& newName);
   bool deletePreset(const juce::String& presetId);
+  // Undo the most recent deletePreset (the toast's Undo): writes the kept
+  // bytes back under the same id. Returns that id, "" when there is nothing
+  // to restore or the slot is taken again. One level deep, in memory only.
+  juce::String restoreDeletedPreset();
   // Move a preset by `delta` steps within its browser section (negative =
   // earlier). The custom order is user-facing truth: prev/next stepping and
   // MIDI program-change numbers follow it (see loadPresetAtIndex).
@@ -1109,6 +1113,9 @@ private:
   bool isChainAtDefault() const;
 
   PresetManager presetManager;
+  // Most recent deletePreset, for restoreDeletedPreset (message thread only).
+  juce::String lastDeletedPresetId;
+  juce::MemoryBlock lastDeletedPresetBytes;
   // Shown in the preset pill; guarded by chainMutex (written on the message
   // thread, read by getChainState).
   juce::String activePresetId;

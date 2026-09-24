@@ -157,6 +157,43 @@ TONE3000Editor::TONE3000Editor(TONE3000Processor& p) : AudioProcessorEditor(&p),
 #endif  // JUCE_IOS
 }
 
+void TONE3000Editor::beginResizeDrag() {
+#if ! JUCE_IOS
+  // Desktop::getMousePosition() asks the OS; a MouseInputSource's own
+  // position only tracks events JUCE received, and the WebView eats them.
+  resizeDrag.startMouse = juce::Desktop::getMousePosition().toFloat();
+  resizeDrag.startScale = currentScale();
+  resizeDrag.startWidth = getWidth();
+  resizeDrag.startHeight = getHeight();
+  resizeDrag.lastApplied = resizeDrag.startScale;
+  resizeDrag.startTimerHz(60);
+#endif
+}
+
+void TONE3000Editor::ResizeDrag::timerCallback() {
+  // The release can land anywhere (usually in the WebView, which owns the
+  // pointer), so poll the real button state rather than wait for an event -
+  // asked of the OS: JUCE never saw the press (the WebView got it), so its
+  // own realtime modifiers read the button as up and ended every drag at
+  // once.
+  if (!EditorWebViewSetup::isPrimaryMouseButtonDown()) {
+    stopTimer();
+    return;
+  }
+  if (startWidth <= 0 || startHeight <= 0)
+    return;
+  const auto now = juce::Desktop::getMousePosition().toFloat();
+  const double rx = (startWidth + (now.x - startMouse.x)) / startWidth;
+  const double ry = (startHeight + (now.y - startMouse.y)) / startHeight;
+  const double stretch = std::abs(rx - 1.0) >= std::abs(ry - 1.0) ? rx : ry;
+  const double target = juce::jlimit(1.0, kMaxScale, startScale * stretch);
+  // Skip sub-pixel steps: each size change re-lays out the whole web UI.
+  if (std::abs(target - lastApplied) * kWidth < 1.0)
+    return;
+  lastApplied = target;
+  owner.applyScaledSize(target);
+}
+
 void TONE3000Editor::applyScaledSize(double scale) {
   setSize(juce::roundToInt(kWidth * scale), juce::roundToInt(totalHeight() * scale));
 }

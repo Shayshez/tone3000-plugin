@@ -21,7 +21,9 @@ juce::File presetsRootDir() {
 
 }  // namespace
 
-PresetManager::PresetManager() : PresetManager(presetsRootDir(), defaultSystemFactoryDir()) {}
+PresetManager::PresetManager() : PresetManager(presetsRootDir(), defaultSystemFactoryDir()) {
+  trashOnRemove = true;
+}
 
 PresetManager::PresetManager(const juce::File& baseDir, const juce::File& systemFactory)
     : userDir(baseDir),
@@ -260,8 +262,26 @@ bool PresetManager::rename(const juce::String& id, const juce::String& newName) 
   return writePresetFile(file, preset);
 }
 
-bool PresetManager::remove(const juce::String& id) const {
+bool PresetManager::remove(const juce::String& id, juce::MemoryBlock* removedBytes) const {
   if (!id.startsWith(kUserPrefix))
     return false;
-  return fileForId(id).deleteFile();
+  const juce::File file = fileForId(id);
+  if (!file.existsAsFile())
+    return false;
+  if (removedBytes != nullptr && !file.loadFileAsData(*removedBytes))
+    return false;  // never delete what we couldn't keep a copy of
+  // Trash where the platform supports it (fails on some Linux desktops);
+  // fall back to a plain delete - the in-memory copy still backs Undo.
+  if (trashOnRemove && file.moveToTrash())
+    return true;
+  return file.deleteFile();
+}
+
+bool PresetManager::restore(const juce::String& id, const juce::MemoryBlock& bytes) const {
+  if (!id.startsWith(kUserPrefix) || bytes.isEmpty())
+    return false;
+  const juce::File file = fileForId(id);
+  if (file.exists())
+    return false;
+  return file.replaceWithData(bytes.getData(), bytes.getSize());
 }

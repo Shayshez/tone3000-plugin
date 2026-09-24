@@ -14,6 +14,15 @@ interface ToastControl {
   pin: (message: string) => void;
   /** Take a pinned message down with no follow-up (cancel, timeout). */
   clear: () => void;
+  /** Flash a message with one action button ("Preset Deleted · Undo"),
+      up for ACTION_MS so there's time to reach it. Clicking the action runs
+      it and dismisses the toast. */
+  showAction: (message: string, actionLabel: string, onAction: () => void) => void;
+}
+
+interface ToastMessage {
+  text: string;
+  action?: { label: string; run: () => void };
 }
 
 const ToastContext = createContext<ToastControl | null>(null);
@@ -26,29 +35,45 @@ export function useToast(): ToastControl {
 
 /** How long a flashed message stays up. */
 const SHOW_MS = 1800;
+/** Action toasts stay longer: the user has to notice, decide, and click. */
+const ACTION_MS = 6000;
 
 export const ToastProvider: React.FC<{
   /** Pill offset from the bottom of the (position: relative) plugin root. */
   bottom: number;
   children: React.ReactNode;
 }> = ({ bottom, children }) => {
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<ToastMessage | null>(null);
   const timeoutRef = useRef<number | undefined>(undefined);
 
   // The control is stable, so consumers never re-render with the message;
   // and since a message change re-renders only this provider (the children
   // element identity is unchanged), the tree below skips entirely.
   const control = useMemo<ToastControl>(() => {
-    const set = (msg: string | null, dismissMs?: number) => {
+    const set = (msg: ToastMessage | null, dismissMs?: number) => {
       window.clearTimeout(timeoutRef.current);
       setMessage(msg);
       if (msg && dismissMs)
         timeoutRef.current = window.setTimeout(() => setMessage(null), dismissMs);
     };
     return {
-      show: (msg) => set(msg, SHOW_MS),
-      pin: (msg) => set(msg),
+      show: (text) => set({ text }, SHOW_MS),
+      pin: (text) => set({ text }),
       clear: () => set(null),
+      showAction: (text, label, onAction) =>
+        set(
+          {
+            text,
+            action: {
+              label,
+              run: () => {
+                set(null);
+                onAction();
+              },
+            },
+          },
+          ACTION_MS
+        ),
     };
   }, []);
 
@@ -60,7 +85,7 @@ export const ToastProvider: React.FC<{
       {message !== null && (
         // Keyed by text so a replacement message re-runs the entrance.
         <div
-          key={message}
+          key={message.text}
           style={{
             position: 'absolute',
             left: '50%',
@@ -75,12 +100,32 @@ export const ToastProvider: React.FC<{
             borderRadius: '16rem',
             whiteSpace: 'nowrap',
             zIndex: 1000,
-            pointerEvents: 'none',
+            // Plain toasts never block clicks under them; an action toast
+            // has to be clickable.
+            pointerEvents: message.action ? 'auto' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16rem',
             animation: 'toast-in 0.16s ease-out',
           }}
         >
           <style>{`@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6rem); } }`}</style>
-          {message}
+          {message.text}
+          {message.action && (
+            <button
+              type="button"
+              onClick={message.action.run}
+              style={{
+                all: 'unset',
+                cursor: 'pointer',
+                fontWeight: 700,
+                textDecoration: 'underline',
+                textUnderlineOffset: '3rem',
+              }}
+            >
+              {message.action.label}
+            </button>
+          )}
         </div>
       )}
     </ToastContext.Provider>

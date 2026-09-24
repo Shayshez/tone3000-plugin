@@ -32,6 +32,12 @@ void forwardKeyToHost(void* nativeHandle, HostKey key) {
   PostMessageW(host, WM_KEYUP, virtualKey, up);
 }
 
+bool isPrimaryMouseButtonDown() {
+  // Physical left button; honor the swapped-buttons accessibility setting.
+  const int vk = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+  return (GetAsyncKeyState(vk) & 0x8000) != 0;
+}
+
 }  // namespace EditorWebViewSetup
 
 #elif JUCE_LINUX
@@ -92,6 +98,11 @@ void forwardKeyToHost(void* nativeHandle, HostKey key) {
   XSendEvent(display, host, True, KeyReleaseMask, reinterpret_cast<XEvent*>(&event));
 
   XCloseDisplay(display);  // flushes the queue
+}
+
+bool isPrimaryMouseButtonDown() {
+  // Best effort: JUCE's realtime query (X11 pointer state).
+  return juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown();
 }
 
 }  // namespace EditorWebViewSetup

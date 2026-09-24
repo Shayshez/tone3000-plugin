@@ -15,7 +15,9 @@ import { shouldRestoreToneBrowser } from '../hooks/useT3kSelect';
 import { CHAIN_SCROLL_STORAGE_KEY, ChainView, DETAIL_BLOCK_STORAGE_KEY } from './ChainView';
 import { Faceplate, PLATE_HEIGHT } from './Faceplate';
 import { HintBar, HINT_HEIGHT } from './HintBar';
+import { ResizeGrip } from './ResizeGrip';
 import { ToastProvider } from './Toast';
+import { MidiLearnProvider } from '../hooks/useMidiLearn';
 import { PluginHeader } from './PluginHeader';
 import { useHintsEnabled } from './helpText';
 import { AppBanner, useAppBanner, type BannerAction } from './AppBanner';
@@ -449,201 +451,205 @@ export const Plugin: React.FC = () => {
       {/* One app-wide toast pill, floating above the faceplate. Everything
           that raises toasts (preset save, share, auto measure) is inside. */}
       <ToastProvider bottom={PLATE_HEIGHT + (hintsVisible ? HINT_HEIGHT : 0) + 24}>
-        {chrome.renderedBanner && (
-          // Slide slot: the banner is anchored to the slot's bottom edge, so
-          // opening/closing the slot slides it down/up from behind the top
-          // edge. The window has already grown before the slide starts.
-          <div
-            style={{
-              height: `${chrome.bannerSlotHeight}rem`,
-              overflow: 'hidden',
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'flex-end',
-              transition: chrome.animating ? `height ${BANNER_ANIM_MS}ms ease` : undefined,
-            }}
-          >
-            <AppBanner
-              banner={chrome.renderedBanner}
-              onAction={handleBannerAction}
-              onDismiss={dismissBanner}
-            />
-          </div>
-        )}
+        {/* Right-click MIDI Learn on any mappable control (useMidiMenuItems). */}
+        <MidiLearnProvider>
+          {chrome.renderedBanner && (
+            // Slide slot: the banner is anchored to the slot's bottom edge, so
+            // opening/closing the slot slides it down/up from behind the top
+            // edge. The window has already grown before the slide starts.
+            <div
+              style={{
+                height: `${chrome.bannerSlotHeight}rem`,
+                overflow: 'hidden',
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-end',
+                transition: chrome.animating ? `height ${BANNER_ANIM_MS}ms ease` : undefined,
+              }}
+            >
+              <AppBanner
+                banner={chrome.renderedBanner}
+                onAction={handleBannerAction}
+                onDismiss={dismissBanner}
+              />
+            </div>
+          )}
 
-        <PluginHeader
-          presetStore={headerPresetStore}
-          activePreset={activePreset}
-          atDefault={atDefault}
-          onReset={handleReset}
-          showTuner={showTuner}
-          onToggleTuner={handleToggleTuner}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          user={session.user}
-          authenticated={authenticated}
-          onOpenSettings={openDefaultSettings}
-          onLogin={handleLogin}
-          onLogout={handleLogout}
-        />
+          <PluginHeader
+            presetStore={headerPresetStore}
+            activePreset={activePreset}
+            atDefault={atDefault}
+            onReset={handleReset}
+            showTuner={showTuner}
+            onToggleTuner={handleToggleTuner}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            user={session.user}
+            authenticated={authenticated}
+            onOpenSettings={openDefaultSettings}
+            onLogin={handleLogin}
+            onLogout={handleLogout}
+          />
 
-        {/* Middle Section: Tuner (when toggled on) or Meters + Chain View.
+          {/* Middle Section: Tuner (when toggled on) or Meters + Chain View.
           Horizontal inset is on this band; vertical inset lives only on the
           center column so meters always center in the full header-to-faceplate
           height (never shift when Select opens). Select drops the center's
           bottom pad and uses its own scroll padding instead. */}
-        {showTuner ? (
-          <TunerView onClose={closeTuner} />
-        ) : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'row',
-              flex: 1,
-              width: '100%',
-              backgroundColor: '#000000',
-              overflow: 'hidden',
-              minHeight: 0,
-              padding: '0 24rem',
-              boxSizing: 'border-box',
-            }}
-          >
+          {showTuner ? (
+            <TunerView onClose={closeTuner} />
+          ) : (
             <div
               style={{
-                height: '100%',
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                backgroundColor: '#000000',
-                // Above the Select Tone header scrim, so stereo columns that
-                // overflow this slot into the center aren't covered by it.
-                position: 'relative',
-                zIndex: 3,
-              }}
-            >
-              {/* 358 matches Figma's BLOCK column (title + gap + card). */}
-              <DbMeter type="input" stereo={stereoInput && inputMode === 'stereo'} height={358} />
-            </div>
-
-            {/* Center: the chain gallery, or the tone browser takeover. */}
-            <div
-              style={{
+                flexDirection: 'row',
                 flex: 1,
-                height: '100%',
+                width: '100%',
+                backgroundColor: '#000000',
                 overflow: 'hidden',
                 minHeight: 0,
-                minWidth: 0,
+                padding: '0 24rem',
                 boxSizing: 'border-box',
-                // Shared 24px under the header; 24px above the faceplate only
-                // for chain/BLOCK. Select fills to the faceplate; block-info
-                // fills to both header and faceplate, putting those pads
-                // inside the scroll content instead.
-                paddingTop: fillToFaceplate ? 0 : 24,
-                paddingBottom: showToneBrowser || fillToFaceplate ? 0 : 24,
-                ...bypassDim,
               }}
             >
-              {showToneBrowser ? (
-                <ToneBrowser
-                  client={t3kClient}
-                  // Pre-mounted during an OAuth return ('returning'), the client
-                  // has no tokens until the callback's code exchange finishes;
-                  // hold the stream fetch so it doesn't fire unauthenticated.
-                  authPending={session.oauthPhase === 'returning'}
-                  authenticated={authenticated}
-                  onPickTone={session.selectToneById}
-                  onBrowseTone3000={handleBrowseTone3000}
-                  onSignIn={handleBrowserSignIn}
-                  onClose={handleBrowserClose}
-                />
-              ) : (
-                <ChainActionsProvider value={chainActions}>
-                  <ChainView
-                    chain={chain}
-                    canPaste={canPaste}
-                    sampleRate={sampleRate}
-                    namSlimSizeDefault={namSlimSizeDefault}
-                    onFillToFaceplate={setFillToFaceplate}
-                    returnToGallery={returnToGallery}
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  backgroundColor: '#000000',
+                  // Above the Select Tone header scrim, so stereo columns that
+                  // overflow this slot into the center aren't covered by it.
+                  position: 'relative',
+                  zIndex: 3,
+                }}
+              >
+                {/* 358 matches Figma's BLOCK column (title + gap + card). */}
+                <DbMeter type="input" stereo={stereoInput && inputMode === 'stereo'} height={358} />
+              </div>
+
+              {/* Center: the chain gallery, or the tone browser takeover. */}
+              <div
+                style={{
+                  flex: 1,
+                  height: '100%',
+                  overflow: 'hidden',
+                  minHeight: 0,
+                  minWidth: 0,
+                  boxSizing: 'border-box',
+                  // Shared 24px under the header; 24px above the faceplate only
+                  // for chain/BLOCK. Select fills to the faceplate; block-info
+                  // fills to both header and faceplate, putting those pads
+                  // inside the scroll content instead.
+                  paddingTop: fillToFaceplate ? 0 : 24,
+                  paddingBottom: showToneBrowser || fillToFaceplate ? 0 : 24,
+                  ...bypassDim,
+                }}
+              >
+                {showToneBrowser ? (
+                  <ToneBrowser
+                    client={t3kClient}
+                    // Pre-mounted during an OAuth return ('returning'), the client
+                    // has no tokens until the callback's code exchange finishes;
+                    // hold the stream fetch so it doesn't fire unauthenticated.
+                    authPending={session.oauthPhase === 'returning'}
+                    authenticated={authenticated}
+                    onPickTone={session.selectToneById}
+                    onBrowseTone3000={handleBrowseTone3000}
+                    onSignIn={handleBrowserSignIn}
+                    onClose={handleBrowserClose}
                   />
-                </ChainActionsProvider>
-              )}
-            </div>
+                ) : (
+                  <ChainActionsProvider value={chainActions}>
+                    <ChainView
+                      chain={chain}
+                      canPaste={canPaste}
+                      sampleRate={sampleRate}
+                      namSlimSizeDefault={namSlimSizeDefault}
+                      onFillToFaceplate={setFillToFaceplate}
+                      returnToGallery={returnToGallery}
+                    />
+                  </ChainActionsProvider>
+                )}
+              </div>
 
-            <div
-              style={{
-                height: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                backgroundColor: '#000000',
-                // Above the Select Tone header scrim, so stereo columns that
-                // overflow this slot into the center aren't covered by it.
-                position: 'relative',
-                zIndex: 3,
-              }}
-            >
-              <DbMeter type="output" stereo={stereoImage} height={358} labelsPosition="right" />
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  backgroundColor: '#000000',
+                  // Above the Select Tone header scrim, so stereo columns that
+                  // overflow this slot into the center aren't covered by it.
+                  position: 'relative',
+                  zIndex: 3,
+                }}
+              >
+                <DbMeter type="output" stereo={stereoImage} height={358} labelsPosition="right" />
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Pinned faceplate at the bottom (gains, gate, tone stack), with the
+          {/* Pinned faceplate at the bottom (gains, gate, tone stack), with the
           hint strip under it (hidden entirely when hints are off). */}
-        <div style={{ width: '100%', flexShrink: 0, ...bypassDim }}>
-          <Faceplate
-            stereoInput={stereoInput}
-            inputMode={inputMode}
-            onInputModeChange={actions.setInputMode}
-          />
-        </div>
-        <HintBar />
+          <div style={{ width: '100%', flexShrink: 0, ...bypassDim }}>
+            <Faceplate
+              stereoInput={stereoInput}
+              inputMode={inputMode}
+              onInputModeChange={actions.setInputMode}
+            />
+          </div>
+          <HintBar />
+          <ResizeGrip />
 
-        {/* Settings takeover, mounted only while open so its parameter
+          {/* Settings takeover, mounted only while open so its parameter
           subscriptions and screen state don't run behind the main UI. */}
-        {showSettings && (
-          <Settings
-            onClose={() => setShowSettings(false)}
-            standalone={standalone}
-            device={audioDevice}
-            initialTab={settingsTabRef.current}
-            version={localVersion}
-            update={update}
-            namSlimSizeDefault={namSlimSizeDefault}
-            onNamSlimSizeDefaultChange={actions.setNamSlimSizeDefault}
-            multiCore={multiCore}
-            onMultiCoreChange={actions.setMultiCore}
-            chain={chain}
-          />
-        )}
+          {showSettings && (
+            <Settings
+              onClose={() => setShowSettings(false)}
+              standalone={standalone}
+              device={audioDevice}
+              initialTab={settingsTabRef.current}
+              version={localVersion}
+              update={update}
+              namSlimSizeDefault={namSlimSizeDefault}
+              onNamSlimSizeDefaultChange={actions.setNamSlimSizeDefault}
+              multiCore={multiCore}
+              onMultiCoreChange={actions.setMultiCore}
+              chain={chain}
+            />
+          )}
 
-        {/* OAuth callback overlay: covers the chain UI while we resolve the
+          {/* OAuth callback overlay: covers the chain UI while we resolve the
           tokens + tone after returning from tone3000.com, and surfaces any
           OAuth error (callback failures, failed-navigation recovery) with a
           retry that restarts whichever flow actually failed. */}
-        <OAuthOverlay
-          phase={session.oauthPhase}
-          error={session.oauthError}
-          onRetry={session.retryFlow}
-          onDismiss={session.clearOauthError}
-        />
+          <OAuthOverlay
+            phase={session.oauthPhase}
+            error={session.oauthError}
+            onRetry={session.retryFlow}
+            onDismiss={session.clearOauthError}
+          />
 
-        {/* Connection gate for internet-dependent actions (add / swap /
+          {/* Connection gate for internet-dependent actions (add / swap /
           login / select). Offline gates instantly; TLS problems surface from
           a non-blocking background probe, only after confirmation. */}
-        <ConnectionModal
-          problem={connectionGate.problem}
-          onRetry={connectionGate.retry}
-          onDismiss={connectionGate.dismiss}
-        />
+          <ConnectionModal
+            problem={connectionGate.problem}
+            onRetry={connectionGate.retry}
+            onDismiss={connectionGate.dismiss}
+          />
 
-        {/* Update available, below OAuth/connection (z 3000) so those always win. */}
-        <UpdateNotice notice={updateNotice} onRemindLater={remindLater} />
+          {/* Update available, below OAuth/connection (z 3000) so those always win. */}
+          <UpdateNotice notice={updateNotice} onRemindLater={remindLater} />
+        </MidiLearnProvider>
       </ToastProvider>
     </div>
   );

@@ -22,11 +22,27 @@ import { isNativeFunctionRegistered } from './backend/JuceBackend';
  * bundle, so they keep full keyboard behavior (the site's search box
  * needs Enter).
  */
+/** Marks an open element that handles its own keys (see isKeyboardOwned). */
+export const KEYBOARD_OWNER_ATTR = 'data-keyboard-owner';
+
+/** True while some open list/menu owns the keyboard: global shortcuts and
+    hover shortcuts stand down so one key never does two things. */
+export const isKeyboardOwned = (): boolean =>
+  document.querySelector(`[${KEYBOARD_OWNER_ATTR}]`) != null;
+
+/** Keys typed into text fields always belong to the field. */
+export const isTypingTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest('input, textarea, select, [contenteditable]') != null;
+
 export function installKeyPassthrough(): void {
   window.addEventListener(
     'keydown',
     (e) => {
       if (e.code !== 'Space' && e.code !== 'Enter') return;
+      // An open keyboard-driven list (model dropdown, menus) owns Enter to
+      // commit its highlighted row; Space still reaches the transport so
+      // playback can be started/stopped while browsing.
+      if (e.code === 'Enter' && document.querySelector(`[${KEYBOARD_OWNER_ATTR}]`) != null) return;
       // Editable and interactive elements keep the key (typing in preset
       // names/search, Enter committing a value edit, activating a focused
       // button).

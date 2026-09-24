@@ -27,6 +27,7 @@ export function usePresets(onChanged?: () => void) {
       loadPreset: backend.getPluginFunction('loadPreset'),
       renamePreset: backend.getPluginFunction('renamePreset'),
       deletePreset: backend.getPluginFunction('deletePreset'),
+      restoreDeletedPreset: backend.getPluginFunction('restoreDeletedPreset'),
       movePreset: backend.getPluginFunction('movePreset'),
     }),
     [backend]
@@ -74,6 +75,11 @@ export function usePresets(onChanged?: () => void) {
       rename: (id: string, name: string) =>
         run<boolean>('renamePreset', () => native.renamePreset(id, name)),
       remove: (id: string) => run<boolean>('deletePreset', () => native.deletePreset(id)),
+      /** Undo the most recent delete (moved to the OS trash natively, with
+          an in-memory copy for this). Resolves to the restored id, '' if
+          nothing could be restored. */
+      restoreDeleted: () =>
+        run<string>('restoreDeletedPreset', () => native.restoreDeletedPreset()),
       /** N steps within the preset's section (negative = earlier). The order
           persists and drives prev/next and MIDI program-change numbers. */
       move: (id: string, delta: number) =>

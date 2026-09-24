@@ -17,6 +17,7 @@ import {
   ClipboardPaste as LClipboardPaste,
   Combine as LCombine,
   Copy as LCopy,
+  CopyPlus as LCopyPlus,
   Download as LDownload,
   Equal as LEqual,
   ExternalLink as LExternalLink,
@@ -50,6 +51,7 @@ import {
   Volume2 as LVolume2,
   VolumeX as LVolumeX,
   WifiOff as LWifiOff,
+  Unlink as LUnlink,
   X as LX,
 } from 'lucide-react';
 import { rem } from '../hooks/useUiScale';
@@ -89,6 +91,7 @@ export const Circle = scaled(LCircle, 'Circle');
 export const ClipboardPaste = scaled(LClipboardPaste, 'ClipboardPaste');
 export const Combine = scaled(LCombine, 'Combine');
 export const Copy = scaled(LCopy, 'Copy');
+export const CopyPlus = scaled(LCopyPlus, 'CopyPlus');
 export const Download = scaled(LDownload, 'Download');
 export const Equal = scaled(LEqual, 'Equal');
 export const ExternalLink = scaled(LExternalLink, 'ExternalLink');
@@ -123,3 +126,4 @@ export const Volume2 = scaled(LVolume2, 'Volume2');
 export const VolumeX = scaled(LVolumeX, 'VolumeX');
 export const WifiOff = scaled(LWifiOff, 'WifiOff');
 export const X = scaled(LX, 'X');
+export const Unlink = scaled(LUnlink, 'Unlink');

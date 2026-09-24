@@ -35,6 +35,19 @@ public:
       pre-sized for the chrome the UI will actually render on first paint. */
   void setExtraContentHeight(int pixels, int persistentPixels);
 
+
+  /** The web UI's resize grip (bottom-right corner) was pressed. JUCE's own
+      ResizableCornerComponent is a lightweight component the native WebView
+      always paints over, and JUCE's AUv2 wrapper snaps host-initiated
+      resizes back (Logic's own window corner does nothing), so this grip is
+      the only resize route there. Native then follows the global mouse itself
+      (~60 Hz) until the button is released, instead of the web UI streaming
+      pointer events - those arrive from a WebView that is re-laying out the
+      whole UI on every size step, which made web-driven drags jumpy. The
+      dominant axis (larger relative change) sets the scale, so a purely
+      horizontal or vertical drag shrinks as well as grows. */
+  void beginResizeDrag();
+
   int getControlParameterIndex(juce::Component&) override {
     return controlParameterIndexReceiver.getControlParameterIndex();
   }
@@ -65,6 +78,19 @@ private:
   // resized() below mirrors it into processor.editorScale so it survives
   // teardown, restored by the next editor's constructor.
   double currentScale() const { return getWidth() / static_cast<double>(kWidth); }
+
+  // Native-side grip drag (see beginResizeDrag). A separate timer: the
+  // editor's own Timer base already polls the chain revision.
+  struct ResizeDrag : juce::Timer {
+    TONE3000Editor& owner;
+    juce::Point<float> startMouse;
+    double startScale = 1.0;
+    int startWidth = 0, startHeight = 0;
+    double lastApplied = 0.0;
+    explicit ResizeDrag(TONE3000Editor& e) : owner(e) {}
+    void timerCallback() override;
+  };
+  ResizeDrag resizeDrag{*this};
   void applyScaledSize(double scale);
   void updateResizeConstraints();
 

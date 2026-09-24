@@ -209,4 +209,36 @@ TEST(PresetManagerTest, MoveShiftsByDeltaWithinTheSection) {
   EXPECT_FALSE(mgr.move(d.id, -4));
 }
 
+TEST(PresetManagerTest, RemovedPresetRestoresWithItsOrderSlot) {
+  // The delete toast's Undo: remove() hands back the bytes, restore() puts
+  // the same file back, and since order.json still names the id, it lands
+  // in its old position rather than at the alphabetical tail.
+  TempPresetDir tmp;
+  PresetManager mgr(tmp.dir);
+  const auto a = mgr.save("Alpha", makePreset("a"));
+  const auto b = mgr.save("Beta", makePreset("b"));
+  const auto c = mgr.save("Gamma", makePreset("c"));
+  ASSERT_TRUE(mgr.move(c.id, -2));  // Gamma, Alpha, Beta
+
+  juce::MemoryBlock bytes;
+  ASSERT_TRUE(mgr.remove(c.id, &bytes));
+  EXPECT_FALSE(bytes.isEmpty());
+  EXPECT_FALSE(mgr.load(c.id).isValid());
+
+  ASSERT_TRUE(mgr.restore(c.id, bytes));
+  EXPECT_EQ(mgr.load(c.id)["marker"].toString(), "c");
+  const auto presets = mgr.list();
+  ASSERT_EQ(presets.size(), 3u);
+  EXPECT_EQ(presets[0].id, c.id);
+  EXPECT_EQ(presets[1].id, a.id);
+  EXPECT_EQ(presets[2].id, b.id);
+
+  // An existing file under the id is never clobbered (a second restore).
+  EXPECT_FALSE(mgr.restore(c.id, bytes));
+
+  // Factory ids and empty payloads are refused.
+  EXPECT_FALSE(mgr.restore("factory:x", bytes));
+  EXPECT_FALSE(mgr.restore(a.id, juce::MemoryBlock()));
+}
+
 }  // namespace

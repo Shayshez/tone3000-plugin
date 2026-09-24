@@ -13,6 +13,7 @@ import { useChainActions } from '../hooks/useChainActions';
 import { addSlotMenuItems, blockTypeMenuItems, useTileMenu } from './GalleryBlock';
 import { TileMenu } from './TileMenu';
 import { useToast } from './Toast';
+import { useMidiMenuItems } from '../hooks/useMidiLearn';
 import {
   BLACK,
   BORDER,
@@ -25,7 +26,13 @@ import {
   WHITE,
 } from './theme';
 import type { ChainItem, ToneBlock } from '../types/chain';
-import { BLOCK_TYPE_LABEL, adjacentInsertSlots, isEqFlat, isInsertSlot } from '../types/chain';
+import {
+  BLOCK_TYPE_LABEL,
+  adjacentInsertSlots,
+  blockPowerMidiTarget,
+  isEqFlat,
+  isInsertSlot,
+} from '../types/chain';
 
 /** Every chip (tone label or "+") is this exact box, regardless of label
     length, so the strip reads as a uniform row rather than ragged pill
@@ -373,13 +380,25 @@ const ChainMapTile: React.FC<{
   /** Empty slot already directly left / right (hides that Add Slot row). */
   slotLeft: boolean;
   slotRight: boolean;
+  /** Positional MIDI target for this block's power; null = not mappable. */
+  powerMidiTarget: string | null;
   isCurrent: boolean;
   onSelect: (blockId: string) => void;
   onSelectEq: (blockId: string) => void;
   /** Only ever passed (and only ever non-empty) for the current chip - see
       ChainMapChildTab. */
   childTabs?: ChainMapChildTab[];
-}> = ({ item, index, slotLeft, slotRight, isCurrent, onSelect, onSelectEq, childTabs }) => {
+}> = ({
+  item,
+  index,
+  slotLeft,
+  slotRight,
+  powerMidiTarget,
+  isCurrent,
+  onSelect,
+  onSelectEq,
+  childTabs,
+}) => {
   const { ref, handleRef, isDragging } = useSortable({
     id: item.blockId,
     index,
@@ -387,6 +406,7 @@ const ChainMapTile: React.FC<{
   });
   const actions = useChainActions();
   const modified = eqModified(item);
+  const powerMidi = useMidiMenuItems(powerMidiTarget, 'Power');
   // Right-click (iOS: long press) menu, same shared hook as the "+" chip
   // and the gallery tiles: Bypass, Replace, Add Slot Left/Right.
   const { menuAnchor, openMenu, closeMenu, shouldIgnoreClick, longPressProps } = useTileMenu();
@@ -605,6 +625,7 @@ const ChainMapTile: React.FC<{
               help: HELP.chipDelete,
               onSelect: () => actions.removeBlock(item.blockId),
             },
+            ...powerMidi,
           ]}
         />
       )}
@@ -750,6 +771,7 @@ export const ChainMapStrip: React.FC<ChainMapStripProps> = ({
                 index={index}
                 slotLeft={adjacentInsertSlots(localItems, index).left}
                 slotRight={adjacentInsertSlots(localItems, index).right}
+                powerMidiTarget={blockPowerMidiTarget(localItems, index)}
                 isCurrent={item.blockId === currentBlockId}
                 onSelect={onSelect}
                 onSelectEq={onSelectEq}

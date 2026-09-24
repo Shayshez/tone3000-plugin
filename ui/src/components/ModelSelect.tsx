@@ -5,6 +5,7 @@ import { useDismissable } from '../hooks/useDismissable';
 import { LoadingDots } from './LoadingDots';
 import { DISABLED_OPACITY } from './theme';
 import { getUiScale } from '../hooks/useUiScale';
+import { KEYBOARD_OWNER_ATTR, isKeyboardOwned, isTypingTarget } from '../keyPassthrough';
 
 interface Option {
   id: string;
@@ -15,6 +16,8 @@ interface Option {
 const OPTION_ROW_HEIGHT = 41;
 /** The dropdown shows at most this many options before scrolling. */
 const MAX_VISIBLE_OPTIONS = 5;
+/** Typed letters within this window extend one type-ahead search. */
+const TYPE_AHEAD_MS = 700;
 
 interface ModelSelectProps {
   options: Option[];
@@ -156,12 +159,97 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
     setIsOpen(false);
   };
 
+  // --- Keyboard -----------------------------------------------------------
+  // Open list: ↑/↓ move a highlight (the loaded row until moved), PageUp/
+  // PageDown jump a page, Home/End the ends, typed letters jump to the first
+  // name starting with them (then containing them), Enter loads the
+  // highlighted model, Esc closes (useDismissable). Nothing loads until
+  // Enter: each switch is a model download/rebuild, too heavy per keypress.
+  // Closed, with the pointer over the picker: ←/→ step to the previous/next
+  // model right away - the one-hand audition route.
+  const [highlight, setHighlight] = useState(-1);
+  const highlightRef = useRef<HTMLDivElement | null>(null);
+  const typeAhead = useRef({ text: '', at: 0 });
+  useEffect(() => {
+    if (isOpen) setHighlight(currentIndex);
+  }, [isOpen, currentIndex]);
+  useEffect(() => {
+    if (isOpen) highlightRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [isOpen, highlight]);
+
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const stateRef = useRef({ highlight, currentIndex, onChange });
+  stateRef.current = { highlight, currentIndex, onChange };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const list = optionsRef.current;
+      if (list.length === 0) return;
+      const { highlight: h } = stateRef.current;
+      const from = h < 0 ? 0 : h;
+      let next: number | null = null;
+      if (e.key === 'ArrowDown') next = Math.min(list.length - 1, h < 0 ? 0 : h + 1);
+      else if (e.key === 'ArrowUp') next = Math.max(0, from - 1);
+      else if (e.key === 'PageDown') next = Math.min(list.length - 1, from + MAX_VISIBLE_OPTIONS);
+      else if (e.key === 'PageUp') next = Math.max(0, from - MAX_VISIBLE_OPTIONS);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = list.length - 1;
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (h >= 0 && h < list.length) {
+          stateRef.current.onChange(list[h].id);
+        }
+        setIsOpen(false);
+        return;
+      } else if (e.key.length === 1 && e.key !== ' ') {
+        const now = performance.now();
+        const t = typeAhead.current;
+        t.text = (now - t.at < TYPE_AHEAD_MS ? t.text : '') + e.key.toLowerCase();
+        t.at = now;
+        const names = list.map((o) => o.name.toLowerCase());
+        let found = names.findIndex((n) => n.startsWith(t.text));
+        if (found < 0) found = names.findIndex((n) => n.includes(t.text));
+        if (found >= 0) next = found;
+        else return;
+      } else return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHighlight(next);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [isOpen]);
+
+  const [hovered, setHovered] = useState(false);
+  useEffect(() => {
+    if (!hovered || isOpen || disabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (isTypingTarget(e.target) || isKeyboardOwned()) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const list = optionsRef.current;
+      const { currentIndex: i, onChange: change } = stateRef.current;
+      const target = e.key === 'ArrowLeft' ? i - 1 : i + 1;
+      e.preventDefault();
+      e.stopPropagation();
+      if (target >= 0 && target < list.length) change(list[target].id);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [hovered, isOpen, disabled]);
+
   const close = useCallback(() => setIsOpen(false), []);
   useDismissable(isOpen, containerRef, close);
 
   return (
     <div
       ref={containerRef}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       style={{
         position: 'relative',
         width: '100%',
@@ -294,6 +382,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
         createPortal(
           <div
             ref={dropdownRef}
+            {...{ [KEYBOARD_OWNER_ATTR]: '' }}
             className="hide-scrollbar"
             onPointerDown={(e) => e.stopPropagation()}
             style={{
@@ -307,7 +396,10 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
             {options.map((option, index) => (
               <div
                 key={option.id}
-                ref={option.id === value ? activeOptionRef : undefined}
+                ref={(el) => {
+                  if (option.id === value) activeOptionRef.current = el;
+                  if (index === highlight) highlightRef.current = el;
+                }}
                 onClick={() => handleSelect(option.id)}
                 style={{
                   padding: '12rem 16rem',
@@ -319,20 +411,22 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  background: option.id === value ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                  background:
+                    option.id === value || index === highlight
+                      ? 'rgba(255, 255, 255, 0.1)'
+                      : 'transparent',
+                  // Keyboard highlight: a thin inset ring, so it reads as
+                  // "where the arrows are" distinct from the loaded row.
+                  boxShadow:
+                    index === highlight && highlight !== currentIndex
+                      ? 'inset 0 0 0 1rem rgba(255, 255, 255, 0.55)'
+                      : 'none',
                   borderBottom:
                     index < options.length - 1 ? '1rem solid rgba(84, 84, 88, 0.65)' : 'none',
                 }}
-                onMouseEnter={(e) => {
-                  if (option.id !== value) {
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (option.id !== value) {
-                    e.currentTarget.style.background = 'transparent';
-                  }
-                }}
+                // Hover and keyboard share one highlight, so the mouse and
+                // the arrows never show two different "current" rows.
+                onMouseEnter={() => setHighlight(index)}
               >
                 {option.name}
               </div>

@@ -178,8 +178,11 @@ bool TONE3000Processor::renamePreset(const juce::String& presetId, const juce::S
 }
 
 bool TONE3000Processor::deletePreset(const juce::String& presetId) {
-  if (!presetManager.remove(presetId))
+  juce::MemoryBlock bytes;
+  if (!presetManager.remove(presetId, &bytes))
     return false;
+  lastDeletedPresetId = presetId;
+  lastDeletedPresetBytes = std::move(bytes);
   juce::ScopedLock lock(chainMutex);
   if (activePresetId == presetId) {
     activePresetId.clear();
@@ -187,6 +190,16 @@ bool TONE3000Processor::deletePreset(const juce::String& presetId) {
     bumpChainRevision();
   }
   return true;
+}
+
+juce::String TONE3000Processor::restoreDeletedPreset() {
+  if (lastDeletedPresetId.isEmpty() ||
+      !presetManager.restore(lastDeletedPresetId, lastDeletedPresetBytes))
+    return {};
+  const juce::String id = lastDeletedPresetId;
+  lastDeletedPresetId.clear();
+  lastDeletedPresetBytes.reset();
+  return id;
 }
 
 bool TONE3000Processor::movePreset(const juce::String& presetId, int delta) {

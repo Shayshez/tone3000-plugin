@@ -68,8 +68,20 @@ public:
   /** Rename a user preset (rewrites the name inside the file). */
   bool rename(const juce::String& id, const juce::String& newName) const;
 
-  /** Delete a user preset. Factory presets are refused. */
-  bool remove(const juce::String& id) const;
+  /** Delete a user preset. Factory presets are refused. The store for the
+      real user folder moves the file to the OS trash (recoverable even if
+      the app's own Undo is missed); stores on an explicit base directory
+      (tests) delete outright, so test runs never litter the real Trash.
+      `removedBytes`, when given, receives the file's contents first, for
+      restore(). */
+  bool remove(const juce::String& id, juce::MemoryBlock* removedBytes = nullptr) const;
+
+  /** Write a removed user preset back under its original id (same file
+      name, so its slot in the custom order comes back too - remove() never
+      prunes order.json). Refuses factory ids, empty payloads, and an id whose
+      file exists (never clobbers). A same-name save made since the delete
+      has its own id, so both then coexist. */
+  bool restore(const juce::String& id, const juce::MemoryBlock& bytes) const;
 
   /** Move a preset by `delta` steps within its section (negative = earlier).
       Clamped to the factory/user boundary so the browser's sections and the
@@ -89,4 +101,5 @@ private:
   juce::File userDir;
   juce::File factoryDir;        // user-local Factory/ (dev drops, Linux install)
   juce::File systemFactoryDir;  // installer-shipped Factory/ (invalid when absent)
+  bool trashOnRemove{false};     // true only for the real user store (default ctor)
 };

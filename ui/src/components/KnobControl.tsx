@@ -4,9 +4,13 @@ import { KnobInner } from './KnobInner';
 import type { KnobThumb, KnobVariant } from './KnobInner';
 import type { KnobScale } from './knobScale';
 import { percentScale } from './knobScale';
-import { helpProps, pinHelp, unpinHelp } from './helpText';
+import { HELP, helpProps, pinHelp, unpinHelp } from './helpText';
 import { GRAY, KNOB_LABEL_GAP, SURFACE_RAISED, WHITE } from './theme';
 import { getUiScale, rem } from '../hooks/useUiScale';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
+import type { TileMenuItem } from './TileMenu';
+import { Pencil, RotateCcw } from './icons';
 
 /**
  * Knob interaction conventions (matching typical plugin UX):
@@ -17,9 +21,11 @@ import { getUiScale, rem } from '../hooks/useUiScale';
  * - Double-click opens inline text entry in real units (Enter commits,
  *   Escape cancels, blur commits).
  * - Alt/Option-click resets to the default value (when one is declared).
- * No scroll-wheel support on purpose: knobs sit inside the horizontally
- * scrolling chain view, and hijacking wheel events there hurts more than it
- * helps.
+ * - Right-click opens a menu with Reset to Default and Type Value (the
+ *   mouse-only routes to the two gestures above), plus owner extras.
+ * - Mouse wheel over the knob adjusts it (Shift = fine). Only while the
+ *   pointer is on the knob itself, so scrolling past elsewhere is untouched
+ *   (the horizontally scrolling gallery holds no knobs).
  *
  * On a touch screen the two mouse-only gestures are replaced rather than
  * dropped:
@@ -66,6 +72,9 @@ interface KnobControlProps {
       can pause external syncs mid-drag (a stale poll must not fight the
       pointer). */
   onDragStateChange?: (dragging: boolean) => void;
+  /** Extra right-click menu rows after the built-in Reset / Type Value
+      (e.g. MIDI Learn on host-parameter knobs). */
+  menuItems?: TileMenuItem[];
 }
 
 /** Every knob label is 14px; faceplate chrome lift and secondary-knob
@@ -74,6 +83,14 @@ const LABEL_SIZE = 14;
 
 const BASE_SENSITIVITY = 0.006;
 const FINE_FACTOR = 8;
+
+/** Wheel: normalized travel per pixel of wheel delta, capped per event so a
+    classic 100px mouse notch moves 4% (25 notches end to end) while
+    trackpads' small continuous deltas stay smooth. */
+const WHEEL_PER_PX = 0.0015;
+const WHEEL_MAX_STEP = 0.04;
+/** Quiet time after the last wheel event that ends the wheel gesture. */
+const WHEEL_IDLE_MS = 400;
 
 /** Label → value readout swap is debounced on press so a quick tap (e.g.
     half of a double-tap heading into the type-in editor) never flashes the
@@ -116,6 +133,7 @@ export const KnobControl: React.FC<KnobControlProps> = ({
   labelBright = false,
   onReset,
   onDragStateChange,
+  menuItems,
 }) => {
   const knobRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -337,9 +355,52 @@ export const KnobControl: React.FC<KnobControlProps> = ({
       dragStateRef.current?.(false);
     };
 
+    // Mouse wheel over the knob: a one-handed alternative to dragging. A
+    // burst of wheel events is treated as one gesture (drag state on, so the
+    // readout shows and owners pause external syncs), ending WHEEL_IDLE_MS
+    // after the last event. Shift = fine, like a drag (macOS turns
+    // Shift+wheel into a horizontal delta, hence the deltaX fallback).
+    // Bipolar knobs stop exactly on center when a step crosses it.
+    let wheelActive = false;
+    let wheelTimer: number | undefined;
+    const handleWheel = (e: WheelEvent) => {
+      if (draggingRef.current && !wheelActive) return; // a real drag owns it
+      const raw = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (raw === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!wheelActive) {
+        wheelActive = true;
+        draggingRef.current = true;
+        liveRef.current = valueRef.current;
+        emittedRef.current = valueRef.current;
+        setDragging(true);
+        dragStateRef.current?.(true);
+      }
+      const px = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? raw * 40 : raw;
+      const fineWheel = e.shiftKey;
+      const magnitude = Math.min(Math.abs(px) * WHEEL_PER_PX, WHEEL_MAX_STEP);
+      const step = -Math.sign(px) * magnitude * (fineWheel ? 1 / FINE_FACTOR : 1);
+      const prev = liveRef.current;
+      let next = clamp(prev + step, minRef.current, maxRef.current);
+      if (variantRef.current === 'bipolar' && prev !== 0.5 && (prev - 0.5) * (next - 0.5) < 0)
+        next = 0.5;
+      fineRef.current = true; // no coarse detent window on wheel steps
+      applyLive(next);
+      fineRef.current = false;
+      window.clearTimeout(wheelTimer);
+      wheelTimer = window.setTimeout(() => {
+        wheelActive = false;
+        draggingRef.current = false;
+        setDragging(false);
+        dragStateRef.current?.(false);
+      }, WHEEL_IDLE_MS);
+    };
+
     // Pointer events (not mouse events) so the drag state, and with it the
     // value readout and pinned hint, also engages for touch drags, which
     // never synthesize mouse events while moving.
+    knobElement.addEventListener('wheel', handleWheel, { passive: false });
     knobElement.addEventListener('selectstart', preventSelection);
     knobElement.addEventListener('dragstart', preventSelection);
     knobElement.addEventListener('pointerdown', handlePointerDown);
@@ -347,6 +408,8 @@ export const KnobControl: React.FC<KnobControlProps> = ({
     document.addEventListener('pointercancel', handlePointerUp);
 
     return () => {
+      knobElement.removeEventListener('wheel', handleWheel);
+      window.clearTimeout(wheelTimer);
       knobElement.removeEventListener('selectstart', preventSelection);
       knobElement.removeEventListener('dragstart', preventSelection);
       knobElement.removeEventListener('pointerdown', handlePointerDown);
@@ -379,6 +442,38 @@ export const KnobControl: React.FC<KnobControlProps> = ({
   const openEditor = useCallback(() => {
     setEditText(scale.editText(shownValue));
   }, [scale, shownValue]);
+
+  // Right-click menu: the mouse-only routes to the two hidden gestures
+  // (Alt/Option-click reset, double-click type-in), plus owner extras.
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const resetFromMenu = useCallback(() => {
+    const fallback = defaultValueRef.current;
+    if (fallback === undefined) return;
+    onChangeRef.current(fallback);
+    onResetRef.current?.();
+    liveRef.current = fallback;
+    emittedRef.current = fallback;
+    setLiveValue(fallback);
+  }, []);
+  const knobMenuItems: TileMenuItem[] = [
+    ...(defaultValue !== undefined
+      ? [
+          {
+            label: 'Reset to Default',
+            icon: <RotateCcw size={16} />,
+            help: HELP.knobMenuReset,
+            onSelect: resetFromMenu,
+          },
+        ]
+      : []),
+    {
+      label: 'Type Value…',
+      icon: <Pencil size={16} />,
+      help: HELP.knobMenuType,
+      onSelect: openEditor,
+    },
+    ...(menuItems ?? []),
+  ];
 
   // Layout effect so the focus lands in the same call stack as the tap or
   // double-click that opened the editor; WKWebView only raises the on-screen
@@ -467,6 +562,7 @@ export const KnobControl: React.FC<KnobControlProps> = ({
     <div
       {...(help ? helpProps(help) : {})}
       onPointerDownCapture={(e) => (lastPointerTypeRef.current = e.pointerType)}
+      onContextMenu={openMenu}
       style={{
         display: 'flex',
         flexDirection: labelBottom ? 'column' : 'column-reverse',
@@ -531,6 +627,7 @@ export const KnobControl: React.FC<KnobControlProps> = ({
           labelText
         )}
       </div>
+      {menuAnchor && <TileMenu anchor={menuAnchor} onClose={closeMenu} items={knobMenuItems} />}
     </div>
   );
 };

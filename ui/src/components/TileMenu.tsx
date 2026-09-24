@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { helpProps } from './helpText';
 import { useDismissable } from '../hooks/useDismissable';
 import { BORDER, DISABLED_OPACITY, HIGHLIGHT, MUTED, WHITE } from './theme';
+import { KEYBOARD_OWNER_ATTR } from '../keyPassthrough';
 
 /**
  * Right-click action sheet for gallery tiles, in the house floating-panel
@@ -78,10 +79,14 @@ const rowStyle = (disabled?: boolean): React.CSSProperties => ({
     (useLayoutEffect, before paint) against the flyout's own rendered rect
     rather than computed from rem/px conversions, so it's correct
     regardless of UI scale. */
-const SubmenuFlyout: React.FC<{ items: TileMenuItem[]; onCommit: () => void }> = ({
-  items,
-  onCommit,
-}) => {
+const SubmenuFlyout: React.FC<{
+  items: TileMenuItem[];
+  onCommit: () => void;
+  /** Opened from the keyboard (→): focus its first row. */
+  autoFocus: boolean;
+  /** ← from inside: close and return focus to the parent row. */
+  onBack: () => void;
+}> = ({ items, onCommit, autoFocus, onBack }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [openLeft, setOpenLeft] = useState(false);
 
@@ -101,7 +106,13 @@ const SubmenuFlyout: React.FC<{ items: TileMenuItem[]; onCommit: () => void }> =
           : { left: `calc(100% + ${SUBMENU_OFFSET_X}rem)` }),
       }}
     >
-      <MenuPanel items={items} onCommit={onCommit} style={{}} />
+      <MenuPanel
+        items={items}
+        onCommit={onCommit}
+        style={{}}
+        autoFocus={autoFocus}
+        onBack={onBack}
+      />
     </div>
   );
 };
@@ -113,11 +124,52 @@ const MenuPanel: React.FC<{
   items: TileMenuItem[];
   onCommit: () => void;
   style: React.CSSProperties;
-}> = ({ items, onCommit, style }) => {
+  /** Focus the first enabled row on mount (root sheet, keyboard flyouts). */
+  autoFocus?: boolean;
+  /** Set on a flyout: ← closes it back to the parent row. */
+  onBack?: () => void;
+}> = ({ items, onCommit, style, autoFocus = false, onBack }) => {
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null);
+  const [submenuByKey, setSubmenuByKey] = useState(false);
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const focusRow = (from: number, dir: 1 | -1) => {
+    for (let step = 1; step <= items.length; step++) {
+      const i = (from + dir * step + items.length * step) % items.length;
+      if (!items[i]?.disabled && rowRefs.current[i]) {
+        rowRefs.current[i]?.focus();
+        return;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (autoFocus) focusRow(-1, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keyboard: ↑/↓ cycle enabled rows, → opens a row's flyout (focusing its
+  // first row), ← closes this flyout back to its parent row; Enter/Space
+  // activate the focused row natively (they're real buttons); Esc closes
+  // the whole sheet (useDismissable). stopPropagation keeps a flyout's keys
+  // from also moving the parent panel.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const current = rowRefs.current.findIndex((el) => el === document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      focusRow(current, e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'ArrowRight' && current >= 0 && items[current]?.submenu) {
+      setSubmenuByKey(true);
+      setOpenSubmenu(current);
+    } else if (e.key === 'ArrowLeft' && onBack) {
+      onBack();
+    } else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   return (
     <div
+      onKeyDown={onKeyDown}
       style={{
         width: `${MENU_WIDTH}rem`,
         backgroundColor: '#141416',
@@ -132,9 +184,15 @@ const MenuPanel: React.FC<{
         <div
           key={item.label}
           style={{ position: 'relative' }}
-          onMouseEnter={() => setOpenSubmenu(item.submenu ? index : null)}
+          onMouseEnter={() => {
+            setSubmenuByKey(false);
+            setOpenSubmenu(item.submenu ? index : null);
+          }}
         >
           <button
+            ref={(el) => {
+              rowRefs.current[index] = el;
+            }}
             type="button"
             className="tile-menu-item"
             disabled={item.disabled}
@@ -150,7 +208,15 @@ const MenuPanel: React.FC<{
             {item.label}
           </button>
           {item.submenu && openSubmenu === index && (
-            <SubmenuFlyout items={item.submenu} onCommit={onCommit} />
+            <SubmenuFlyout
+              items={item.submenu}
+              onCommit={onCommit}
+              autoFocus={submenuByKey}
+              onBack={() => {
+                setOpenSubmenu(null);
+                rowRefs.current[index]?.focus();
+              }}
+            />
           )}
         </div>
       ))}
@@ -200,6 +266,7 @@ export const TileMenu: React.FC<{
   return createPortal(
     <div
       ref={rootRef}
+      {...{ [KEYBOARD_OWNER_ATTR]: '' }}
       // Keep every gesture inside the panel: clicks must not open the tile's
       // detail view, presses must not arm a drag under the menu.
       onClick={(e) => e.stopPropagation()}
@@ -217,8 +284,8 @@ export const TileMenu: React.FC<{
         zIndex: 1000,
       }}
     >
-      <style>{`.tile-menu-item:hover:not(:disabled) { background-color: ${HIGHLIGHT}; }`}</style>
-      <MenuPanel items={items} onCommit={onClose} style={{}} />
+      <style>{`.tile-menu-item:hover:not(:disabled), .tile-menu-item:focus-visible { background-color: ${HIGHLIGHT}; outline: none; }`}</style>
+      <MenuPanel items={items} onCommit={onClose} style={{}} autoFocus />
     </div>,
     document.body
   );

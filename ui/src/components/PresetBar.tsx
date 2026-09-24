@@ -4,6 +4,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CopyPlus,
   GripVertical,
   MidiPort,
   Pencil,
@@ -22,6 +23,10 @@ import { useDismissable } from '../hooks/useDismissable';
 import { IS_COARSE_POINTER } from '../hooks/useUiScale';
 import { useToast } from './Toast';
 import { HELP, helpProps } from './helpText';
+import { useMidiMenuItems } from '../hooks/useMidiLearn';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
+import type { TileMenuItem } from './TileMenu';
 import { BORDER, FONT_MONO, GRAY, SEGMENTED_TRACK } from './theme';
 import { setPresetPcNumbersEnabled, usePresetPcNumbersEnabled } from './uiPreferences';
 
@@ -101,6 +106,8 @@ interface PresetRowProps {
   /** MIDI program change that loads this preset; undefined past PC 127. */
   pcNumber: number | undefined;
   isActive: boolean;
+  /** Keyboard highlight from the search field's ↑/↓ (see PresetBar). */
+  highlighted: boolean;
   isRenaming: boolean;
   renameValue: string;
   onRenameChange: (value: string) => void;
@@ -118,6 +125,7 @@ const PresetRow: React.FC<PresetRowProps> = ({
   sortable,
   pcNumber,
   isActive,
+  highlighted,
   isRenaming,
   renameValue,
   onRenameChange,
@@ -138,15 +146,25 @@ const PresetRow: React.FC<PresetRowProps> = ({
     disabled: !sortable,
   });
 
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (highlighted) rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [highlighted]);
+
   return (
     <div
-      ref={ref}
+      ref={(el) => {
+        ref(el);
+        rowRef.current = el;
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: '8rem',
         height: '32rem',
         padding: '0 4rem',
+        borderRadius: '6rem',
+        background: highlighted ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
         opacity: isDragging ? 0.75 : 1,
       }}
     >
@@ -251,7 +269,9 @@ interface PresetBarProps {
   onSave: (name: string) => Promise<{ id: string; name: string } | null>;
   onLoad: (id: string) => void;
   onRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string) => Promise<boolean | null> | void;
+  /** Undo the most recent delete (the toast's Undo). */
+  onRestoreDeleted: () => Promise<string | null> | void;
   /** N steps within the preset's section (negative = earlier). */
   onMove: (id: string, delta: number) => void;
   /** Clear the chain and reset every control to its default. */
@@ -268,6 +288,7 @@ export const PresetBar: React.FC<PresetBarProps> = ({
   onLoad,
   onRename,
   onDelete,
+  onRestoreDeleted,
   onMove,
   onReset,
 }) => {
@@ -307,6 +328,61 @@ export const PresetBar: React.FC<PresetBarProps> = ({
     setOrdered(null);
     setOpen((prev) => (prev === 'browse' ? 'none' : 'browse'));
   }, []);
+
+  // Right-click menus: the name opens Rename / Duplicate / Delete for the
+  // active preset (otherwise only reachable inside the browse list); each
+  // chevron offers MIDI Learn for Previous / Next Preset.
+  // Every delete (list trash icon or the name menu) offers Undo: native
+  // moved the file to the OS trash and kept a copy for exactly this.
+  const deleteWithUndo = async (id: string) => {
+    const name = presets.find((p) => p.id === id)?.name ?? 'Preset';
+    const ok = await onDelete(id);
+    if (ok === false || ok === null) return; // refused / failed: nothing to undo
+    toast.showAction(`Deleted "${name}"`, 'Undo', async () => {
+      if (await onRestoreDeleted()) toast.show(`Restored "${name}"`);
+    });
+  };
+  const nameMenu = useTileMenu();
+  const prevMenu = useTileMenu();
+  const nextMenu = useTileMenu();
+  const prevMidi = useMidiMenuItems('presetPrevious');
+  const nextMidi = useMidiMenuItems('presetNext');
+  const activeInfo = active ? presets.find((p) => p.id === active.id) : undefined;
+  const editableActive = activeInfo && !activeInfo.factory ? activeInfo : undefined;
+  const nameMenuItems: TileMenuItem[] = [
+    {
+      label: 'Rename',
+      icon: <Pencil size={16} />,
+      help: HELP.presetRename,
+      disabled: !editableActive,
+      onSelect: () => {
+        if (!editableActive) return;
+        setSearch('');
+        setReordering(false);
+        setOrdered(null);
+        setOpen('browse');
+        setRenamingId(editableActive.id);
+        setRenameValue(editableActive.name);
+      },
+    },
+    {
+      label: 'Duplicate',
+      icon: <CopyPlus size={16} />,
+      help: HELP.presetDuplicate,
+      disabled: !activeInfo,
+      onSelect: async () => {
+        if (!activeInfo) return;
+        if (await onSave(`${activeInfo.name} Copy`)) toast.show('Preset Duplicated');
+      },
+    },
+    {
+      label: 'Delete',
+      icon: <Trash2 size={16} />,
+      help: HELP.presetDelete,
+      disabled: !editableActive,
+      onSelect: () => editableActive && void deleteWithUndo(editableActive.id),
+    },
+  ];
 
   const handleSave = useCallback(async () => {
     const name = saveName.trim();
@@ -354,6 +430,29 @@ export const PresetBar: React.FC<PresetBarProps> = ({
   }, [ordered, presets, search]);
   const factoryPresets = filtered.filter((p) => p.factory);
   const userPresets = filtered.filter((p) => !p.factory);
+
+  // Search-field keyboard: ↑/↓ walk the visible rows (user section, then
+  // factory - the on-screen order), Enter loads the highlighted row, or the
+  // first match when nothing is highlighted yet (type a few letters, Enter).
+  // Esc closes the panel (useDismissable).
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => setHighlightId(null), [search, open]);
+  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const visible = [...userPresets, ...factoryPresets];
+    if (visible.length === 0) return;
+    const at = visible.findIndex((p) => p.id === highlightId);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next =
+        e.key === 'ArrowDown'
+          ? Math.min(visible.length - 1, at + 1)
+          : Math.max(0, at < 0 ? 0 : at - 1);
+      setHighlightId(visible[next].id);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      loadAndClose((at >= 0 ? visible[at] : visible[0]).id);
+    }
+  };
 
   // PC n loads the nth preset of the full list (display order matches the
   // native list), so the label is the index; built from the optimistic order
@@ -423,6 +522,7 @@ export const PresetBar: React.FC<PresetBarProps> = ({
         sortable={canDrag}
         pcNumber={showPcNumbers ? pcById.get(preset.id) : undefined}
         isActive={active?.id === preset.id}
+        highlighted={highlightId === preset.id}
         isRenaming={isRenaming}
         renameValue={renameValue}
         onRenameChange={setRenameValue}
@@ -433,7 +533,7 @@ export const PresetBar: React.FC<PresetBarProps> = ({
           setRenamingId(preset.id);
           setRenameValue(preset.name);
         }}
-        onDelete={() => onDelete(preset.id)}
+        onDelete={() => void deleteWithUndo(preset.id)}
       />
     );
   };
@@ -456,11 +556,17 @@ export const PresetBar: React.FC<PresetBarProps> = ({
           flexShrink: 0,
         }}
       >
-        <button onClick={() => step(-1)} {...helpProps(HELP.presetPrev)} style={chevronStyle}>
+        <button
+          onClick={() => step(-1)}
+          onContextMenu={prevMenu.openMenu}
+          {...helpProps(HELP.presetPrev)}
+          style={chevronStyle}
+        >
           <ChevronLeft size={14} />
         </button>
         <button
           onClick={openBrowse}
+          onContextMenu={nameMenu.openMenu}
           {...helpProps(HELP.presetBrowse)}
           style={{
             background: 'transparent',
@@ -488,7 +594,12 @@ export const PresetBar: React.FC<PresetBarProps> = ({
         >
           {active?.name ?? 'Presets'}
         </button>
-        <button onClick={() => step(1)} {...helpProps(HELP.presetNext)} style={chevronStyle}>
+        <button
+          onClick={() => step(1)}
+          onContextMenu={nextMenu.openMenu}
+          {...helpProps(HELP.presetNext)}
+          style={chevronStyle}
+        >
           <ChevronRight size={14} />
         </button>
       </div>
@@ -510,6 +621,16 @@ export const PresetBar: React.FC<PresetBarProps> = ({
       >
         <Plus size={18} />
       </IconButton>
+
+      {nameMenu.menuAnchor && (
+        <TileMenu anchor={nameMenu.menuAnchor} onClose={nameMenu.closeMenu} items={nameMenuItems} />
+      )}
+      {prevMenu.menuAnchor && (
+        <TileMenu anchor={prevMenu.menuAnchor} onClose={prevMenu.closeMenu} items={prevMidi} />
+      )}
+      {nextMenu.menuAnchor && (
+        <TileMenu anchor={nextMenu.menuAnchor} onClose={nextMenu.closeMenu} items={nextMidi} />
+      )}
 
       {/* Save popover */}
       {open === 'save' && (
@@ -578,6 +699,7 @@ export const PresetBar: React.FC<PresetBarProps> = ({
                 autoFocus
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={onSearchKeyDown}
                 placeholder="Search presets"
                 style={{ ...inputStyle, padding: '8rem 12rem 8rem 32rem', borderRadius: '10rem' }}
               />

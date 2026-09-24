@@ -452,6 +452,12 @@ add_dependencies(${PROJECT_NAME} NAM)
 if (NOT HEADLESS)
     # Add Webview GUI files as binary data (built by npm run build in ui/)
     file(GLOB_RECURSE WEB_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/webview/*.*")
+    # Skip macOS Finder litter: hidden files (.DS_Store) and " 2" copies
+    # ("main-abc 2.css"). The glob is frozen at configure time and each UI
+    # build wipes the folder, so a stray file captured here breaks the next
+    # build with "No rule to make target". Vite never emits either shape.
+    list(FILTER WEB_ASSETS EXCLUDE REGEX "/\\.[^/]*$")
+    list(FILTER WEB_ASSETS EXCLUDE REGEX " [0-9]+\\.[^/]*$")
     # Fallback: CI configures before UI build; use placeholder so juce_add_binary_data succeeds.
     # Reconfigure after "Build UI" step to pick up real assets.
     if (NOT WEB_ASSETS)

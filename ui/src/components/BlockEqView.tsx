@@ -28,6 +28,10 @@ import {
 } from './eqShared';
 import { getUiScale, rem } from '../hooks/useUiScale';
 import { SpectrumBackdrop } from './SpectrumBackdrop';
+import { useTileMenu } from '../hooks/useTileMenu';
+import { TileMenu } from './TileMenu';
+import type { TileMenuItem } from './TileMenu';
+import { Power, RotateCcw } from './icons';
 import { HELP, helpProps, pinHelp, unpinHelp } from './helpText';
 import { DISABLED_OPACITY, FONT_MONO, WHITE, uiOffClass } from './theme';
 
@@ -178,6 +182,8 @@ const FaderValue: React.FC<{
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (disabled || editing) return;
+    // Right-click belongs to the band menu (onContextMenu on the column).
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
     lastPointerTypeRef.current = e.pointerType;
     // Option/Alt-click resets instead of starting a drag, matching
@@ -362,8 +368,54 @@ export const BlockEqView: React.FC<BlockEqViewProps> = ({
 
   const [doubleTap] = useState(createDoubleTapDetector);
 
+  // Right-click band menu (graph dot or strip column). `withBypass`: the dot
+  // offers Bypass/Enable too (its only other route is a double-click); the
+  // strip column doesn't, since its icon already is a visible bypass toggle.
+  // Reset Band here is a full return to that band's defaults (Freq,
+  // Gain/Pole, Q) - broader than the ⌥-click neutralize, which keeps Freq.
+  const { menuAnchor, openMenu, closeMenu } = useTileMenu();
+  const [menuTarget, setMenuTarget] = useState<{ index: number; withBypass: boolean } | null>(null);
+  const openBandMenu = (index: number, withBypass: boolean) => (e: React.MouseEvent) => {
+    setSelected(index);
+    setMenuTarget({ index, withBypass });
+    openMenu(e);
+  };
+  const bandMenuItems = (): TileMenuItem[] => {
+    if (!menuTarget) return [];
+    const i = menuTarget.index;
+    const band = bands[i];
+    if (!band) return [];
+    return [
+      {
+        label: 'Reset Band',
+        icon: <RotateCcw size={16} />,
+        help: HELP.eqBandMenuReset,
+        onSelect: () =>
+          updateBand(i, {
+            freqHz: EQ_DEFAULT_FREQ_HZ[i],
+            gainDb: 0,
+            q: EQ_DEFAULT_Q[i],
+            poles: 4,
+          }),
+      },
+      ...(menuTarget.withBypass
+        ? [
+            {
+              label: band.on ? 'Bypass Band' : 'Enable Band',
+              icon: <Power size={16} />,
+              help: HELP.eqBandBypass,
+              onSelect: () => toggleBandOn(i),
+            },
+          ]
+        : []),
+    ];
+  };
+
   const handleDotPointerDown = useCallback(
     (index: number) => (e: React.PointerEvent<SVGCircleElement>) => {
+      // Right/middle mouse buttons never drag (right-click opens the band
+      // menu via onContextMenu instead).
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.preventDefault();
       setSelected(index);
       // Touch: second tap of a double tap resets, and ends the gesture there.
@@ -567,6 +619,7 @@ export const BlockEqView: React.FC<BlockEqViewProps> = ({
         key={i}
         onPointerEnter={() => setHovered(i)}
         onPointerLeave={() => setHovered((h) => (h === i ? null : h))}
+        onContextMenu={openBandMenu(i, false)}
         style={{
           width: `${chipColW}%`,
           minWidth: 0,
@@ -820,6 +873,7 @@ export const BlockEqView: React.FC<BlockEqViewProps> = ({
                     onPointerUp={handleDotPointerUp}
                     onPointerCancel={handleDotPointerUp}
                     onDoubleClick={() => toggleBandOn(i)}
+                    onContextMenu={openBandMenu(i, true)}
                   />
                 </g>
               );
@@ -847,6 +901,9 @@ export const BlockEqView: React.FC<BlockEqViewProps> = ({
       >
         {bands.map((band, i) => renderStripChip(band, i))}
       </div>
+      {menuAnchor && menuTarget && (
+        <TileMenu anchor={menuAnchor} onClose={closeMenu} items={bandMenuItems()} />
+      )}
     </div>
   );
 };
