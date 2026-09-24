@@ -2007,8 +2007,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       // is on (see WaveformDisplay/IrEnvelopeGraph's startFraction prop).
       item->setProperty("irOnsetFraction", row.irOnsetFraction);
       // Explicit IR category ("cab"/"irPlayer"): drives the UI's Mix knob
-      // default/Alt-click reset and the Out knob help (Cab carries the
-      // -18 dB pad, IrPlayer doesn't). See IrCategory in ChainBlock.h.
+      // default/Alt-click reset. See IrCategory in ChainBlock.h.
       item->setProperty("irCategory", irCategoryToString(row.irCategory));
       // Channels in the loaded IR file (1 or 2), never re-derived in the UI
       // (see ChainBlock::irNumChannels) - the sole source of truth for
@@ -2223,9 +2222,9 @@ bool TONE3000Processor::setBlockIrCategory(const std::string& blockId,
   block->irCategory = newCategory;
   // V1: no memory of a prior per-category mix - switching category always
   // resets to its fixed default (Cab 100%, IrPlayer 25%), same as a fresh
-  // load (see applyPreparedModelToChainBlock). Both this and the -18 dB cab
-  // pad (Processor.cpp) are pulled from smoothed values every block, so a
-  // live block glides through the change rather than clicking.
+  // load (see applyPreparedModelToChainBlock). Mix is pulled from a smoothed
+  // value every block, so a live block glides through the change rather
+  // than clicking.
   block->mixNormalized = newCategory == IrCategory::Cab ? 1.0f : 0.25f;
 
   bumpChainRevision();

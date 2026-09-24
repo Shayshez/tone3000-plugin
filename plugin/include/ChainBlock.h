@@ -85,9 +85,8 @@ inline float irSizeGainCompensation(float durationRatio) {
 // Chain block types. CAB is a real cabinet IR block (site tones tagged
 // gear == "cab"; see parseToneForLoading/toneEngineType in ProcessorChain.cpp):
 // structurally minimal by design - no predelay/envelope/waveform fields, a
-// single convolver, unconditionally the #89 fix's Cab truncation/pad/mix
-// (see prepareBlockModelOffThread/applyPreparedModelToChainBlock and the
-// -18dB pad in Processor.cpp). IR keeps carrying IrCategory::Cab for content
+// single convolver, unconditionally the #89 fix's Cab truncation/mix
+// (see prepareBlockModelOffThread/applyPreparedModelToChainBlock). IR keeps carrying IrCategory::Cab for content
 // that was loaded before this split existed / local file drops guessed as
 // cab-length; that's a separate, still-live classification, not this type.
 //
@@ -343,7 +342,7 @@ struct ChainBlock {
   float irEffectiveNormalizationGainLinear{1.0f};
 
   // Explicit IR content category (see IrCategory above): the sole source of
-  // the -18 dB cab pad and this block's default mix (Processor.cpp /
+  // this block's default mix (Processor.cpp /
   // applyPreparedModelToChainBlock). Site-loaded tones resolve it
   // synchronously from the tone's `gear` metadata (loadTone), before the
   // download even starts. Persisted; a user edit (setBlockIrCategory) is a
@@ -356,11 +355,6 @@ struct ChainBlock {
   // (applyPreparedModelToChainBlock). Never set for swaps/switches, which
   // keep the block's existing category exactly like they keep its mix.
   bool irCategoryNeedsDurationGuess{false};
-  // Smoothed -18 dB cab pad (see irOffsetDb in Processor.cpp). Category used
-  // to be fixed at load, so the pad could be a flat per-block multiply; now
-  // setBlockIrCategory can flip it on a live block, so this glides the
-  // change instead of clicking, same as outputGainSmoother/mixSmoother.
-  juce::LinearSmoothedValue<float> irPadGainSmoother{1.0f};
 
   // Untouched, file-rate copy of the loaded IR (source of truth for the
   // waveform display and future Length/Decay/Curve editing) plus a
@@ -461,7 +455,7 @@ struct ChainBlock {
   // irIsLong/irNumChannels and irRawSamples/irContentLengthSamples/
   // irWaveformPeaks never change from an envelope edit - only the live
   // convolverMono/convolverStereo and irLengthBaseSamples do; the waveform
-  // display's fixed window and the -18dB cab pad / default mix stay exactly
+  // display's fixed window and the default mix stay exactly
   // what they were at load.
   float initLevelNormalized{1.0f};
   float attackLengthNormalized{0.0f};

@@ -303,7 +303,7 @@ const HELP_DESKTOP = {
   blockOut: knobHelp('Out', 'block output gain, up to +24 dB, mutes at zero.'),
   blockOutIr: knobHelp(
     'Out',
-    'block output gain (IR pre-trimmed -18 dB), up to +24 dB, mutes at zero.'
+    'block output gain (IR level-normalized), up to +24 dB, mutes at zero.'
   ),
   blockMix: knobHelp('Mix', 'dry/wet blend.'),
   blockPredelay: knobHelp('Delay', 'delay before the IR player starts, up to 1s.'),
@@ -383,7 +383,7 @@ const HELP_DESKTOP = {
   blockSizeChip:
     'NAM Size: this block\u2019s size differs from your default. To choose per block, enable it in Settings.',
   blockIrCategory:
-    'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 -18 dB pad, 100% mix by default. IR Player \u2014 no pad, 25% mix by default.',
+    'Cab / IR Player: converts this block \u2014 the sample carries over, truncated to 500ms going into Cab, full length going back. Cab \u2014 100% mix by default. IR Player \u2014 25% mix by default.',
   blockCalibrated: 'Calibration: active \u2014 levels set from this model\u2019s calibration data.',
   blockUncalibrated: 'Calibration: inactive \u2014 this model has no calibration data.',
   eqToggle: 'EQ: 8-band EQ editor. Outline: EQ shaping the sound.',

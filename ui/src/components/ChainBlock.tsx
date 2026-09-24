@@ -447,8 +447,8 @@ const BlockSizeControl: React.FC<{
     for what a click actually does: a real ChainBlockType conversion
     (convertBlockType) off a CAB block or onto a plain IR block that isn't
     already flagged IrCategory::Cab, otherwise the lighter existing
-    reclassification (setBlockIrCategory), which just resets Mix (and the
-    native -18 dB cab pad) to the new category's fixed default. */
+    reclassification (setBlockIrCategory), which just resets Mix to the new
+    category's fixed default. */
 const IrCategoryControl: React.FC<{
   category: 'cab' | 'irPlayer';
   onChange: (category: 'cab' | 'irPlayer') => void;
@@ -1065,7 +1065,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // convolver), so the sections built for those fields never render for one:
   // nothing back there to show. NOT the same as IrCategory === 'cab' (a
   // still-live classification on plain IR blocks); that one keeps the full
-  // IR Player feature set, just with the -18dB pad and 100% mix default.
+  // IR Player feature set, just with the 100% mix default.
   const isCab = block.blockType === 'cab';
   // A standalone EQ block (ChainBlockType::EQ, see addEqBlock) - no model,
   // no tone content, nothing to swap or download; this block's own eq
@@ -1856,7 +1856,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // The header's "Cab / IR Player" control does double duty. Off a real CAB
   // block (isCab), or onto one, it's a genuine block-type conversion (see
   // convertBlockType): the loaded sample carries over, IR -> CAB applying
-  // the same 500ms truncation/-18dB pad a site-loaded Cab tone gets, CAB ->
+  // the same 500ms truncation a site-loaded Cab tone gets, CAB ->
   // IR restoring the full original sample. No local optimistic state to set
   // here - blockType flips only once native's chain-state resync lands (the
   // block stays `loaded` throughout, so it keeps playing under the existing

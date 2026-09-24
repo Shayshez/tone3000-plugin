@@ -174,13 +174,13 @@ export interface ChainActions {
   /** The block's NAM A2 size (0 = lite, 1 = full); retiers the loaded
       engine natively. Backs the header LITE/FULL toggle. */
   setBlockSlimSize: (blockId: string, slimSize: number) => void;
-  /** Explicit IR content category (see ToneBlock.irCategory); resets Mix (and
-      the -18 dB cab pad) to the new category's fixed default. IR blocks only. */
+  /** Explicit IR content category (see ToneBlock.irCategory); resets Mix to
+      the new category's fixed default. IR blocks only. */
   setBlockIrCategory: (blockId: string, category: 'cab' | 'irPlayer') => void;
   /** Convert a loaded IR block into a real ChainBlockType::CAB block, or a
       CAB block back into an IR block (see ToneBlock.blockType) - the header
       "Cab / IR Player" control's actual conversion action. The loaded sample
-      carries over: "cab" applies the same 500ms truncation/-18dB pad a
+      carries over: "cab" applies the same 500ms truncation a
       site-loaded Cab tone gets, "ir" restores the full original sample (the
       round trip doesn't remember the truncation) and lands explicitly in
       the IrCategory::IrPlayer category. No-op for an unloaded block or a

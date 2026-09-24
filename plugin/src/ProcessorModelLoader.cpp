@@ -21,7 +21,7 @@
 // length: real catalog content includes cabs manually trimmed to seconds of
 // file length around tens of ms of real signal, so file length can't tell
 // the species apart (that mismatch is TONE3000 issue #89). Category alone
-// drives every audible default (the -18 dB cab pad, default mix; see
+// drives every audible default (default mix; see
 // Processor.cpp / applyPreparedModelToChainBlock). Engine selection is a
 // separate, purely CPU-side decision:
 //   Cab:      always the uniform zero-latency engine, hard-capped to its
@@ -1981,11 +1981,6 @@ void TONE3000Processor::applyPreparedModelToChainBlock(ChainBlock& block, ChainB
   block.outputGainSmoother.reset(chainSampleRate(), 0.05f);
   block.mixSmoother.reset(chainSampleRate(), 0.05f);
   block.mixSmoother.setCurrentAndTargetValue(block.mixNormalized);
-  block.irPadGainSmoother.reset(chainSampleRate(), 0.05f);
-  block.irPadGainSmoother.setCurrentAndTargetValue(
-      (block.irCategory == IrCategory::Cab || block.type == ChainBlockType::CAB)
-          ? juce::Decibels::decibelsToGain(-18.0f)
-          : 1.0f);
 
   // Splice-in fade: the new engine enters from silence instead of jumping
   // in mid-waveform, mirroring how the outgoing one left (see

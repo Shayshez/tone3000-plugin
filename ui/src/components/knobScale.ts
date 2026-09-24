@@ -54,9 +54,9 @@ export const percentScale: KnobScale = makeScale(
     still-audible -24 dB; mirrors gainKnobDb in Processor.cpp exactly
     (same 0.001 dead zone at the bottom, same 40*log10(n/0.5) curve) so the
     knob's own display always agrees with what the DSP actually does.
-    Note: IR blocks read the same scale on their Out knob, but the DSP
-    bakes in an extra -18 dB (IR files are typically peak-normalized to
-    0 dBFS, far too hot at unity); see irOffsetDb in Processor.cpp. */
+    IR and Cab blocks read the same scale on their Out knob; their wet path
+    is already unit-energy normalized to about the dry level, with no extra
+    hidden pad. */
 const GAIN_KNOB_SILENCE_THRESHOLD = 0.001;
 export const gainDbScale: KnobScale = (() => {
   const toDisplay = (n: number): number => {

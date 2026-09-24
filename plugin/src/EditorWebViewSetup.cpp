@@ -451,7 +451,7 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           }))
       .withNativeFunction(
           // (blockId, "cab" | "irPlayer"): explicit IR content category.
-          // Resets mix (and the -18 dB cab pad) to the new category's fixed
+          // Resets mix to the new category's fixed
           // default; never touches engine selection. IR blocks only; rides
           // getChainState as tone.irCategory.
           "setBlockIrCategory", guarded(2, false, [editor](const juce::Array<juce::var>& args) {

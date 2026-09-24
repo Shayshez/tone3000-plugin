@@ -383,7 +383,7 @@ public:
   // thread from the active model's already-cached bytes (no network) through
   // the normal prepareBlockModelOffThread -> applyPreparedModelToChainBlock
   // pipeline, so IR -> CAB picks up the #89 fix's unconditional 500ms
-  // truncation/-18dB pad exactly like a site-loaded Cab tone. CAB -> IR
+  // truncation exactly like a site-loaded Cab tone. CAB -> IR
   // re-reads those same untouched source bytes with IrPlayer's generous cap:
   // the round trip restores the full original sample, it does not remember
   // the truncation. Lands as IrCategory::IrPlayer explicitly (never the
@@ -403,7 +403,7 @@ public:
   // already-loaded raw samples (rebuildIrShapeInBackground) and spliced in
   // with the same wet-mute fade an engine swap uses, never touching
   // irIsLong/irRawSamples/irWaveformPeaks (the waveform display's fixed
-  // window and the -18dB cab pad / default mix stay exactly what they were
+  // window and the default mix stay exactly what they were
   // at load).
   //
   // `initLevelNormalized` is the level at sample 0 (the origin, not part of

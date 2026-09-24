@@ -385,9 +385,9 @@ export interface ToneBlock {
       blocks and IR blocks not yet loaded. */
   irOnsetFraction: number;
   /** Explicit IR content category (IR blocks only; meaningless for NAM).
-      'cab' = real cabinet content: -18 dB output pad, 100% default mix.
+      'cab' = real cabinet content: 100% default mix.
       'irPlayer' = anything else (space/reverb/outboard/experimental/generic
-      IR): no pad, 50% default mix. Drives the Mix knob's default/Alt-click
+      IR): 50% default mix. Drives the Mix knob's default/Alt-click
       reset and the Out knob help. Editable via setBlockIrCategory. */
   irCategory: 'cab' | 'irPlayer';
   /** Channels in the loaded IR file (1 or 2, native ChainBlock::

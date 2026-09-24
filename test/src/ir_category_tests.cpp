@@ -297,3 +297,34 @@ TEST(IrCategoryTest, StateRoundTripPreservesOrBackfillsCategory) {
   // re-derives it from the backfilled category.
   EXPECT_FLOAT_EQ(static_cast<float>(legacyBlock["params"]["mix"]), 1.0f);
 }
+
+// No hidden cab pad: category sets the default mix only, never the level.
+// Both categories get always-on unit-energy normalization, which already
+// lands the wet path at about the dry level; a fixed -18 dB cab pad used to
+// sit on top of it and left Cab blocks ~18 dB under the same file played as
+// an IR Player (user-reported: cabs far too quiet).
+TEST(IrCategoryTest, CabAndIrPlayerPlayTheSameFileAtTheSameLevel) {
+  auto rmsDb = [](const std::vector<float>& v) {
+    double sum = 0.0;
+    for (size_t i = v.size() / 2; i < v.size(); ++i) sum += static_cast<double>(v[i]) * v[i];
+    return 10.0 * std::log10(sum / static_cast<double>(v.size() / 2) + 1e-20);
+  };
+  const auto noise = makeNoise(60 * kBlock, 4242, 0.25f);
+
+  ChainTestProcessor cab, player;
+  seedMonoIrChain(cab, "blk", "cab-ir-test.wav", "cab");
+  seedMonoIrChain(player, "blk", "cab-ir-test.wav", "irPlayer");
+  ASSERT_TRUE(waitForChainLoaded(cab));
+  ASSERT_TRUE(waitForChainLoaded(player));
+  // Both restored at mix 100% (the tree's persisted mix), so wet vs wet.
+  processStereo(cab, noise);
+  processStereo(player, noise);
+  const double cabDb = rmsDb(processStereo(cab, noise).first);
+  const double playerDb = rmsDb(processStereo(player, noise).first);
+  const double dryDb = rmsDb(noise);
+  std::printf("[IrCategoryTest] level dB: dry %.2f  cab %.2f  irPlayer %.2f\n", dryDb, cabDb,
+              playerDb);
+
+  EXPECT_NEAR(cabDb, playerDb, 0.5) << "Cab must not carry a hidden pad vs IR Player";
+  EXPECT_NEAR(cabDb, dryDb, 3.0) << "normalized cab should sit near the dry level";
+}

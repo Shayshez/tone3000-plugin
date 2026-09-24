@@ -309,7 +309,7 @@ export function useChainState() {
       setBlockSlimSize: (blockId: string, slimSize: number) =>
         run<boolean>('setBlockSlimSize', () => native.setBlockSlimSize(blockId, slimSize)),
       /** Explicit IR content category (see ToneBlock.irCategory); resets Mix
-          (and the -18 dB cab pad) to the new category's fixed default. */
+          to the new category's fixed default. */
       setBlockIrCategory: (blockId: string, category: 'cab' | 'irPlayer') =>
         run<boolean>('setBlockIrCategory', () => native.setBlockIrCategory(blockId, category)),
       /** Convert a loaded IR block into a real CAB block, or back - see

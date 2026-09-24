@@ -433,15 +433,10 @@ void TONE3000Processor::prepareChain(std::vector<std::unique_ptr<ChainBlock>>& b
     block->inputGainSmoother.reset(chainRate, 0.05f);
     block->outputGainSmoother.reset(chainRate, 0.05f);
     block->mixSmoother.reset(chainRate, 0.05f);
-    block->irPadGainSmoother.reset(chainRate, 0.05f);
     block->namNormalizationSmoother.reset(chainRate, 0.05f);
     block->inputGainSmoother.setCurrentAndTargetValue(1.0f);   // updated on first process
     block->outputGainSmoother.setCurrentAndTargetValue(1.0f);  // updated on first process
     block->mixSmoother.setCurrentAndTargetValue(block->mixNormalized);
-    block->irPadGainSmoother.setCurrentAndTargetValue(
-        (block->irCategory == IrCategory::Cab || block->type == ChainBlockType::CAB)
-            ? juce::Decibels::decibelsToGain(-18.0f)
-            : 1.0f);
     block->namNormalizationSmoother.setCurrentAndTargetValue(1.0f);
     block->wetFadeGain.reset(chainRate, kWetFadeSeconds);
     block->wetFadeGain.setCurrentAndTargetValue(block->enabled ? 1.0f : 0.0f);
@@ -1494,24 +1489,12 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     // knob is the block's output fader, not a wet trim, so it has to move
     // the dry share of Mix too.
     //
-    // Cab IR blocks pad the wet term by a fixed -18 dB: cab files are
-    // peak-normalized to 0 dBFS and spectrally concentrated, far too hot at
-    // unity. The pad stays on the wet term, never the blend; at mix < 100%
-    // the dry share passes at its natural level. IrPlayer gets no pad;
-    // unit-energy normalization already puts it at ≈ dry level (see
-    // IrCategory in ChainBlock.h - never the engine-selection-only
-    // irIsLong). The UI knob still reads relative dB (0 at center); the pad
-    // is invisible chain gain staging (see gainDbScale in knobScale.ts).
-    // Pulled from a smoothed value every block (not just at load), so a
-    // live setBlockIrCategory change glides through it instead of clicking.
-    // A Cab Block (ChainBlockType::CAB) is cab content by construction -
-    // always the pad, no category to check.
-    const float irOffsetDb = ((block->type == ChainBlockType::IR &&
-                               block->irCategory == IrCategory::Cab) ||
-                              block->type == ChainBlockType::CAB)
-                                 ? -18.0f
-                                 : 0.0f;
-    block->irPadGainSmoother.setTargetValue(juce::Decibels::decibelsToGain(irOffsetDb));
+    // No fixed cab pad: IR and Cab blocks both get always-on unit-energy
+    // normalization (see the IR/CAB branches above), which already lands the
+    // wet path at about the dry level. A -18 dB cab pad used to sit on top
+    // of that - a leftover from before normalization was always on - and
+    // double-compensated: Cab blocks ran ~18 dB under the same file loaded
+    // as an IR Player.
     // 0.5 == unity, +24 dB at max, true silence at/near fully closed - see
     // gainKnobDb. Also drives Dual Mono's per-side Vol knobs, which write
     // this same outputGain param (see handleDualChildVolChange in
@@ -1526,11 +1509,10 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
       // wetFadeGain rides the mix (bypass-bound glides crossfade toward
       // dry) and glides the post-mix Out Gain to unity in step, so a
       // completed fade lands exactly on the skipped block's pass-through.
-      // swapWetMuteGain and the cab pad ride the wet term only, pre-mix
+      // swapWetMuteGain rides the wet term only, pre-mix
       // (engine swaps dip the wet path to silence without exposing the dry
       // input); see ChainBlock.h.
-      const float wetGain =
-          block->swapWetMuteGain.getNextValue() * block->irPadGainSmoother.getNextValue();
+      const float wetGain = block->swapWetMuteGain.getNextValue();
       const float outGain = block->outputGainSmoother.getNextValue();
       const float fade = block->wetFadeGain.getNextValue();
       const float m = block->mixSmoother.getNextValue() * fade;
