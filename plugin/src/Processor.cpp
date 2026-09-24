@@ -1908,7 +1908,8 @@ void TONE3000Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
   {
     outputGainSmoother.setTargetValue(mainStageGain(cacheOutputLevel));
     bypassMix.setTargetValue(cacheBypass ? 1.0f : 0.0f);
-    muteGain.setTargetValue(cacheOutputMute ? 0.0f : 1.0f);
+    muteGain.setTargetValue(
+        cacheOutputMute || tunerMuteActive.load(std::memory_order_relaxed) ? 0.0f : 1.0f);
 
     float peakL = 0.0f, peakR = 0.0f;
     auto* l = buffer.getWritePointer(0);

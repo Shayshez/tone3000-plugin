@@ -3,6 +3,14 @@
  * `node --test` can load it directly - see ui/test/tunerMath.test.ts).
  */
 
+/** Cents window the tuners call "in tune" (big tuner, mini tuner, needle
+    zone). 2 cents: about where a careful ear starts to hear the beat - the
+    earlier 5 lit the in-tune marks on notes that were audibly off. */
+export const IN_TUNE_CENTS = 2;
+/** Extra cents a held lock tolerates before releasing (hysteresis, so the
+    marks don't flicker as a sustained note wobbles at the edge). */
+export const IN_TUNE_RELEASE = 1;
+
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 
 export const noteName = (midi: number) => NOTE_NAMES[((midi % 12) + 12) % 12];

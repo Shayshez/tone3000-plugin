@@ -1,9 +1,9 @@
 import React from 'react';
 import { useTunerReading } from '../hooks/useTunerReading';
+import { IN_TUNE_CENTS } from '../types/tunerMath';
 import { HELP, helpProps } from './helpText';
 import { BRAND_RED, HIGHLIGHT, ICON_BOX_RADIUS, SURFACE_RAISED } from './theme';
 
-const IN_TUNE_CENTS = 5;
 // Cents deviation at which the needle reaches the end of its throw; beyond
 // this it just pins at the edge rather than tracking further.
 const MAX_NEEDLE_CENTS = 30;

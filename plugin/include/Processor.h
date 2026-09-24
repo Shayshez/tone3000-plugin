@@ -626,6 +626,12 @@ public:
   // raw (pre-gain, pre-gate) input so gating never starves the pitch
   // detector.
   void setTunerEnabled(bool enabled) { tuner.setEnabled(enabled); }
+  // "Mute while tuning": silences the output like the global Mute, but is
+  // NOT a parameter - never saved in the session/presets and never touches
+  // the user's own Mute. The editor clears it when it closes, so closing the
+  // plugin window with the tuner open can't leave the plugin muted.
+  void setTunerMute(bool shouldMute) { tunerMuteActive.store(shouldMute); }
+  bool isTunerMuteActive() const { return tunerMuteActive.load(); }
   juce::var getTunerReading() { return tuner.getReading(); }
 
   // Auto align: probe-based time alignment for a Dual Mono block's own two
@@ -1170,6 +1176,7 @@ private:
   // thread only; sized in prepareToPlay.
   juce::SmoothedValue<float> bypassMix;
   juce::SmoothedValue<float> muteGain;
+  std::atomic<bool> tunerMuteActive{false};  // see setTunerMute
   juce::AudioBuffer<float> bypassDry;
   std::array<std::vector<float>, 2> bypassDelayRing;
   int bypassDelayPos = 0;

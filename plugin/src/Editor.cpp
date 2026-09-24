@@ -257,6 +257,9 @@ void TONE3000Editor::timerCallback() {
 
 TONE3000Editor::~TONE3000Editor() {
   stopTimer();
+  // The tuner screen dies with the editor without running its own cleanup,
+  // so a "mute while tuning" it engaged must be released here.
+  processor.setTunerMute(false);
   // The mapper outlives the editor (it's the processor's); detach our webview
   // hook before the webview dies.
   processor.midiMapper.onChanged = nullptr;

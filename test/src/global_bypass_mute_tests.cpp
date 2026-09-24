@@ -106,4 +106,42 @@ TEST(GlobalBypassMuteTest, BypassEngagesAndReleasesMidStream) {
   EXPECT_NE(out[0], in[0]);
 }
 
+TEST(GlobalBypassMuteTest, TunerMuteSilencesButIsNeverSaved) {
+  // "Mute while tuning" is transient: it silences like Mute but leaves the
+  // user's Mute parameter alone and never rides the session state, so a
+  // plugin closed with the tuner open doesn't reopen muted.
+  TONE3000Processor proc;
+  proc.setPlayConfigDetails(2, 2, kFs, 512);
+  proc.prepareToPlay(kFs, 512);
+  const auto in = makeSine(20 * 512, 997.0, 0.5f);
+  run(proc, in, 512);
+
+  proc.setTunerMute(true);
+  const auto muted = run(proc, in, 512);
+  for (size_t i = 2048; i < muted.size(); ++i)
+    ASSERT_EQ(muted[i], 0.0f) << "tuner mute not silent at " << i;
+  EXPECT_LT(proc.parameters.getParameter("outputMute")->getValue(), 0.5f)
+      << "tuner mute must not flip the user's Mute parameter";
+
+  // Saved while tuner-muted, restored into a fresh instance: not muted.
+  juce::MemoryBlock state;
+  proc.getStateInformation(state);
+  TONE3000Processor restored;
+  restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+  restored.setPlayConfigDetails(2, 2, kFs, 512);
+  restored.prepareToPlay(kFs, 512);
+  EXPECT_FALSE(restored.isTunerMuteActive());
+  float peak = 0.0f;
+  const auto out = run(restored, in, 512);
+  for (size_t i = 2048; i < out.size(); ++i) peak = std::max(peak, std::abs(out[i]));
+  EXPECT_GT(peak, 0.1f) << "restored session came back muted";
+
+  // Releasing it brings the sound back.
+  proc.setTunerMute(false);
+  const auto back = run(proc, in, 512);
+  float backPeak = 0.0f;
+  for (size_t i = 4096; i < back.size(); ++i) backPeak = std::max(backPeak, std::abs(back[i]));
+  EXPECT_GT(backPeak, 0.1f);
+}
+
 }  // namespace

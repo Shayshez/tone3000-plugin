@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { ChevronLeft, ChevronRight, RotateCcw, X as XIcon } from './icons';
 import { useTunerReading } from '../hooks/useTunerReading';
-import { useParameter } from '../hooks/useParameter';
+import { useNativeFunction } from '../hooks/useFunction';
+import { IN_TUNE_CENTS, IN_TUNE_RELEASE } from '../types/tunerMath';
 import { TunerStrobe } from './TunerStrobe';
 import { TunerNeedle } from './TunerNeedle';
 import { isKeyboardOwned, isTypingTarget } from '../keyPassthrough';
@@ -75,10 +76,7 @@ const REF_PRESETS = [432, 440, 442, 444];
 const METER_WIDTH = 780;
 const STROBE_HEIGHT = 112;
 
-// Cents window considered "in tune" and the full deflection of one side.
-const IN_TUNE_CENTS = 5;
-/** Extra cents a held lock tolerates before releasing (see inTune). */
-const IN_TUNE_RELEASE = 2;
+// Full deflection of one side (the in-tune window lives in tunerMath).
 const MAX_CENTS = 50;
 
 // Bar colors from the center outward (blue → yellow → red), per screenshot.
@@ -192,18 +190,17 @@ export const TunerView: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const offset = useTunerOffset();
   const muteWhileTuning = useTunerMute();
 
-  // Mute while tuning: engage the global Mute while this screen is open (if
-  // it wasn't already on) and put it back on close / when the setting is
-  // turned off. A mute the user had on before opening is left alone.
-  const [outputMute, setOutputMute] = useParameter('outputMute', 'toggle');
-  const muteAtOpen = useRef(outputMute);
-  const setMuteRef = useRef(setOutputMute);
-  setMuteRef.current = setOutputMute;
+  // Mute while tuning: a transient native mute (setTunerMute), deliberately
+  // NOT the user's Mute parameter - that one is saved with the session, so
+  // closing the plugin window with the tuner open (the page dies without
+  // running this cleanup) used to reopen the plugin muted. Native also
+  // clears it when the editor closes.
+  const setTunerMuteNative = useNativeFunction<boolean>('setTunerMute');
   useEffect(() => {
-    if (!muteWhileTuning || muteAtOpen.current) return;
-    setMuteRef.current(true);
-    return () => setMuteRef.current(false);
-  }, [muteWhileTuning]);
+    if (!muteWhileTuning) return;
+    void setTunerMuteNative(true);
+    return () => void setTunerMuteNative(false);
+  }, [muteWhileTuning, setTunerMuteNative]);
 
   // Esc closes the tuner - unless a menu/list or a text field has the key.
   const closeRef = useRef(onClose);

@@ -858,6 +858,13 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             return juce::var(true);
           }))
       .withNativeFunction(
+          // (bool): the tuner screen's "mute while tuning" - a transient,
+          // unsaved output mute separate from the user's Mute parameter.
+          "setTunerMute", guarded(1, false, [editor](const juce::Array<juce::var>& args) {
+            editor->processor.setTunerMute(coerceBool(args[0]));
+            return juce::var(true);
+          }))
+      .withNativeFunction(
           "getTunerReading", guarded(0, juce::var(), [editor](const juce::Array<juce::var>&) {
             return editor->processor.getTunerReading();
           }))
