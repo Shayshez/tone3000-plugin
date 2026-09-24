@@ -52,6 +52,11 @@ interface ChainViewProps {
   onFillToFaceplate?: (fill: boolean) => void;
   /** Bumped on preset load so an open detail takeover returns to the gallery. */
   returnToGallery?: number;
+  /** Set while the open block was opened from outside the gallery (the
+      Scene Manager): its Back arrow returns there instead. */
+  onBackToOrigin?: () => void;
+  /** The gallery was reached (Home), so that origin no longer applies. */
+  onOriginCleared?: () => void;
 }
 
 /** Design-px of travel before a drag engages, so tap/click stays a click.
@@ -95,6 +100,8 @@ export const ChainView: React.FC<ChainViewProps> = ({
   namSlimSizeDefault,
   onFillToFaceplate,
   returnToGallery = 0,
+  onBackToOrigin,
+  onOriginCleared,
 }) => {
   const actions = useChainActions();
   const wheelScrollRef = useHorizontalWheelScroll<HTMLDivElement>();
@@ -413,6 +420,14 @@ export const ChainView: React.FC<ChainViewProps> = ({
     const goToGallery = () => {
       pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
       setDetailBlockId(null);
+      onOriginCleared?.();
+    };
+    // Back returns to where the block was opened from.
+    const goBack = () => {
+      if (!onBackToOrigin) return goToGallery();
+      pendingScrollTargetRef.current = { kind: 'id', blockId: detailBlock.blockId };
+      setDetailBlockId(null);
+      onBackToOrigin();
     };
 
     return (
@@ -435,7 +450,8 @@ export const ChainView: React.FC<ChainViewProps> = ({
           sampleRate={sampleRate}
           namSlimSizeDefault={namSlimSizeDefault}
           initialView={initialDetailView}
-          onBack={goToGallery}
+          onBack={goBack}
+          onHome={goToGallery}
           chainStripItems={chain}
           onJumpToBlock={setDetailBlockId}
           onAddBlockAt={(insertBlockId) =>

@@ -960,8 +960,11 @@ interface ChainBlockProps {
   /** Default NAM A2 size for new blocks (ChainState.namSlimSizeDefault);
       the read-only size chip only shows when this block differs from it. */
   namSlimSizeDefault: number;
-  /** Return to the chain gallery (← BLOCK sits above the bordered card). */
+  /** Back arrow: return to where the block was opened from (the gallery,
+      or e.g. the Scene Manager). */
   onBack: () => void;
+  /** Home chip: always the chain gallery (defaults to onBack). */
+  onHome?: () => void;
   /** Chain-map strip (issue #83's replacement for the old Prev/Next
       chevrons): this block's whole lane, insert slots included, in chain
       order — mirrors GalleryLane's own ChainItem[] so the strip's slot
@@ -1046,6 +1049,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   sampleRate,
   namSlimSizeDefault,
   onBack,
+  onHome,
   chainStripItems,
   onJumpToBlock,
   onAddBlockAt,
@@ -2166,7 +2170,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
         >
           <ChainBlockHeaderNav
             onPop={view.pop}
-            onGoHome={dualStripContext?.onGoHome ?? onBack}
+            onGoHome={dualStripContext?.onGoHome ?? onHome ?? onBack}
             isDualChild={!!dualParent}
             chainStripItems={chainStripItems}
             blockId={dualStripContext?.currentBlockId ?? blockId}
@@ -2468,7 +2472,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             dualStripContext={{
               currentBlockId: blockId,
               childTabs: dualChildTabs,
-              onGoHome: onBack,
+              onGoHome: onHome ?? onBack,
               onSelectSelf: (openEq) => {
                 setOpenChildSide(null);
                 setOpenChildInitial(null);
@@ -2524,7 +2528,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
         >
           <ChainBlockHeaderNav
             onPop={view.pop}
-            onGoHome={dualStripContext?.onGoHome ?? onBack}
+            onGoHome={dualStripContext?.onGoHome ?? onHome ?? onBack}
             currentChildTabs={dualStripContext?.childTabs ?? dualChildTabs}
             isDualChild={!!dualParent}
             chainStripItems={chainStripItems}
@@ -3411,7 +3415,7 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
             the strip takes the remaining width and scrolls internally. */}
         <ChainBlockHeaderNav
           onPop={view.pop}
-          onGoHome={dualStripContext?.onGoHome ?? onBack}
+          onGoHome={dualStripContext?.onGoHome ?? onHome ?? onBack}
           isDualChild={!!dualParent}
           chainStripItems={chainStripItems}
           blockId={dualStripContext?.currentBlockId ?? blockId}

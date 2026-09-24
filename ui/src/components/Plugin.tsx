@@ -158,15 +158,29 @@ export const Plugin: React.FC = () => {
   // Scene Manager takeover (same middle-band slot as the tuner).
   const toggleSceneManager = useCallback(() => {
     setShowTuner(false);
+    setBlockFromSceneManager(false);
     setShowSceneManager((open) => !open);
   }, []);
   const closeSceneManager = useCallback(() => setShowSceneManager(false), []);
   // Header click in the manager: leave it with that block's view open
   // (ChainView reopens the persisted detail block when it remounts).
+  // Its Back arrow then returns to the manager (Home still goes to the
+  // gallery and drops that origin).
+  const [blockFromSceneManager, setBlockFromSceneManager] = useState(false);
   const openBlockFromSceneManager = useCallback((blockId: string) => {
     sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, blockId);
+    setBlockFromSceneManager(true);
     setShowSceneManager(false);
   }, []);
+  const backToSceneManager = useCallback(() => {
+    // ChainView unmounts in the same render, before its own effect could
+    // drop the persisted detail block: drop it here, or closing the manager
+    // would land back on the block.
+    sessionStorage.removeItem(DETAIL_BLOCK_STORAGE_KEY);
+    setBlockFromSceneManager(false);
+    setShowSceneManager(true);
+  }, []);
+  const clearBlockOrigin = useCallback(() => setBlockFromSceneManager(false), []);
   const closeTuner = useCallback(() => handleToggleTuner(false), [handleToggleTuner]);
 
   // Top-bar actions whose effect lands on the main screen (undo/redo,
@@ -229,6 +243,7 @@ export const Plugin: React.FC = () => {
       (...args: A): R => {
         if (showTuner) void handleToggleTuner(false);
         setShowSceneManager(false);
+        setBlockFromSceneManager(false);
         if (showToneBrowser) {
           loadFlow.clearPendingTargets();
           setShowToneBrowser(false);
@@ -600,6 +615,8 @@ export const Plugin: React.FC = () => {
                       namSlimSizeDefault={namSlimSizeDefault}
                       onFillToFaceplate={setFillToFaceplate}
                       returnToGallery={returnToGallery}
+                      onBackToOrigin={blockFromSceneManager ? backToSceneManager : undefined}
+                      onOriginCleared={clearBlockOrigin}
                     />
                   </ChainActionsProvider>
                 )}
