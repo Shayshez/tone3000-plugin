@@ -78,12 +78,28 @@ void MidiMapper::processMidi(const juce::MidiBuffer& midi) {
     const auto source = msg.isController() ? Source::cc : Source::note;
     const int number = msg.isController() ? msg.getControllerNumber() : msg.getNoteNumber();
     for (auto& mapping : mappings)
-      if (mapping.source == source && mapping.number == number)
+      if (mapping.source == source && number >= mapping.number &&
+          number < mapping.number + numberSpan(mapping))
         applyEvent(mapping, msg);
   }
 }
 
+int MidiMapper::numberSpan(const Mapping& mapping) {
+  return mapping.kind == Kind::sceneByValue && mapping.source == Source::note ? 4 : 1;
+}
+
 void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
+  if (mapping.kind == Kind::sceneByValue) {
+    // Every message selects (no press detection): the value / note offset
+    // IS the scene. Out-of-range CC values are ignored.
+    const int scene = msg.isController() ? msg.getControllerValue()
+                                         : msg.getNoteNumber() - mapping.number;
+    if (scene >= 0 && scene < 4) {
+      pendingSceneSelect.store(scene);
+      triggerAsyncUpdate();
+    }
+    return;
+  }
   if (mapping.toggle) {
     // Note-ons always fire. For CCs, detect a *press*: any value ≥ 64, or a
     // value < 64 that doesn't follow a ≥ 64 one from this control. A
@@ -121,6 +137,8 @@ void MidiMapper::applyEvent(Mapping& mapping, const juce::MidiMessage& msg) {
         pendingSceneSteps.fetch_add(mapping.presetDelta);
         triggerAsyncUpdate();
         return;
+      case Kind::sceneByValue:
+        return;  // handled above
       case Kind::parameter: {
         auto& param = *mapping.param;
         param.setValueNotifyingHost(param.getValue() < 0.5f ? 1.0f : 0.0f);
@@ -194,9 +212,17 @@ bool MidiMapper::removeMapping(const juce::String& targetId) {
 }
 
 bool MidiMapper::setCcMapping(const juce::String& targetId, int ccNumber) {
-  if (!isValidTarget(targetId) || ccNumber < 0 || ccNumber > 127)
+  return setMapping(targetId, Source::cc, ccNumber);
+}
+
+bool MidiMapper::setNoteMapping(const juce::String& targetId, int noteNumber) {
+  return setMapping(targetId, Source::note, noteNumber);
+}
+
+bool MidiMapper::setMapping(const juce::String& targetId, Source source, int number) {
+  if (!isValidTarget(targetId) || number < 0 || number > 127)
     return false;
-  auto mapping = makeMapping(targetId, Source::cc, ccNumber);
+  auto mapping = makeMapping(targetId, source, number);
   {
     const juce::SpinLock::ScopedLockType lock(mapLock);
     std::erase_if(mappings, [&](const Mapping& m) { return m.targetId == targetId; });
@@ -224,8 +250,9 @@ MidiMapper::Mapping MidiMapper::makeMapping(const juce::String& targetId, Source
   int presetDelta = targetId == kPresetNextTarget   ? 1
                     : targetId == kPresetPrevTarget ? -1
                                                     : 0;
-  const Kind kind = presetDelta != 0   ? Kind::presetStep
-                    : sceneIndex >= 0  ? Kind::sceneSelect
+  const Kind kind = presetDelta != 0                  ? Kind::presetStep
+                    : targetId == kSceneByValueTarget ? Kind::sceneByValue
+                    : sceneIndex >= 0                 ? Kind::sceneSelect
                     : sceneDelta != 0  ? Kind::sceneStep
                     : block.index >= 0 ? Kind::blockPower
                                        : Kind::parameter;

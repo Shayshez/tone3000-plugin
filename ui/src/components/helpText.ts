@@ -246,11 +246,11 @@ const HELP_DESKTOP = {
   blockChannel:
     'Channel A-D: four full versions of this block (model, knobs, EQ). Scenes pick a channel per block.',
   blockChannelCopy: "Copy this channel's settings onto another channel of the block.",
-  sceneManager: 'Scene Manager: every scene against every block - bypass and channel at a glance.',
+  sceneManager:
+    'Scene Manager: every scene against every block - bypass and channel at a glance. Click again to close.',
   sceneCellPower: 'Click: bypass/enable this block in this scene.',
   sceneCellChannel: 'Click: pick the channel this block uses in this scene.',
-  sceneCellLinked:
-    'Channel follows the Dual Mono block (a Dual Mono block and its sides switch channels together).',
+  sceneColumnOpen: 'Click: open this block.',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',
   knobMenuReset: 'Reset to Default: put this knob back to its default value (same as ⌥-click).',
   knobMenuType: 'Type Value: enter an exact value (same as double-click).',

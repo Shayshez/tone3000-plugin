@@ -156,11 +156,17 @@ export const Plugin: React.FC = () => {
     if (show) setShowSceneManager(false);
   }, []);
   // Scene Manager takeover (same middle-band slot as the tuner).
-  const openSceneManager = useCallback(() => {
+  const toggleSceneManager = useCallback(() => {
     setShowTuner(false);
-    setShowSceneManager(true);
+    setShowSceneManager((open) => !open);
   }, []);
   const closeSceneManager = useCallback(() => setShowSceneManager(false), []);
+  // Header click in the manager: leave it with that block's view open
+  // (ChainView reopens the persisted detail block when it remounts).
+  const openBlockFromSceneManager = useCallback((blockId: string) => {
+    sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, blockId);
+    setShowSceneManager(false);
+  }, []);
   const closeTuner = useCallback(() => handleToggleTuner(false), [handleToggleTuner]);
 
   // Top-bar actions whose effect lands on the main screen (undo/redo,
@@ -520,6 +526,7 @@ export const Plugin: React.FC = () => {
               scenes={scenes}
               actions={actions}
               onClose={closeSceneManager}
+              onOpenBlock={openBlockFromSceneManager}
             />
           ) : (
             <div
@@ -628,7 +635,8 @@ export const Plugin: React.FC = () => {
               onSelectScene={actions.selectScene}
               onRenameScene={actions.renameScene}
               onCopyScene={actions.copyScene}
-              onOpenSceneManager={openSceneManager}
+              onToggleSceneManager={toggleSceneManager}
+              sceneManagerOpen={showSceneManager}
             />
           </div>
           <HintBar />

@@ -1,5 +1,6 @@
 #include "Processor.h"
 
+#include <algorithm>
 #include <set>
 
 // ####################
@@ -83,6 +84,31 @@ juce::ValueTree TONE3000Processor::captureChannel(const ChainBlock& block) const
     if (model.isObject())
       channel.setProperty("channelModel", juce::JSON::toString(model, true), nullptr);
   }
+  return channel;
+}
+
+juce::ValueTree TONE3000Processor::defaultChannel(const ChainBlock& block) const {
+  juce::ValueTree channel = captureChannel(block);
+  // Defaults straight off a fresh block's member initializers.
+  const ChainBlock fresh(block.id, block.type);
+  const juce::ValueTree defaults = serializeBlockSettings(fresh);
+  // Kept from the live block: identity, content, bypass (scene) and NAM size.
+  static const juce::Identifier kept[] = {"id",       "type",          "enabled",
+                                          "slimSize", "irCategory",    "toneId",
+                                          "toneJson", "activeModelId", "channel"};
+  for (int i = 0; i < defaults.getNumProperties(); ++i) {
+    const juce::Identifier name = defaults.getPropertyName(i);
+    if (std::find(std::begin(kept), std::end(kept), name) == std::end(kept))
+      channel.setProperty(name, defaults.getProperty(name), nullptr);
+  }
+  // EQ: the fresh block's (flat, off).
+  for (const auto& child : defaults) {
+    channel.removeChild(channel.getChildWithName(child.getType()), nullptr);
+    channel.appendChild(child.createCopy(), nullptr);
+  }
+  // Same per-category Mix a freshly loaded IR gets (Cab 100%, IR Player 25%).
+  if (block.type == ChainBlockType::IR || block.type == ChainBlockType::CAB)
+    channel.setProperty("mix", block.irCategory == IrCategory::Cab ? 1.0f : 0.25f, nullptr);
   return channel;
 }
 
@@ -170,10 +196,11 @@ void TONE3000Processor::switchSingleBlockChannel(ChainBlock& block, int channel)
   if (channel == block.activeChannel)
     return;
   block.channels[static_cast<size_t>(block.activeChannel)] = captureChannel(block);
-  // An unused channel starts as a copy of the current one.
+  // An unused channel starts from defaults (same tone/model); "Copy To"
+  // is the explicit way to start from another channel.
   const juce::ValueTree target = block.channels[static_cast<size_t>(channel)].isValid()
                                      ? block.channels[static_cast<size_t>(channel)]
-                                     : block.channels[static_cast<size_t>(block.activeChannel)];
+                                     : defaultChannel(block);
   block.activeChannel = channel;
   applyChannel(block, target);
 }
@@ -372,7 +399,7 @@ bool TONE3000Processor::setSceneBlockChannel(int sceneIndex, const std::string& 
     auto setOne = [&](ChainBlock& b) {
       // A channel picked for another scene must exist to be warmed up.
       if (!b.channels[static_cast<size_t>(channel)].isValid() && channel != b.activeChannel)
-        b.channels[static_cast<size_t>(channel)] = captureChannel(b);
+        b.channels[static_cast<size_t>(channel)] = defaultChannel(b);
       auto [it, inserted] = scenes[static_cast<size_t>(sceneIndex)].blocks.try_emplace(
           b.id, SceneBlockState{b.enabled, b.activeChannel});
       it->second.channel = channel;

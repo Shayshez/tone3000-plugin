@@ -12,6 +12,7 @@ import {
   BRAND_YELLOW,
   FONT_MONO,
   GRAY,
+  HIGHLIGHT,
   MUTED,
   SEGMENTED_TRACK,
   SUBTLE,
@@ -49,31 +50,25 @@ export interface SceneManagerActions {
 
 interface Column {
   block: ToneBlock;
-  /** Type label (NAM/IR/...), prefixed L/R for a Dual Mono side. */
+  /** Type label (NAM/IR/...). */
   label: string;
   title: string;
-  /** Dual Mono side: its channel follows this wrapper (one channel group). */
-  group?: ToneBlock;
 }
 
-/** Every block a scene can address, in chain order; a Dual Mono block is
-    followed by its sides' blocks. */
-const sceneColumns = (items: ChainItem[], prefix = '', group?: ToneBlock): Column[] =>
-  items.flatMap((item): Column[] => {
-    if (isInsertSlot(item)) return [];
-    const own: Column = {
-      block: item,
-      label: `${prefix}${BLOCK_TYPE_LABEL[item.blockType]}`,
-      title: item.blockType === 'dualMono' ? 'Dual Mono' : item.tone.title,
-      group,
-    };
-    if (item.blockType !== 'dualMono') return [own];
-    return [
-      own,
-      ...sceneColumns(item.dualLeft ?? [], 'L ', item),
-      ...sceneColumns(item.dualRight ?? [], 'R ', item),
-    ];
-  });
+/** Every top-level block, in chain order. A Dual Mono block is one column:
+    its sides switch channels with it. */
+const sceneColumns = (items: ChainItem[]): Column[] =>
+  items.flatMap((item): Column[] =>
+    isInsertSlot(item)
+      ? []
+      : [
+          {
+            block: item,
+            label: BLOCK_TYPE_LABEL[item.blockType],
+            title: item.blockType === 'dualMono' ? 'Dual Mono' : item.tone.title,
+          },
+        ]
+  );
 
 const LEVEL_MIN = -24;
 const LEVEL_MAX = 12;
@@ -361,11 +356,9 @@ const SceneRowHead: React.FC<{
 const SceneCell: React.FC<{
   block: ToneBlock;
   state: SceneBlockState;
-  /** Dual Mono side: the channel shown is its group's, read-only. */
-  linked?: boolean;
   onEnabled: (enabled: boolean) => void;
   onChannel: (channel: number) => void;
-}> = ({ block, state, linked = false, onEnabled, onChannel }) => (
+}> = ({ block, state, onEnabled, onChannel }) => (
   <div
     style={{
       display: 'flex',
@@ -384,49 +377,35 @@ const SceneCell: React.FC<{
     >
       <Power />
     </ChromeIconButton>
-    {linked ? (
-      <span
-        {...helpProps(HELP.sceneCellLinked)}
-        style={{
-          fontFamily: FONT_MONO,
-          fontSize: '11rem',
-          color: SUBTLE,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {`\u2190 ${CHANNEL_LETTERS[state.channel] ?? 'A'}`}
-      </span>
-    ) : (
-      <div style={{ display: 'flex', gap: '1rem' }}>
-        {Array.from({ length: NUM_CHANNELS }, (_, c) => {
-          const isActive = c === state.channel;
-          return (
-            <button
-              key={c}
-              type="button"
-              onClick={() => onChannel(c)}
-              {...helpProps(`Channel ${CHANNEL_LETTERS[c]} - ${HELP.sceneCellChannel}`)}
-              style={{
-                all: 'unset',
-                cursor: 'pointer',
-                width: '15rem',
-                height: '20rem',
-                display: 'grid',
-                placeItems: 'center',
-                borderRadius: '2rem',
-                fontFamily: FONT_MONO,
-                fontSize: '11rem',
-                fontWeight: 600,
-                color: isActive ? BLACK : channelUsed(block, c) ? WHITE : SUBTLE,
-                background: isActive ? BRAND_YELLOW : SEGMENTED_TRACK,
-              }}
-            >
-              {CHANNEL_LETTERS[c]}
-            </button>
-          );
-        })}
-      </div>
-    )}
+    <div style={{ display: 'flex', gap: '1rem' }}>
+      {Array.from({ length: NUM_CHANNELS }, (_, c) => {
+        const isActive = c === state.channel;
+        return (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onChannel(c)}
+            {...helpProps(`Channel ${CHANNEL_LETTERS[c]} - ${HELP.sceneCellChannel}`)}
+            style={{
+              all: 'unset',
+              cursor: 'pointer',
+              width: '15rem',
+              height: '20rem',
+              display: 'grid',
+              placeItems: 'center',
+              borderRadius: '2rem',
+              fontFamily: FONT_MONO,
+              fontSize: '11rem',
+              fontWeight: 600,
+              color: isActive ? BLACK : channelUsed(block, c) ? WHITE : SUBTLE,
+              background: isActive ? BRAND_YELLOW : SEGMENTED_TRACK,
+            }}
+          >
+            {CHANNEL_LETTERS[c]}
+          </button>
+        );
+      })}
+    </div>
   </div>
 );
 
@@ -435,7 +414,9 @@ export const SceneManager: React.FC<{
   scenes: ScenesState;
   actions: SceneManagerActions;
   onClose: () => void;
-}> = ({ chain, scenes, actions, onClose }) => {
+  /** Leave the manager and open this block's view. */
+  onOpenBlock: (blockId: string) => void;
+}> = ({ chain, scenes, actions, onClose, onOpenBlock }) => {
   const columns = sceneColumns(chain);
 
   // Optimistic cell edits, dropped whenever native reports new scenes.
@@ -482,6 +463,7 @@ export const SceneManager: React.FC<{
         gap: '12rem',
       }}
     >
+      <style>{`.scene-mgr-col-head:hover { background: ${HIGHLIGHT}; }`}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span
           {...helpProps(HELP.sceneManager)}
@@ -546,10 +528,16 @@ export const SceneManager: React.FC<{
             SCENE
           </div>
           {columns.map((col) => (
-            <div
+            <button
+              type="button"
               key={col.block.blockId}
-              {...helpProps(`${col.label} · ${col.title}`)}
+              className="scene-mgr-col-head"
+              onClick={() => onOpenBlock(col.block.blockId)}
+              {...helpProps(`${col.label} · ${col.title} - ${HELP.sceneColumnOpen}`)}
               style={{
+                all: 'unset',
+                boxSizing: 'border-box',
+                cursor: 'pointer',
                 height: '44rem',
                 display: 'flex',
                 flexDirection: 'column',
@@ -577,7 +565,7 @@ export const SceneManager: React.FC<{
               >
                 {col.title}
               </span>
-            </div>
+            </button>
           ))}
 
           {Array.from({ length: NUM_SCENES }, (_, s) => (
@@ -601,10 +589,7 @@ export const SceneManager: React.FC<{
                 />
               </div>
               {columns.map((col) => {
-                // A Dual Mono side shows its group's channel (they move as one).
-                const state = col.group
-                  ? { ...cellState(s, col.block), channel: cellState(s, col.group).channel }
-                  : cellState(s, col.block);
+                const state = cellState(s, col.block);
                 return (
                   <div
                     key={col.block.blockId}
@@ -617,7 +602,6 @@ export const SceneManager: React.FC<{
                     <SceneCell
                       block={col.block}
                       state={state}
-                      linked={!!col.group}
                       onEnabled={(enabled) => {
                         edit(s, col.block, { ...state, enabled });
                         actions.setSceneBlockEnabled(s, col.block.blockId, enabled);

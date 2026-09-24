@@ -1208,6 +1208,10 @@ private:
   // Channels: a block's live state as a channel tree (settings minus
   // identity/bypass/NAM size, plus the active model's catalog object).
   juce::ValueTree captureChannel(const ChainBlock& block) const;
+  // A fresh channel for this block: its current tone/model with every
+  // setting at the block type's defaults (what a newly used channel starts
+  // from).
+  juce::ValueTree defaultChannel(const ChainBlock& block) const;
   // Apply a channel tree to the live block (keeps bypass and NAM size);
   // model changes crossfade from a warm engine when possible.
   void applyChannel(ChainBlock& block, const juce::ValueTree& channel);

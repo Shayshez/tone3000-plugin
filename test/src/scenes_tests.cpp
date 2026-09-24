@@ -3,7 +3,7 @@
 //
 //   - a scene stores each block's bypass and channel; params live in the
 //     channel, so an edit reaches every scene using that channel,
-//   - a new channel starts as a copy of the current one and then diverges;
+//   - a new channel starts at the block's defaults (same model) and then diverges;
 //     channels can be copied over each other,
 //   - the scene level moves the output, and follows the active scene,
 //   - scenes survive a session save/restore (active scene included), prune
@@ -65,7 +65,7 @@ TEST(ScenesTest, ChannelsAreSeededThenDivergeAndScenesPickThem) {
 
   ASSERT_TRUE(proc.selectBlockChannel("a", 1));
   EXPECT_EQ(channel(proc, "a"), 1);
-  EXPECT_FLOAT_EQ(param(proc, "a", "mix"), 0.3f) << "a new channel starts as a copy";
+  EXPECT_FLOAT_EQ(param(proc, "a", "mix"), 1.0f) << "a new channel starts at defaults";
   ASSERT_TRUE(proc.setBlockParam("a", "mix", 0.9));
   ASSERT_TRUE(proc.selectBlockChannel("a", 0));
   EXPECT_FLOAT_EQ(param(proc, "a", "mix"), 0.3f);

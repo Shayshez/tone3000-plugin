@@ -278,7 +278,8 @@ interface FaceplateProps {
   onSelectScene?: (index: number) => void;
   onRenameScene?: (index: number, name: string) => void;
   onCopyScene?: (from: number, to: number) => void;
-  onOpenSceneManager?: () => void;
+  onToggleSceneManager?: () => void;
+  sceneManagerOpen?: boolean;
   /** Plugin is fed a real stereo source; shows the input-mode button. */
   stereoInput: boolean;
   inputMode: InputMode;
@@ -295,7 +296,8 @@ export const Faceplate = React.memo(function Faceplate({
   onSelectScene,
   onRenameScene,
   onCopyScene,
-  onOpenSceneManager,
+  onToggleSceneManager,
+  sceneManagerOpen = false,
 }: FaceplateProps) {
   const [inputLevel, setInputLevel, onInputDrag] = useParameter('inputLevel', 'slider');
   const [toneBass, setToneBass, onBassDrag] = useParameter('toneBass', 'slider');
@@ -453,31 +455,30 @@ export const Faceplate = React.memo(function Faceplate({
       <div
         style={{
           justifySelf: 'stretch',
-          alignSelf: 'stretch',
           display: 'flex',
           alignItems: 'flex-end',
           gap: '28rem',
         }}
       >
-        {/* Scenes: centered (both ways) in the room between the tone stack
-            and the output section - the live, one-hand switches. */}
+        {/* Scenes: centered in the room between the tone stack and the
+            output section, bottom-aligned like a knob (switches on the
+            knobs' center line, name on the label line). */}
         <div
           style={{
             flex: 1,
-            alignSelf: 'stretch',
             display: 'flex',
-            alignItems: 'center',
             justifyContent: 'center',
             minWidth: 0,
           }}
         >
-          {scenes && onSelectScene && onRenameScene && onCopyScene && onOpenSceneManager && (
+          {scenes && onSelectScene && onRenameScene && onCopyScene && onToggleSceneManager && (
             <ScenesStrip
               scenes={scenes}
               onSelect={onSelectScene}
               onRename={onRenameScene}
               onCopy={onCopyScene}
-              onOpenManager={onOpenSceneManager}
+              onToggleManager={onToggleSceneManager}
+              managerOpen={sceneManagerOpen}
             />
           )}
         </div>

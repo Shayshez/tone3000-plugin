@@ -5,7 +5,18 @@ import { TileMenu } from './TileMenu';
 import type { TileMenuItem } from './TileMenu';
 import { Copy, LayoutGrid, Pencil } from './icons';
 import { HELP, helpProps } from './helpText';
-import { BLACK, BORDER, BRAND_YELLOW, FONT_MONO, GRAY, MUTED, WHITE } from './theme';
+import {
+  BLACK,
+  BORDER,
+  BRAND_YELLOW,
+  FONT_MONO,
+  GRAY,
+  KNOB_LABEL_GAP,
+  KNOB_SIZE_PRIMARY,
+  MUTED,
+  SUBTLE,
+  WHITE,
+} from './theme';
 import { NUM_SCENES } from '../types/chain';
 import type { ScenesState } from '../types/chain';
 
@@ -23,17 +34,21 @@ import type { ScenesState } from '../types/chain';
 const BTN_W = 26;
 const BTN_H = 22;
 const GAP = 4;
+/** Knob label metrics (KnobControl's LABEL_SIZE and its label slot). */
+const LABEL_SIZE = 14;
+const LABEL_ROW_H = Math.round(LABEL_SIZE * 1.2);
 
 const sceneLabel = (names: string[], i: number) => names[i] || `Scene ${i + 1}`;
-const levelLabel = (db: number) => (db === 0 ? '0 dB' : `${db > 0 ? '+' : ''}${db} dB`);
 
 export const ScenesStrip: React.FC<{
   scenes: ScenesState;
   onSelect: (index: number) => void;
   onRename: (index: number, name: string) => void;
   onCopy: (from: number, to: number) => void;
-  onOpenManager: () => void;
-}> = ({ scenes, onSelect, onRename, onCopy, onOpenManager }) => {
+  /** Open/close the Scene Manager. */
+  onToggleManager: () => void;
+  managerOpen: boolean;
+}> = ({ scenes, onSelect, onRename, onCopy, onToggleManager, managerOpen }) => {
   const [active, setActive] = useState(scenes.active);
   useEffect(() => setActive(scenes.active), [scenes.active]);
   const select = (i: number) => {
@@ -105,14 +120,12 @@ export const ScenesStrip: React.FC<{
       onSelect: () => startRename(active),
     },
     {
-      label: 'Scene Manager',
+      label: managerOpen ? 'Close Scene Manager' : 'Scene Manager',
       icon: <LayoutGrid size={16} />,
       help: HELP.sceneManager,
-      onSelect: onOpenManager,
+      onSelect: onToggleManager,
     },
   ];
-
-  const level = scenes.levels[active] ?? 0;
 
   return (
     <div
@@ -120,10 +133,81 @@ export const ScenesStrip: React.FC<{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'stretch',
-        gap: '5rem',
+        // Same geometry as a faceplate knob: the switches sit centered on
+        // the knobs' center line, the name sits on the knob-label line.
+        gap: `${KNOB_LABEL_GAP}rem`,
         width: `${BTN_W * 5 + GAP * 4}rem`,
       }}
     >
+      <div
+        style={{
+          height: `${KNOB_SIZE_PRIMARY}rem`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(5, ${BTN_W}rem)`,
+            gap: `${GAP}rem`,
+          }}
+        >
+          {Array.from({ length: NUM_SCENES }, (_, i) => {
+            const isActive = i === active;
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => select(i)}
+                onContextMenu={(e) => {
+                  setMenuScene(i);
+                  numberMenu.openMenu(e);
+                }}
+                aria-pressed={isActive}
+                {...helpProps(`${sceneLabel(scenes.names, i)} - ${HELP.sceneButton}`)}
+                style={{
+                  width: `${BTN_W}rem`,
+                  height: `${BTN_H}rem`,
+                  padding: 0,
+                  borderRadius: '4rem',
+                  cursor: 'pointer',
+                  fontFamily: FONT_MONO,
+                  fontSize: '11rem',
+                  fontWeight: 600,
+                  color: isActive ? BLACK : scenes.names[i] ? WHITE : MUTED,
+                  background: isActive ? BRAND_YELLOW : 'transparent',
+                  border: isActive ? `1rem solid ${BRAND_YELLOW}` : BORDER,
+                }}
+              >
+                {i + 1}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={onToggleManager}
+            aria-pressed={managerOpen}
+            aria-label="Scene Manager"
+            {...helpProps(HELP.sceneManager)}
+            style={{
+              width: `${BTN_W}rem`,
+              height: `${BTN_H}rem`,
+              padding: 0,
+              borderRadius: '4rem',
+              cursor: 'pointer',
+              display: 'grid',
+              placeItems: 'center',
+              color: managerOpen ? BLACK : WHITE,
+              background: managerOpen ? WHITE : 'transparent',
+              border: BORDER,
+            }}
+          >
+            <LayoutGrid size={13} />
+          </button>
+        </div>
+      </div>
       {renaming !== null ? (
         <input
           ref={inputRef}
@@ -139,13 +223,14 @@ export const ScenesStrip: React.FC<{
             if (e.key === 'Escape') setRenaming(null);
           }}
           style={{
-            height: '18rem',
+            height: `${LABEL_ROW_H}rem`,
             boxSizing: 'border-box',
             background: '#0a0a0a',
             border: BORDER,
             borderRadius: '4rem',
             color: WHITE,
-            fontSize: '11rem',
+            fontSize: '12rem',
+            textAlign: 'center',
             padding: '0 6rem',
             outline: 'none',
           }}
@@ -159,85 +244,23 @@ export const ScenesStrip: React.FC<{
           style={{
             all: 'unset',
             cursor: 'pointer',
-            height: '18rem',
+            height: `${LABEL_ROW_H}rem`,
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: '5rem',
-            fontSize: '11rem',
-            color: WHITE,
+            fontSize: `${LABEL_SIZE}rem`,
+            color: GRAY,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
           }}
         >
-          <span style={{ color: GRAY, fontFamily: FONT_MONO, fontSize: '10rem' }}>SCENE</span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {sceneLabel(scenes.names, active)}
           </span>
-          {level !== 0 && (
-            <span style={{ color: MUTED, fontSize: '10rem' }}>{levelLabel(level)}</span>
-          )}
-          <span style={{ color: MUTED, fontSize: '9rem' }}>▾</span>
+          <span style={{ color: SUBTLE, fontSize: '10rem' }}>▾</span>
         </button>
       )}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(5, ${BTN_W}rem)`,
-          gap: `${GAP}rem`,
-        }}
-      >
-        {Array.from({ length: NUM_SCENES }, (_, i) => {
-          const isActive = i === active;
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => select(i)}
-              onContextMenu={(e) => {
-                setMenuScene(i);
-                numberMenu.openMenu(e);
-              }}
-              aria-pressed={isActive}
-              {...helpProps(`${sceneLabel(scenes.names, i)} - ${HELP.sceneButton}`)}
-              style={{
-                width: `${BTN_W}rem`,
-                height: `${BTN_H}rem`,
-                padding: 0,
-                borderRadius: '4rem',
-                cursor: 'pointer',
-                fontFamily: FONT_MONO,
-                fontSize: '11rem',
-                fontWeight: 600,
-                color: isActive ? BLACK : scenes.names[i] ? WHITE : MUTED,
-                background: isActive ? BRAND_YELLOW : 'transparent',
-                border: isActive ? `1rem solid ${BRAND_YELLOW}` : BORDER,
-              }}
-            >
-              {i + 1}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={onOpenManager}
-          aria-label="Scene Manager"
-          {...helpProps(HELP.sceneManager)}
-          style={{
-            width: `${BTN_W}rem`,
-            height: `${BTN_H}rem`,
-            padding: 0,
-            borderRadius: '4rem',
-            cursor: 'pointer',
-            display: 'grid',
-            placeItems: 'center',
-            color: WHITE,
-            background: 'transparent',
-            border: BORDER,
-          }}
-        >
-          <LayoutGrid size={13} />
-        </button>
-      </div>
       {nameMenu.menuAnchor && (
         <TileMenu anchor={nameMenu.menuAnchor} onClose={nameMenu.closeMenu} items={nameMenuItems} />
       )}

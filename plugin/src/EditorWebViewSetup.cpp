@@ -864,6 +864,12 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
                 args[0].toString(), static_cast<int>(coerceDouble(args[1]))));
           }))
       .withNativeFunction(
+          // (targetId, noteNumber): assign a note directly.
+          "setMidiNoteMapping", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
+            return juce::var(editor->processor.midiMapper.setNoteMapping(
+                args[0].toString(), static_cast<int>(coerceDouble(args[1]))));
+          }))
+      .withNativeFunction(
           // Channel-picker meters: enabled only while the picker is on screen.
           "setAudioInputMetering",
           guarded(1, false, [editor](const juce::Array<juce::var>& args) {

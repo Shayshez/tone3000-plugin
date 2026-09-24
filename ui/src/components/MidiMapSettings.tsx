@@ -4,7 +4,13 @@ import { useMidiMap } from '../hooks/useMidiMap';
 import type { MidiMapping } from '../types/midiMap';
 import type { ChainItem, ToneBlock } from '../types/chain';
 import { FieldRow, FIELD_BORDER, SECTION_GAP, SelectField, captionStyle } from './controls';
-import { MAPPABLE_TARGETS, behaviorLabel, sourceLabel, targetById } from './midiCatalog';
+import {
+  MAPPABLE_TARGETS,
+  behaviorLabel,
+  parseTypedSource,
+  sourceLabel,
+  targetById,
+} from './midiCatalog';
 import { BORDER, FONT_MONO, MUTED, SUBTLE, BRAND_YELLOW } from './theme';
 
 /**
@@ -17,8 +23,8 @@ import { BORDER, FONT_MONO, MUTED, SUBTLE, BRAND_YELLOW } from './theme';
  * control; the first CC / note-on wins. The engine owns the armed state
  * (this component just renders it), so learn survives tab switches and
  * completes from the hardware side via the midiMapChanged event. The
- * listening row also takes a typed CC number (Enter commits) for controllers
- * that are easier to read than to wiggle; notes stay learn-only.
+ * listening row also takes a typed CC number or note name (Enter commits)
+ * for controllers that are easier to read than to wiggle.
  *
  * Rows are two lines (target on the left, where block powers show the tone
  * currently in that chain slot; source + behavior on the right) so nothing
@@ -164,7 +170,7 @@ const LearningRow: React.FC<{
   targetId: string;
   context: string;
   first: boolean;
-  /** Digits-only draft of a typed CC number; owned by the parent so typing
+  /** Draft of a typed CC number or note name; owned by the parent so typing
       can pause the learn give-up timer. */
   ccDraft: string;
   onCcDraftChange: (draft: string) => void;
@@ -201,13 +207,14 @@ const LearningRow: React.FC<{
     <input
       className="t3k-touch-field"
       value={ccDraft}
-      onChange={(e) => onCcDraftChange(e.target.value.replace(/\D/g, '').slice(0, 3))}
+      onChange={(e) => onCcDraftChange(e.target.value.replace(/[^0-9A-Ga-g#-]/g, '').slice(0, 4))}
       onKeyDown={(e) => {
+        e.stopPropagation();
         if (e.key === 'Enter') onCcCommit();
       }}
-      placeholder="CC #"
-      aria-label="CC number"
-      title="Type a CC number (0-127), Enter to assign"
+      placeholder="CC/Note"
+      aria-label="CC number or note"
+      title="Type a CC number (0-127) or a note name (e.g. C2, F#3), Enter to assign"
       style={ccInputStyle}
     />
     <button
@@ -255,8 +262,10 @@ export const MidiMapSettings: React.FC<{
   // and disarms the learn. Out-of-range numbers are ignored (the input is
   // digits-only, so 128-999 is the only invalid shape).
   const commitCcDraft = useCallback(() => {
-    const number = Number(ccDraft);
-    if (ccDraft !== '' && number <= 127) actions.setCcMapping(learnTargetId, number);
+    const typed = parseTypedSource(ccDraft);
+    if (!typed) return;
+    if (typed.source === 'cc') actions.setCcMapping(learnTargetId, typed.number);
+    else actions.setNoteMapping(learnTargetId, typed.number);
   }, [ccDraft, learnTargetId, actions]);
 
   // Block powers address the chain's Nth *tone* block (insert slots

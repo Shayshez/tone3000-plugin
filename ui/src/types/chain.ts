@@ -225,7 +225,7 @@ export interface BlockParams {
       version of the block: model and every setting except bypass. */
   channel?: number;
   /** Per channel slot: whether it holds settings yet (the active one always
-      does; an unused slot starts as a copy of the current channel). */
+      does; an unused slot starts at default settings with the same model). */
   channelsUsed?: boolean[];
   /** DUAL_MONO only: recombine controls for the block's two fixed child
       slots (see ToneBlock.dualLeft/dualRight). Normalized 0..1, constant-

@@ -25,7 +25,7 @@ import type { ToneBlock } from '../types/chain';
  *
  * Visual language: the active channel is always BRAND_YELLOW (the same
  * accent as the active scene), a channel holding settings is WHITE, an
- * unused one SUBTLE (picking it starts it as a copy of the current one).
+ * unused one SUBTLE (picking it starts it at default settings, same model).
  */
 
 export const channelLetter = (channel: number | undefined) => CHANNEL_LETTERS[channel ?? 0] ?? 'A';
@@ -66,7 +66,7 @@ export const channelMenuItems = (
       help: HELP.blockChannel,
       submenu: all.map((c) => ({
         label: `Channel ${CHANNEL_LETTERS[c]}${
-          c === active ? ' ✓' : channelUsed(block, c) ? '' : ' (new copy)'
+          c === active ? ' ✓' : channelUsed(block, c) ? '' : ' (new)'
         }`,
         icon: letterIcon(c),
         help: HELP.blockChannel,
@@ -124,7 +124,7 @@ export const ChannelSelector: React.FC<{
             }}
             {...helpProps(
               `Channel ${CHANNEL_LETTERS[c]}${
-                used ? '' : ' (unused: starts as a copy of the current one)'
+                used ? '' : ' (unused: starts at default settings)'
               } - ${HELP.blockChannel}`
             )}
             style={{

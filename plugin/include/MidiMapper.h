@@ -77,6 +77,9 @@ public:
       learn armed for it. Rejects unknown targets and numbers outside
       0-127. */
   bool setCcMapping(const juce::String& targetId, int ccNumber);
+  /** Same, for a note number (0-127): the typed alternative to learning a
+      note. */
+  bool setNoteMapping(const juce::String& targetId, int noteNumber);
 
   // Plugin state.
   juce::ValueTree toValueTree() const;
@@ -105,7 +108,7 @@ public:
 private:
   enum class Source : int { cc = 0, note = 1 };
   enum class Kind : int { parameter = 0, blockPower = 1, presetStep = 3, sceneSelect = 4,
-                          sceneStep = 5 };
+                          sceneStep = 5, sceneByValue = 6 };
 
   /** Virtual target ids for preset stepping (the UI catalog uses the same
       ids). Triggers, not toggles: each press walks the preset list. */
@@ -114,6 +117,10 @@ private:
   /** Scene triggers: "scene1".."scene4" jump to a scene, prev/next step. */
   static constexpr const char* kScenePrevTarget = "scenePrevious";
   static constexpr const char* kSceneNextTarget = "sceneNext";
+  /** One control for every scene: a CC's value picks the scene (0 = Scene
+      1 ... 3 = Scene 4, higher values ignored), or a note mapping covers
+      four consecutive notes (the mapped note = Scene 1). */
+  static constexpr const char* kSceneByValueTarget = "sceneSelect";
   static int sceneSelectTargetFor(const juce::String& targetId);  // -1 if not one
 
   struct Mapping {
@@ -147,11 +154,16 @@ private:
   bool isValidTarget(const juce::String& targetId) const {
     return blockPowerTargetFor(targetId).index >= 0 || targetId == kPresetPrevTarget ||
            targetId == kPresetNextTarget || targetId == kScenePrevTarget ||
-           targetId == kSceneNextTarget || sceneSelectTargetFor(targetId) >= 0 ||
+           targetId == kSceneNextTarget || targetId == kSceneByValueTarget ||
+           sceneSelectTargetFor(targetId) >= 0 ||
            parameters.getParameter(targetId) != nullptr;
   }
 
   Mapping makeMapping(const juce::String& targetId, Source source, int number) const;
+  bool setMapping(const juce::String& targetId, Source source, int number);
+  /** Number of consecutive note/CC numbers a mapping answers to (4 for a
+      note-sourced Scene Select, else 1). */
+  static int numberSpan(const Mapping& mapping);
   void applyEvent(Mapping& mapping, const juce::MidiMessage& msg);
 
   /** All deferred work lands here on the message thread: commit a pending

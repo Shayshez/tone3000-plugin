@@ -21,6 +21,8 @@ export interface MidiMapActions {
   removeMapping: (targetId: string) => Promise<void>;
   /** Assign a CC number directly, the typed alternative to learn. */
   setCcMapping: (targetId: string, number: number) => Promise<void>;
+  /** Assign a note number directly. */
+  setNoteMapping: (targetId: string, number: number) => Promise<void>;
 }
 
 export interface MidiMap {
@@ -40,6 +42,7 @@ export function useMidiMap(enabled: boolean): MidiMap {
       cancelMidiLearn: backend.getPluginFunction('cancelMidiLearn'),
       removeMidiMapping: backend.getPluginFunction('removeMidiMapping'),
       setMidiCcMapping: backend.getPluginFunction('setMidiCcMapping'),
+      setMidiNoteMapping: backend.getPluginFunction('setMidiNoteMapping'),
     }),
     [backend]
   );
@@ -78,6 +81,7 @@ export function useMidiMap(enabled: boolean): MidiMap {
       cancelLearn: () => run(() => native.cancelMidiLearn()),
       removeMapping: (targetId) => run(() => native.removeMidiMapping(targetId)),
       setCcMapping: (targetId, number) => run(() => native.setMidiCcMapping(targetId, number)),
+      setNoteMapping: (targetId, number) => run(() => native.setMidiNoteMapping(targetId, number)),
     };
   }, [native, refresh]);
 

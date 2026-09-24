@@ -257,4 +257,32 @@ TEST(MidiMapperTest, SceneTargetsJumpAndStep) {
   EXPECT_FALSE(proc.midiMapper.setCcMapping("scene5", 23));
 }
 
+// "Scene Select": one CC whose value picks the scene (0 = Scene 1), or a
+// note mapping answering to four consecutive notes.
+TEST(MidiMapperTest, SceneSelectByCcValueOrConsecutiveNotes) {
+  TONE3000Processor proc;
+  ASSERT_TRUE(proc.midiMapper.setCcMapping("sceneSelect", 30));
+  pumpMessages();
+  proc.midiMapper.processMidi(ccEvent(30, 2));
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 2);
+  proc.midiMapper.processMidi(ccEvent(30, 0));
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 0);
+  proc.midiMapper.processMidi(ccEvent(30, 9));  // out of range: ignored
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 0);
+
+  ASSERT_TRUE(proc.midiMapper.setNoteMapping("sceneSelect", 36));
+  pumpMessages();
+  juce::MidiBuffer note;
+  note.addEvent(juce::MidiMessage::noteOn(1, 39, 0.8f), 0);
+  proc.midiMapper.processMidi(note);
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 3) << "note 36 = Scene 1, so 39 = Scene 4";
+  proc.midiMapper.processMidi(ccEvent(30, 1));  // the CC mapping was replaced
+  pumpMessages();
+  EXPECT_EQ(proc.getActiveScene(), 3);
+}
+
 }  // namespace

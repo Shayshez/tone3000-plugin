@@ -432,7 +432,7 @@ export function useChainState() {
       copyScene: (from: number, to: number) =>
         run<boolean>('copyScene', () => native.copyScene(from, to)),
       /** Switch a block's active channel (0-3); the active scene now uses
-          it. An unused channel starts as a copy of the current one. */
+          it. An unused channel starts at default settings (same model). */
       selectBlockChannel: (blockId: string, channel: number) =>
         run<boolean>('selectBlockChannel', () => native.selectBlockChannel(blockId, channel)),
       /** Overwrite channel `to` with channel `from`'s settings. */

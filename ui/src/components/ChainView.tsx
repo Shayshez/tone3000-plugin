@@ -143,7 +143,13 @@ export const ChainView: React.FC<ChainViewProps> = ({
   }, [detailBlockId]);
   // Preset load (Plugin) bumps this while we may be unmounted under the tuner
   // or tone browser; skip 0 so a restored detail after OAuth still opens.
+  // Skips the mount itself: a remount (e.g. leaving the Scene Manager to
+  // open a block) keeps the persisted detail; showChainThen already clears
+  // that key for a preset load that landed while we were unmounted.
+  const lastReturn = useRef(returnToGallery);
   useEffect(() => {
+    if (returnToGallery === lastReturn.current) return;
+    lastReturn.current = returnToGallery;
     if (returnToGallery) setDetailBlockId(null);
   }, [returnToGallery]);
   // Set alongside detailBlockId only by the gallery tile's own EQ/Stereo
