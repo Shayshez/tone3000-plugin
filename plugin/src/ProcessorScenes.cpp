@@ -489,27 +489,44 @@ bool TONE3000Processor::setSceneBlockChannel(int sceneIndex, const std::string& 
 
 bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
                                             const juce::var& modelData) {
+  if (block.namEngine == nullptr || !block.loaded)
+    return false;
+  // Nothing heavy in here: this runs under chainMutex, which the audio
+  // thread waits on. In particular no resetState() - it re-prewarms every
+  // phase instance (tens of ms), and a stall there is an audible dropout.
+  // Warm engines are ready as they are: freshly prepared (prepare()
+  // prewarms), or reclaimed only after settling on silence (below).
   std::unique_ptr<NamEngine> incoming;
-  if (auto it = block.warmNamEngines.find(modelId); it != block.warmNamEngines.end()) {
+  bool fromOutgoing = false;
+  if (block.xfadeOutgoingNam != nullptr && block.xfadeOutgoingModelId == modelId) {
+    // Switching straight back while the previous engine still fades or
+    // settles: its state is live, so it simply resumes.
+    incoming = std::move(block.xfadeOutgoingNam);
+    fromOutgoing = true;
+  } else if (auto it = block.warmNamEngines.find(modelId); it != block.warmNamEngines.end()) {
     incoming = std::move(it->second);
     block.warmNamEngines.erase(it);
-  } else if (block.xfadeOutgoingNam != nullptr && block.xfadeOutgoingModelId == modelId) {
-    // Switching straight back mid-crossfade: the engine still fading out is
-    // the one we want.
-    incoming = std::move(block.xfadeOutgoingNam);
-    block.xfadeActive = false;
   }
-  if (incoming == nullptr || block.namEngine == nullptr || !block.loaded)
+  if (incoming == nullptr)
     return false;
-  if (incoming->getOversampleFactor() != chainOversampleFactor.load())
+  if (incoming->getOversampleFactor() != chainOversampleFactor.load()) {
+    retireInBackground(std::shared_ptr<NamEngine>(std::move(incoming)));
     return false;  // stale after an oversampling change; refresh rebuilds it
+  }
 
-  // A crossfade still running hands its outgoing engine back to the pool.
-  if (block.xfadeOutgoingNam != nullptr)
-    block.warmNamEngines[block.xfadeOutgoingModelId] = std::move(block.xfadeOutgoingNam);
+  // An outgoing engine from an earlier switch: settled -> straight back to
+  // the pool; still fading/settling -> settle it off the lock first.
+  if (!fromOutgoing && block.xfadeOutgoingNam != nullptr) {
+    if (block.xfadeActive)
+      settleNamInBackground(block.id, block.xfadeOutgoingModelId,
+                            std::move(block.xfadeOutgoingNam));
+    else
+      std::swap(block.warmNamEngines[block.xfadeOutgoingModelId], block.xfadeOutgoingNam);
+    if (block.xfadeOutgoingNam != nullptr)  // an engine the pool already had
+      retireInBackground(std::shared_ptr<NamEngine>(std::move(block.xfadeOutgoingNam)));
+  }
 
   const int domain = chainDomainBlockSize();
-  incoming->resetState();  // no leftovers from when it last played
   if (block.xfadeScratch.getNumSamples() < domain)
     block.xfadeScratch.setSize(2, juce::jmax(1, domain), false, false, true);
   block.xfadeOutgoingNam = std::move(block.namEngine);
@@ -518,10 +535,52 @@ bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
   block.xfadeGain.reset(chainSampleRate(), kSceneXfadeSeconds);
   block.xfadeGain.setCurrentAndTargetValue(0.0f);
   block.xfadeGain.setTargetValue(1.0f);
+  // After the fade the outgoing engine keeps running on silence for a
+  // while, settling into its idle state - a prewarm, done by the audio
+  // thread at no lock cost - so it can return to the pool ready.
+  block.xfadeSettleRemaining = static_cast<int>(kNamSettleSeconds * chainSampleRate());
   block.xfadeActive = true;
 
   adoptSwappedModel(block, modelId, modelData);
   return true;
+}
+
+void TONE3000Processor::settleNamInBackground(const std::string& blockId, int modelId,
+                                              std::unique_ptr<NamEngine> engine) {
+  if (engine == nullptr)
+    return;
+  if (ChainBlock* block = findBlockById(blockId))
+    block->warmPending.insert(modelId);
+  struct SettleJob : public juce::ThreadPoolJob {
+    TONE3000Processor& processor;
+    std::string blockId;
+    int modelId;
+    std::unique_ptr<NamEngine> engine;
+    SettleJob(TONE3000Processor& p, std::string bid, int mid, std::unique_ptr<NamEngine> e)
+        : ThreadPoolJob("Settle NAM Engine"), processor(p), blockId(std::move(bid)),
+          modelId(mid), engine(std::move(e)) {}
+    JobStatus runJob() override {
+      engine->resetState();  // off the lock: the audio thread no longer sees it
+      std::unique_ptr<NamEngine> dropped;
+      {
+        juce::ScopedLock lock(processor.chainMutex);
+        ChainBlock* block = processor.findBlockById(blockId);
+        if (block != nullptr) {
+          block->warmPending.erase(modelId);
+          const bool wanted = block->channelReferencesModel(modelId) &&
+                              modelId != block->activeModelId &&
+                              engine->getOversampleFactor() ==
+                                  processor.chainOversampleFactor.load() &&
+                              block->warmNamEngines.count(modelId) == 0;
+          if (wanted)
+            block->warmNamEngines[modelId] = std::move(engine);
+        }
+        dropped = std::move(engine);
+      }
+      return jobHasFinished;  // `dropped` (if any) dies here, off the lock
+    }
+  };
+  loadingThreadPool.addJob(new SettleJob(*this, blockId, modelId, std::move(engine)), true);
 }
 
 void TONE3000Processor::adoptSwappedModel(ChainBlock& block, int modelId,

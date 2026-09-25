@@ -177,6 +177,9 @@ inline IrCategory irCategoryFromString(const juce::String& s) {
 constexpr double kWetFadeSeconds = 0.025;
 // Scene switch crossfade between two warm NAM engines (both run meanwhile).
 constexpr double kSceneXfadeSeconds = 0.03;
+// How long an outgoing NAM engine keeps running on silence after a channel
+// crossfade, settling into its idle state (a prewarm) before reuse.
+constexpr double kNamSettleSeconds = 0.25;
 // Channels per block (see ChainBlock::channels).
 constexpr int kNumBlockChannels = 4;
 
@@ -351,6 +354,9 @@ struct ChainBlock {
   std::unique_ptr<NamEngine> xfadeOutgoingNam;
   int xfadeOutgoingModelId = 0;
   bool xfadeActive = false;
+  // Chain-rate samples of silence the outgoing NAM engine still gets after
+  // the fade (kNamSettleSeconds), settling it for reuse without a reset.
+  int xfadeSettleRemaining = 0;
   juce::LinearSmoothedValue<float> xfadeGain{1.0f};
   juce::AudioBuffer<float> xfadeScratch;
   juce::LinearSmoothedValue<float> namNormalizationSmoother;

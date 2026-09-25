@@ -1249,6 +1249,10 @@ private:
   void prewarmIrInBackground(const std::string& blockId, const juce::String& key,
                              juce::ValueTree channel);
   void refreshWarmIrEngines(ChainBlock& block);
+  // Reset + prewarm an engine that stopped mid-use, off the lock, then pool
+  // it if its channel still needs it.
+  void settleNamInBackground(const std::string& blockId, int modelId,
+                             std::unique_ptr<NamEngine> engine);
   // Destroy an engine (or anything heavy) on the loader pool instead of
   // under chainMutex, which the audio thread waits on.
   void retireInBackground(std::shared_ptr<void> doomed);

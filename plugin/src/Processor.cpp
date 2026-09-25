@@ -1488,15 +1488,27 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // previous engine runs on a copy of the same (calibrated) input, and
         // the two outputs are blended below, each with its own model's
         // normalization, so a model change between scenes has no gap.
-        const bool xfading = block->xfadeActive && block->xfadeOutgoingNam != nullptr &&
-                             block->xfadeScratch.getNumSamples() >= numSamples &&
-                             block->xfadeScratch.getNumChannels() >= numChannels;
-        if (xfading) {
-          for (int ch = 0; ch < numChannels; ++ch)
-            block->xfadeScratch.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+        // After the fade it keeps running on silence (not mixed) until
+        // settled - see ChainBlock::xfadeSettleRemaining.
+        const bool outgoingRuns = block->xfadeActive && block->xfadeOutgoingNam != nullptr &&
+                                  block->xfadeScratch.getNumSamples() >= numSamples &&
+                                  block->xfadeScratch.getNumChannels() >= numChannels;
+        const bool xfading = outgoingRuns && block->xfadeGain.isSmoothing();
+        if (outgoingRuns) {
+          for (int ch = 0; ch < numChannels; ++ch) {
+            if (xfading)
+              block->xfadeScratch.copyFrom(ch, 0, buffer, ch, 0, numSamples);
+            else
+              block->xfadeScratch.clear(ch, 0, numSamples);
+          }
           juce::AudioBuffer<float> outgoingView(block->xfadeScratch.getArrayOfWritePointers(),
                                                 numChannels, numSamples);
           block->xfadeOutgoingNam->process(outgoingView, rtPhasePool);
+          if (!xfading) {
+            block->xfadeSettleRemaining -= numSamples;
+            if (block->xfadeSettleRemaining <= 0)
+              block->xfadeActive = false;  // settled; the message thread reclaims it
+          }
         }
 
         block->namEngine->process(buffer, rtPhasePool);
@@ -1568,8 +1580,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
             left[i] = left[i] * g * x + oldLeft[i] * outgoingGain * (1.0f - x);
             if (right) right[i] = right[i] * g * x + oldRight[i] * outgoingGain * (1.0f - x);
           }
-          if (!block->xfadeGain.isSmoothing())
-            block->xfadeActive = false;  // done; the message thread reclaims the engine
+          // Fade done: the engine settles on silence from the next callback.
         } else {
           for (int i = 0; i < numSamples; ++i) {
             const float g = block->namNormalizationSmoother.getNextValue();

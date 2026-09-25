@@ -262,7 +262,13 @@ TEST(ScenesTest, NamModelSwitchIsGaplessOnceWarm) {
   const std::vector<float> first(sine.begin(), sine.begin() + 40 * 512);
   const std::vector<float> second(sine.begin() + 40 * 512, sine.end());
   processStereo(proc, first);                       // steady state on model 101
+  // The switch runs under chainMutex, which the audio thread waits on: it
+  // must stay far below a callback (no engine reset/prewarm in there).
+  const double t0 = juce::Time::getMillisecondCounterHiRes();
   ASSERT_TRUE(proc.selectScene(0));                 // switch while "playing"
+  const double switchMs = juce::Time::getMillisecondCounterHiRes() - t0;
+  std::printf("[ScenesTest] warm NAM switch held the chain for %.2f ms\n", switchMs);
+  EXPECT_LT(switchMs, 0.5) << "the switch stalls the audio thread (a reset/prewarm crept back in?)";
   const auto after = processStereo(proc, second).first;
 
   const juce::var row = proc.getChainState(-1)["chain"][0];
@@ -370,7 +376,10 @@ TEST(ScenesTest, IrChannelSwitchIsGaplessOnceWarm) {
     const std::vector<float> a(sine.begin(), sine.begin() + 40 * 512);
     const std::vector<float> b(sine.begin() + 40 * 512, sine.begin() + 80 * 512);
     const auto before = processStereo(proc, a).first;
+    const double t0 = juce::Time::getMillisecondCounterHiRes();
     ASSERT_TRUE(proc.selectBlockChannel("cab", channel));
+    const double switchMs = juce::Time::getMillisecondCounterHiRes() - t0;
+    EXPECT_LT(switchMs, 1.0) << what << ": the switch stalls the audio thread";
     EXPECT_FALSE(modelLoading()) << what << ": warm switch must not load";
     const auto after = processStereo(proc, b).first;
     const size_t win = 240;
@@ -378,8 +387,8 @@ TEST(ScenesTest, IrChannelSwitchIsGaplessOnceWarm) {
     const double steadyAfter = rms(after, after.size() - 8 * win, 8 * win);
     double worst = 1e9;
     for (size_t w = 0; w < 20; ++w) worst = std::min(worst, rms(after, w * win, win));
-    std::printf("[ScenesTest] %s: before %.4f after %.4f worst %.4f\n", what, steadyBefore,
-                steadyAfter, worst);
+    std::printf("[ScenesTest] %s: before %.4f after %.4f worst %.4f (%.2f ms)\n", what,
+                steadyBefore, steadyAfter, worst, switchMs);
     EXPECT_GT(worst, 0.6 * std::min(steadyBefore, steadyAfter)) << what << ": switch dipped";
   };
   checkSwitch(1, "other file -> shape");  // C (file 101) -> B (file 100, shaped)
