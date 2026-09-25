@@ -35,6 +35,16 @@ export interface UpdateNoticeData {
   url: string;
 }
 
+/** This fork's build, counted as commits since the upstream commit it
+    branched from (see cmake/ForkVersion.cmake). `localVersion` stays the
+    upstream TONE3000 version it's based on. */
+export interface ForkVersion {
+  build: number;
+  hash: string;
+  /** Built with uncommitted changes. */
+  dirty: boolean;
+}
+
 const STORAGE_KEY = 't3k.updateNotice';
 
 function readSnoozeUntil(): number {
@@ -83,15 +93,31 @@ export function useUpdateNotice(client: T3KClient): {
   update: UpdateNoticeData | null;
   /** The running build's version ("" until resolved / outside the plugin). */
   localVersion: string;
+  /** This fork's own build (null until resolved / outside the plugin). */
+  forkVersion: ForkVersion | null;
   remindLater: (days: number) => void;
 } {
   const backend = useAudioBackend();
   const [notice, setNotice] = useState<UpdateNoticeData | null>(null);
   const [update, setUpdate] = useState<UpdateNoticeData | null>(null);
   const [localVersion, setLocalVersion] = useState('');
+  const [forkVersion, setForkVersion] = useState<ForkVersion | null>(null);
   // Re-check when the session appears or disappears so a just-signed-in
   // beta tester gets their payload, and logout drops a beta-only notice.
   const authenticated = client.isAuthenticated();
+
+  useEffect(() => {
+    if (!isNativeFunctionRegistered('getForkVersion')) return;
+    let cancelled = false;
+    (async () => {
+      const v = (await backend.getPluginFunction('getForkVersion')()) as Partial<ForkVersion>;
+      if (cancelled || !v || typeof v.build !== 'number' || typeof v.hash !== 'string') return;
+      setForkVersion({ build: v.build, hash: v.hash, dirty: v.dirty === true });
+    })().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
 
   useEffect(() => {
     if (!isNativeFunctionRegistered('getPluginVersion')) return;
@@ -169,5 +195,5 @@ export function useUpdateNotice(client: T3KClient): {
     setNotice(null);
   }, []);
 
-  return { notice, update, localVersion, remindLater };
+  return { notice, update, localVersion, forkVersion, remindLater };
 }

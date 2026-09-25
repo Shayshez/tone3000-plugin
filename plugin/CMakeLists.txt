@@ -405,6 +405,23 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/AudioDSPTools/dsp/ResamplingContainer/Dependencies
 )
 
+# Fork build number (commits since FORK_BASE + short hash), regenerated on
+# every build so it tracks HEAD without a reconfigure; see
+# cmake/ForkVersion.cmake. Run once now so the header exists for the first
+# compile.
+set(_t3k_fork_header "${CMAKE_CURRENT_BINARY_DIR}/generated/ForkVersion.h")
+set(_t3k_fork_cmd ${CMAKE_COMMAND}
+    -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/..
+    -DOUT=${_t3k_fork_header}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/ForkVersion.cmake)
+execute_process(COMMAND ${_t3k_fork_cmd})
+add_custom_target(ForkVersion
+    COMMAND ${_t3k_fork_cmd}
+    BYPRODUCTS ${_t3k_fork_header}
+    COMMENT "Fork build number")
+add_dependencies(${PROJECT_NAME} ForkVersion)
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
 # The define also gates the is_a2_shape declaration, which the plugin uses to
 # restrict drop-loaded local NAM files to A2 (see ProcessorModelLoader.cpp).
 # Defined here too because NAM is linked as a whole-archive flag on

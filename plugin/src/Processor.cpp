@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "ForkVersion.h"
 #if !HEADLESS
 #include "Editor.h"
 #endif
@@ -136,6 +137,9 @@ TONE3000Processor::TONE3000Processor()
   if (!juce::Logger::getCurrentLogger()) {
     juce::Logger::setCurrentLogger(new juce::FileLogger(getLogFile(), "TONE3000 JUCE Log"));
   }
+  juce::Logger::writeToLog("[Processor] Build " + juce::String(T3K_FORK_BUILD) + " (" +
+                           T3K_FORK_HASH + (T3K_FORK_DIRTY ? "+" : "") +
+                           "), based on TONE3000 v" + T3K_UPSTREAM_VERSION);
 
   // One-line snapshot of everything read from the shared machine-wide
   // settings file at construction, plus the file's own path: the first

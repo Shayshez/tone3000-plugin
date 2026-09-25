@@ -1,5 +1,6 @@
 #include "EditorWebViewSetup.h"
 #include "Editor.h"
+#include "ForkVersion.h"
 
 namespace EditorWebViewSetup {
 
@@ -969,6 +970,18 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           // this for the startup update check against the tone3000.com API.
           "getPluginVersion", guarded(0, juce::var(""), [](const juce::Array<juce::var>&) {
             return juce::var(JucePlugin_VersionString);
+          }))
+      .withNativeFunction(
+          // This fork's own build: commits since FORK_BASE, short hash, and
+          // whether the working tree had uncommitted changes (see
+          // cmake/ForkVersion.cmake). getPluginVersion stays the upstream
+          // number it's based on.
+          "getForkVersion", guarded(0, juce::var(), [](const juce::Array<juce::var>&) {
+            auto* obj = new juce::DynamicObject();
+            obj->setProperty("build", T3K_FORK_BUILD);
+            obj->setProperty("hash", juce::String(T3K_FORK_HASH));
+            obj->setProperty("dirty", T3K_FORK_DIRTY != 0);
+            return juce::var(obj);
           }))
       .withNativeFunction(
           // Stable machine hash (survives storage/peripheral changes; a CPU

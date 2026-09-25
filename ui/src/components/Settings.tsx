@@ -11,7 +11,7 @@ import {
   useBlockSizeControlEnabled,
   useKeyboardShortcutsEnabled,
 } from './uiPreferences';
-import type { UpdateNoticeData } from '../hooks/useUpdateNotice';
+import type { ForkVersion, UpdateNoticeData } from '../hooks/useUpdateNotice';
 import type { AudioDevice } from '../hooks/useAudioDevice';
 import type { ChainItem } from '../types/chain';
 import { isSlimSizeFull, SLIM_SIZE_FULL, SLIM_SIZE_LITE } from '../types/chain';
@@ -103,8 +103,11 @@ interface SettingsProps {
   device: AudioDevice;
   /** Tab to open on (defaults to System; banner actions land there too). */
   initialTab?: SettingsTab;
-  /** Running build version ("" outside the plugin). */
+  /** Running build version ("" outside the plugin): the upstream TONE3000
+      version this fork is based on. */
   version: string;
+  /** This fork's own build number (null outside the plugin). */
+  forkVersion: ForkVersion | null;
   /** Newer published build, if the startup check found one (even if the
       startup modal was dismissed); shows an update button in the footer. */
   update: UpdateNoticeData | null;
@@ -192,6 +195,7 @@ export const Settings: React.FC<SettingsProps> = ({
   device,
   initialTab = 'system',
   version,
+  forkVersion,
   update,
   namSlimSizeDefault,
   onNamSlimSizeDefaultChange,
@@ -635,7 +639,7 @@ export const Settings: React.FC<SettingsProps> = ({
       )}
 
       {/* Version / update sit last so diagnostics stay above the footer. */}
-      {(version || update) && (
+      {(version || forkVersion || update) && (
         <div>
           {update && (
             <a
@@ -647,16 +651,37 @@ export const Settings: React.FC<SettingsProps> = ({
                 display: 'block',
                 boxSizing: 'border-box',
                 textDecoration: 'none',
-                marginBottom: version ? '16rem' : 0,
+                marginBottom: version || forkVersion ? '16rem' : 0,
               }}
             >
               Update to v{update.version}
             </a>
           )}
-          {version && (
-            <p style={{ ...descriptionStyle, fontSize: '12rem', color: SUBTLE, margin: 0 }}>
-              TONE3000 v{version}
-            </p>
+          {forkVersion ? (
+            <>
+              <p style={{ ...descriptionStyle, fontSize: '12rem', color: SUBTLE, margin: 0 }}>
+                Plum build {forkVersion.build} · {forkVersion.hash}
+                {forkVersion.dirty && ' · modified'}
+              </p>
+              {version && (
+                <p
+                  style={{
+                    ...descriptionStyle,
+                    fontSize: '10rem',
+                    color: 'rgba(235, 235, 245, 0.22)',
+                    margin: '2rem 0 0',
+                  }}
+                >
+                  based on TONE3000 v{version}
+                </p>
+              )}
+            </>
+          ) : (
+            version && (
+              <p style={{ ...descriptionStyle, fontSize: '12rem', color: SUBTLE, margin: 0 }}>
+                TONE3000 v{version}
+              </p>
+            )
           )}
         </div>
       )}

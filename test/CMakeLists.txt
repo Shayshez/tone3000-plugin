@@ -72,7 +72,15 @@ target_sources(DspTests PRIVATE
     ../plugin/src/TunerDetector.cpp
 )
 
+# Processor.cpp logs the fork build number (see cmake/ForkVersion.cmake).
+set(_t3k_fork_cmd ${CMAKE_COMMAND}
+    -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/..
+    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/ForkVersion.h
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/ForkVersion.cmake)
+execute_process(COMMAND ${_t3k_fork_cmd})
+
 target_include_directories(DspTests PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugin/include
     # ChainDomain.h pulls in the AudioDSPTools resampling boundary.
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugin/AudioDSPTools
