@@ -22,6 +22,9 @@ const SPEED_PER_CENT = 5;
 /** Errors beyond this read as the maximum speed (the note name has moved on). */
 const MAX_CENTS = 50;
 const BAND_GAP = 6;
+/** Glide time constant (s) of the drift speed, so a changing reading eases
+    the stripes to their new speed instead of lurching. */
+const SPEED_TAU = 0.15;
 
 const LIT_BLUE = '#3D7BFF';
 
@@ -62,6 +65,7 @@ export const TunerStrobe: React.FC<{
     let frame = 0;
     let last = performance.now();
     let phase = 0; // design px, top band
+    let speed = 0; // cents, eased toward the reading
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw);
       const dt = Math.min(0.1, (now - last) / 1000);
@@ -71,10 +75,9 @@ export const TunerStrobe: React.FC<{
       if (!canvas || !ctx) return;
 
       const { cents: c, hasSignal: signal, inTune: locked } = live.current;
-      if (signal) {
-        const clamped = Math.max(-MAX_CENTS, Math.min(MAX_CENTS, c));
-        phase += clamped * SPEED_PER_CENT * dt;
-      }
+      const clamped = signal ? Math.max(-MAX_CENTS, Math.min(MAX_CENTS, c)) : 0;
+      speed += (clamped - speed) * (1 - Math.exp(-dt / SPEED_TAU));
+      if (signal) phase += speed * SPEED_PER_CENT * dt;
 
       // Real pixels: design size × UI scale × device pixel ratio.
       const scale = getUiScale() * (window.devicePixelRatio || 1);

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNativeFunction } from './useFunction';
 import { getTunerOffset, getTunerRefHz } from '../components/uiPreferences';
-import { frequencyToNote } from '../types/tunerMath';
+import { frequencyToPitch, pitchToFrequency, pitchToNote } from '../types/tunerMath';
+import { TunerSmoother } from '../types/tunerSmoothing';
 
 interface TunerReading {
   frequency: number;
@@ -27,7 +28,8 @@ export interface TunerState {
 
 /**
  * Polls the native pitch detector at 20 Hz and smooths the result into a
- * stable note/cents reading. Shared by the full TunerView and the always-on
+ * stable note/cents reading (attack gate + median + glide, see
+ * TunerSmoother). Shared by the full TunerView and the always-on
  * mini tuner in the header - both just read whatever the native detector
  * (enabled once at startup, see Plugin.tsx) is already producing.
  */
@@ -39,7 +41,7 @@ export const useTunerReading = (): TunerState => {
   const [cents, setCents] = useState(0);
   const [hasSignal, setHasSignal] = useState(false);
   const [frequency, setFrequency] = useState(0);
-  const smoothedCentsRef = useRef(0);
+  const smootherRef = useRef(new TunerSmoother());
   const holdTimeoutRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -55,16 +57,23 @@ export const useTunerReading = (): TunerState => {
 
         const freq = typeof reading.frequency === 'number' ? reading.frequency : 0;
         const confidence = typeof reading.confidence === 'number' ? reading.confidence : 0;
+        const level = typeof reading.level === 'number' ? reading.level : -120;
+        const refHz = getTunerRefHz();
+        const offset = getTunerOffset();
+        const valid = freq > 0 && confidence > 0.5;
 
-        if (freq > 0 && confidence > 0.5) {
-          const detected = frequencyToNote(freq, getTunerRefHz(), getTunerOffset());
-          // Light exponential smoothing so the display doesn't jitter.
-          smoothedCentsRef.current = smoothedCentsRef.current * 0.6 + detected.cents * 0.4;
+        const pitch = smootherRef.current.push(
+          performance.now(),
+          level,
+          valid ? frequencyToPitch(freq, refHz, offset) : null
+        );
+        if (valid && pitch !== null) {
+          const detected = pitchToNote(pitch, offset);
           setNote(detected.name);
           setMidi(detected.midi);
           setSounding(detected.sounding);
-          setCents(smoothedCentsRef.current);
-          setFrequency(freq);
+          setCents(detected.cents);
+          setFrequency(pitchToFrequency(pitch, refHz, offset));
           setHasSignal(true);
           if (holdTimeoutRef.current) window.clearTimeout(holdTimeoutRef.current);
           holdTimeoutRef.current = window.setTimeout(() => setHasSignal(false), HOLD_MS);

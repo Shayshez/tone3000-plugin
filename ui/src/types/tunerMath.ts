@@ -19,14 +19,26 @@ export const noteName = (midi: number) => NOTE_NAMES[((midi % 12) + 12) % 12];
     transposes the naming: a guitar tuned down a half step (offset -1)
     playing its low string (E♭2) reads as E2, in tune. `sounding` keeps the
     real note for the readout. */
-export const frequencyToNote = (frequency: number, refHz: number, offset: number) => {
-  const soundingMidi = 69 + 12 * Math.log2(frequency / refHz);
-  const midi = soundingMidi - offset;
-  const nearest = Math.round(midi);
+export const frequencyToNote = (frequency: number, refHz: number, offset: number) =>
+  pitchToNote(frequencyToPitch(frequency, refHz, offset), offset);
+
+/** Detected pitch -> continuous (fractional) MIDI number in the
+    offset-adjusted naming frame. The smoother works in this space, so a
+    note change is just a jump rather than a cents wrap from +49 to -49. */
+export const frequencyToPitch = (frequency: number, refHz: number, offset: number) =>
+  69 + 12 * Math.log2(frequency / refHz) - offset;
+
+/** Inverse of frequencyToPitch (for showing the smoothed pitch in Hz). */
+export const pitchToFrequency = (pitch: number, refHz: number, offset: number) =>
+  refHz * Math.pow(2, (pitch + offset - 69) / 12);
+
+/** Fractional pitch (offset frame) -> nearest note + cents off it. */
+export const pitchToNote = (pitch: number, offset: number) => {
+  const nearest = Math.round(pitch);
   return {
     name: noteName(nearest),
     midi: nearest,
     sounding: noteName(nearest + offset),
-    cents: (midi - nearest) * 100,
+    cents: (pitch - nearest) * 100,
   };
 };

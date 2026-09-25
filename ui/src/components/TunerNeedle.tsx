@@ -16,8 +16,9 @@ import { BRAND_RED, GRAY, MUTED, WHITE } from './theme';
  */
 
 const MAX_CENTS = 50;
-/** Spring stiffness (1/s): higher = snappier. */
-const SPRING = 14;
+/** Spring stiffness (1/s): higher = snappier. Kept soft - the reading is
+    already smoothed, and a stiff needle made small wobbles look nervous. */
+const SPRING = 7;
 /** Label row above the scale (the pointer head sits between it and the ticks). */
 const LABEL_H = 24;
 /** Keeps the ±50 end ticks and their labels inside the box. */
