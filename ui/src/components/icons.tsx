@@ -28,6 +28,7 @@ import {
   Headphones as LHeadphones,
   Home as LHome,
   Info as LInfo,
+  Keyboard as LKeyboard,
   Laptop as LLaptop,
   Layers as LLayers,
   LayoutGrid as LLayoutGrid,
@@ -105,6 +106,7 @@ export const GripVertical = scaled(LGripVertical, 'GripVertical');
 export const Headphones = scaled(LHeadphones, 'Headphones');
 export const Home = scaled(LHome, 'Home');
 export const Info = scaled(LInfo, 'Info');
+export const Keyboard = scaled(LKeyboard, 'Keyboard');
 export const Laptop = scaled(LLaptop, 'Laptop');
 export const Layers = scaled(LLayers, 'Layers');
 export const LayoutGrid = scaled(LLayoutGrid, 'LayoutGrid');

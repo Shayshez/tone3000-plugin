@@ -13,13 +13,14 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
-/** Boolean preference backed by localStorage (off by default). */
-function boolPref(key: string) {
+/** Boolean preference backed by localStorage (off unless `fallback`). */
+function boolPref(key: string, fallback = false) {
   let value = (() => {
     try {
-      return localStorage.getItem(key) === 'true';
+      const stored = localStorage.getItem(key);
+      return stored === null ? fallback : stored === 'true';
     } catch {
-      return false;
+      return fallback;
     }
   })();
 
@@ -35,7 +36,7 @@ function boolPref(key: string) {
   };
 
   const useValue = () => useSyncExternalStore(subscribe, () => value);
-  return { set, useValue };
+  return { set, useValue, get: () => value };
 }
 
 // Whether NAM block cards expose the (=) per-block normalization toggle.
@@ -138,3 +139,13 @@ const tunerDisplay = typedPref<TunerDisplay>('t3k.tunerDisplay', 'bars', (raw) =
 );
 export const setTunerDisplay = tunerDisplay.set;
 export const useTunerDisplay = tunerDisplay.useValue;
+
+// Global keyboard shortcuts while the plugin has keyboard focus (scenes
+// 1-4, presets [ ], undo, Esc - see useGlobalShortcuts), and Space handing
+// the transport to the host without giving up that focus. On by default;
+// the switch exists for hosts where a plain key must always reach the DAW.
+const keyboardShortcuts = boolPref('t3k.keyboardShortcuts', true);
+export const setKeyboardShortcutsEnabled = keyboardShortcuts.set;
+export const useKeyboardShortcutsEnabled = keyboardShortcuts.useValue;
+/** Non-reactive read for plain event listeners (keyPassthrough). */
+export const keyboardShortcutsEnabled = () => keyboardShortcuts.get();

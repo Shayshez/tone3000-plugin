@@ -1028,8 +1028,11 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
             if (juce::JUCEApplicationBase::isStandaloneApp())
               return juce::var(false);
             const HostKey key = args[0].toString() == "Enter" ? HostKey::enter : HostKey::space;
+            // (code, keepFocus): keepFocus hands keyboard focus back to the
+            // plugin right after the host got the key (global shortcuts on).
+            const bool keepFocus = args.size() > 1 && coerceBool(args[1]);
             if (auto* peer = editor->getPeer())
-              forwardKeyToHost(peer->getNativeHandle(), key);
+              forwardKeyToHost(peer->getNativeHandle(), key, keepFocus);
             return juce::var(true);
           }))
       .withNativeFunction(

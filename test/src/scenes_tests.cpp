@@ -421,6 +421,11 @@ struct ReverbRig {
       EXPECT_TRUE(proc.setBlockIrDecay("verb", 1.0, 0.0, 0.5, 0.6, 0.5, 0.5));
       juce::Thread::sleep(400);
       EXPECT_TRUE(proc.selectBlockChannel("verb", 0));
+      // Back on A for the first time goes through the regular shape rebuild
+      // (A was never warmed): let it land - it mutes the wet path briefly,
+      // and must not overlap the measured burst.
+      juce::Thread::sleep(400);
+      processStereo(proc, std::vector<float>(40 * 512, 0.0f));
       const auto until = juce::Time::getMillisecondCounter() + 10000;
       while (!proc.isChannelWarm("verb", 1) && juce::Time::getMillisecondCounter() < until)
         juce::Thread::sleep(20);

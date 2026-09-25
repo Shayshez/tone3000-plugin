@@ -1,8 +1,9 @@
-import React from 'react';
-import { X } from './icons';
+import React, { useEffect, useState } from 'react';
+import { Keyboard, X } from './icons';
+import { useKeyboardShortcutsEnabled } from './uiPreferences';
 import { HELP, helpProps, setHintsEnabled, useHelpText, useHintsEnabled } from './helpText';
 import { useCpuPercent } from '../hooks/useMeters';
-import { BORDER, MUTED, WHITE } from './theme';
+import { BORDER, MUTED, SUBTLE, WHITE } from './theme';
 
 /** Chrome height added below the plugin when hints are enabled (see Plugin). */
 export const HINT_HEIGHT = 36;
@@ -33,6 +34,50 @@ const CpuReadout: React.FC = () => {
     >
       <span>CPU</span>
       <span>{cpu.toFixed(1)}%</span>
+    </span>
+  );
+};
+
+/** Whether the plugin UI has keyboard focus right now (the host takes it
+    back when the user clicks the DAW). Events plus a slow poll, since hosts
+    move focus in ways that don't always reach the page as focus/blur. */
+function useHasKeyboardFocus(): boolean {
+  const [focused, setFocused] = useState(() => document.hasFocus());
+  useEffect(() => {
+    const update = () => setFocused(document.hasFocus());
+    window.addEventListener('focus', update);
+    window.addEventListener('blur', update);
+    const poll = window.setInterval(update, 500);
+    return () => {
+      window.removeEventListener('focus', update);
+      window.removeEventListener('blur', update);
+      window.clearInterval(poll);
+    };
+  }, []);
+  return focused;
+}
+
+/** Keyboard-shortcut status: lit while the plugin has keyboard focus (its
+    shortcuts - scenes 1-4, presets [ ] ... - are live), dim otherwise
+    (keys go to the host until the plugin is clicked). Hidden when the
+    shortcuts are switched off in Settings. */
+const KeyboardFocusIndicator: React.FC = () => {
+  const enabled = useKeyboardShortcutsEnabled();
+  const focused = useHasKeyboardFocus();
+  if (!enabled) return null;
+  return (
+    <span
+      {...helpProps(focused ? HELP.keyboardFocusOn : HELP.keyboardFocusOff)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        color: focused ? WHITE : SUBTLE,
+        flexShrink: 0,
+        cursor: 'default',
+        transition: 'color 0.15s ease',
+      }}
+    >
+      <Keyboard size={16} />
     </span>
   );
 };
@@ -81,6 +126,7 @@ export const HintBar: React.FC = () => {
       >
         {text ?? ''}
       </span>
+      <KeyboardFocusIndicator />
       <CpuReadout />
       <button
         onClick={() => setHintsEnabled(false)}

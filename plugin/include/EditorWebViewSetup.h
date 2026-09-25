@@ -76,11 +76,13 @@ enum class HostKey { space, enter };
  * Enter presses it has no use for and hands them here so the DAW's play/stop
  * and return-to-start shortcuts keep working while the plugin has keyboard
  * focus. Hands keyboard focus back to the host, then delivers synthesized
- * key events to it. Takes the editor's peer native handle. Best effort per
- * host; implemented in WindowKeyEvents.mm (macOS) and WindowKeyEvents.cpp
+ * key events to it. `keepFocus` then returns keyboard focus to the plugin
+ * once the host has handled the key (macOS; ignored elsewhere for now), so
+ * the plugin's own shortcuts keep working. Takes the editor's peer native
+ * handle. Best effort per host; implemented in WindowKeyEvents.mm (macOS) and WindowKeyEvents.cpp
  * (Windows/Linux).
  */
-void forwardKeyToHost(void* nativeHandle, HostKey key);
+void forwardKeyToHost(void* nativeHandle, HostKey key, bool keepFocus = false);
 
 /**
  * Whether the primary mouse button is physically down right now, asked of

@@ -1,5 +1,6 @@
 import * as Juce from '@juce-framework/webview';
 import { isNativeFunctionRegistered } from './backend/JuceBackend';
+import { keyboardShortcutsEnabled } from './components/uiPreferences';
 
 /**
  * Space and Enter passthrough to the host DAW.
@@ -60,12 +61,15 @@ export function installKeyPassthrough(): void {
       // Always suppress: stops the caret scroll / system beep even where
       // there is no host to forward to (standalone, dev browser).
       e.preventDefault();
-      // Forward the initial press only; the native side resigns the
-      // webview's keyboard focus, so genuine repeats go to the host
-      // directly, and any stragglers here must not spam the transport.
+      // Forward the initial press only; stragglers must not spam the
+      // transport. With global shortcuts on, the native side hands focus
+      // straight back to the plugin afterwards (keepFocus), so scene keys
+      // keep working during playback instead of landing on DAW commands
+      // (Logic: 1-9 recall screensets); otherwise it leaves focus with the
+      // host, and genuine repeats go there directly.
       if (e.repeat) return;
       if (isNativeFunctionRegistered('forwardKeyToHost'))
-        void Juce.getNativeFunction('forwardKeyToHost')(e.code);
+        void Juce.getNativeFunction('forwardKeyToHost')(e.code, keyboardShortcutsEnabled());
     },
     { capture: true }
   );

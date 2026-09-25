@@ -9,7 +9,7 @@ namespace EditorWebViewSetup {
 // a synthesized Space/Enter into. The UI still calls this (it suppresses the
 // key itself so nothing beeps or scrolls), so keep the symbol and make it a
 // no-op rather than teaching the UI a second platform check.
-void forwardKeyToHost(void*, HostKey) {}
+void forwardKeyToHost(void*, HostKey, bool) {}
 
 bool isPrimaryMouseButtonDown() {
   return false;  // no resize grip on iOS (the window is the screen)
@@ -28,11 +28,13 @@ namespace EditorWebViewSetup {
 // most painfully the transport keys Space (play/stop) and Enter (return to
 // start). The UI swallows both itself (preventDefault, so no caret scroll or
 // system beep) and calls this to hand the press to the host instead.
-void forwardKeyToHost(void* nsViewPtr, HostKey key) {
+void forwardKeyToHost(void* nsViewPtr, HostKey key, bool keepFocus) {
   NSView* view = (__bridge NSView*)nsViewPtr;
   NSWindow* window = [view window];
   if (window == nil)
     return;
+  // The WebView's own responder, to hand focus back to (keepFocus).
+  NSResponder* pluginResponder = [window firstResponder];
 
   // Focus the host's own content view (our peer view is a subview of it):
   // the same state as a click on the host's plugin-window chrome, where
@@ -63,6 +65,24 @@ void forwardKeyToHost(void* nsViewPtr, HostKey key) {
   // hang their transport shortcut off one.
   [NSApp postEvent:keyEvent(NSEventTypeKeyDown) atStart:NO];
   [NSApp postEvent:keyEvent(NSEventTypeKeyUp) atStart:NO];
+
+  // Hand focus back once the host has dispatched the posted pair (they are
+  // queued behind whatever is pending, hence the short delay), unless the
+  // user clicked elsewhere in the meantime.
+  if (keepFocus && pluginResponder != nil && pluginResponder != [window contentView]) {
+    NSView* hostView = [window contentView];
+    const NSInteger windowNumber = [window windowNumber];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      NSWindow* w = [NSApp windowWithWindowNumber:windowNumber];
+      if (w == nil)
+        return;
+      NSResponder* current = [w firstResponder];
+      if ((current == hostView || current == w || current == nil) &&
+          [pluginResponder isKindOfClass:[NSView class]] &&
+          [(NSView*)pluginResponder window] == w)
+        [w makeFirstResponder:pluginResponder];
+    });
+  }
 }
 
 bool isPrimaryMouseButtonDown() {

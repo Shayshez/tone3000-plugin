@@ -12,7 +12,7 @@
 
 namespace EditorWebViewSetup {
 
-void forwardKeyToHost(void* nativeHandle, HostKey key) {
+void forwardKeyToHost(void* nativeHandle, HostKey key, bool /*keepFocus*/) {
   HWND host = GetAncestor(static_cast<HWND>(nativeHandle), GA_ROOT);
   if (host == nullptr)
     return;
@@ -70,7 +70,7 @@ namespace {
 
 namespace EditorWebViewSetup {
 
-void forwardKeyToHost(void* nativeHandle, HostKey key) {
+void forwardKeyToHost(void* nativeHandle, HostKey key, bool /*keepFocus*/) {
   // A private connection: the peer's Display is JUCE-internal, and one
   // round-trip per keypress is nothing.
   Display* display = XOpenDisplay(nullptr);

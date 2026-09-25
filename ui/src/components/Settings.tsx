@@ -6,14 +6,17 @@ import { setHintsEnabled, useHintsEnabled } from './helpText';
 import {
   setBlockNormalizeControlEnabled,
   setBlockSizeControlEnabled,
+  setKeyboardShortcutsEnabled,
   useBlockNormalizeControlEnabled,
   useBlockSizeControlEnabled,
+  useKeyboardShortcutsEnabled,
 } from './uiPreferences';
 import type { UpdateNoticeData } from '../hooks/useUpdateNotice';
 import type { AudioDevice } from '../hooks/useAudioDevice';
 import type { ChainItem } from '../types/chain';
 import { isSlimSizeFull, SLIM_SIZE_FULL, SLIM_SIZE_LITE } from '../types/chain';
 import {
+  FONT_MONO,
   GRAY,
   LINK_BLUE,
   MUTED,
@@ -35,6 +38,16 @@ import {
 } from './controls';
 import { SystemSettings } from './SystemSettings';
 import { MidiMapSettings } from './MidiMapSettings';
+
+/** Keyboard shortcut cheat sheet (see useGlobalShortcuts). */
+const SHORTCUT_LIST: [string, string][] = [
+  ['1 - 4', 'Select scene'],
+  ['⇧[  ⇧]', 'Previous / next scene'],
+  ['[  ]', 'Previous / next preset'],
+  ['⌘Z  ⇧⌘Z', 'Undo / redo (plugin)'],
+  ['Esc', 'Back (block view, EQ, tuner, Scene Manager)'],
+  ['Space', 'Host transport (the plugin keeps the keyboard)'],
+];
 
 /** Inline LITE/FULL chrome matching the block-header toggle, for Settings
     copy that points at that control. Decorative only (not interactive). */
@@ -189,6 +202,7 @@ export const Settings: React.FC<SettingsProps> = ({
   const [tab, setTab] = useState<SettingsTab>(standalone ? initialTab : 'plugin');
 
   const hintsEnabled = useHintsEnabled();
+  const keyboardShortcutsEnabled = useKeyboardShortcutsEnabled();
   const blockNormalizeControlEnabled = useBlockNormalizeControlEnabled();
   const blockSizeControlEnabled = useBlockSizeControlEnabled();
 
@@ -295,6 +309,34 @@ export const Settings: React.FC<SettingsProps> = ({
         value={hintsEnabled}
         onChange={setHintsEnabled}
       />
+
+      <ToggleRow
+        label="Keyboard Shortcuts"
+        description="While the plugin has keyboard focus (click it once). Space still starts the host's transport and the plugin keeps the focus; every other ⌘ shortcut still goes to the host."
+        value={keyboardShortcutsEnabled}
+        onChange={setKeyboardShortcutsEnabled}
+      >
+        {keyboardShortcutsEnabled && (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              columnGap: '16rem',
+              rowGap: '6rem',
+              fontSize: '14rem',
+              fontWeight: 400,
+              color: WHITE,
+            }}
+          >
+            {SHORTCUT_LIST.map(([keys, what]) => (
+              <React.Fragment key={keys}>
+                <span style={{ fontFamily: FONT_MONO, color: MUTED }}>{keys}</span>
+                <span>{what}</span>
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+      </ToggleRow>
 
       <div style={{ marginBottom: `${SECTION_GAP}rem` }} role="radiogroup" aria-label="NAM A2 Size">
         <span style={sectionLabelStyle}>NAM A2 Size</span>

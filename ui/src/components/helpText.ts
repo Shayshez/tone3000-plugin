@@ -251,6 +251,10 @@ const HELP_DESKTOP = {
   sceneCellPower: 'Click: bypass/enable this block in this scene.',
   sceneCellChannel: 'Click: pick the channel this block uses in this scene.',
   sceneColumnOpen: 'Click: open this block.',
+  keyboardFocusOn:
+    'Keyboard shortcuts active: 1-4 scenes, [ ] presets, ⇧[ ⇧] scene step, ⌘Z undo, Esc back.',
+  keyboardFocusOff:
+    'Keyboard shortcuts paused: the host has the keyboard. Click the plugin to use them.',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',
   knobMenuReset: 'Reset to Default: put this knob back to its default value (same as ⌥-click).',
   knobMenuType: 'Type Value: enter an exact value (same as double-click).',

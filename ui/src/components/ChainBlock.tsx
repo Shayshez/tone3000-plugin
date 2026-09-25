@@ -78,6 +78,7 @@ import { AvatarImage } from './AvatarFallback';
 import { FormatBadge } from './FormatBadge';
 import { HELP, helpProps } from './helpText';
 import { ChannelSelector } from './channels';
+import { useShortcutBack } from '../hooks/useGlobalShortcuts';
 import { useBlockNormalizeControlEnabled, useBlockSizeControlEnabled } from './uiPreferences';
 import { useToast } from './Toast';
 import { ChromeIconButton, ChromeTextButton, chromeIcon } from './ChromeIconButton';
@@ -1209,6 +1210,9 @@ export const ChainBlock: React.FC<ChainBlockProps> = ({
   // early return (isEq/isDualMono), same "hooks must run every render"
   // rule already followed elsewhere in this component.
   const view = useDetailViewStack(initialView, onBack);
+  // Esc (global shortcuts): step back out of this block's sub-view, then out
+  // of the block itself - the same path as the back arrow.
+  useShortcutBack(() => view.pop());
   const showEq = view.activeView === 'eq';
   const showInfo = view.activeView === 'info';
   useEffect(() => {

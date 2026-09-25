@@ -33,7 +33,9 @@ import Settings, { type SettingsTab } from './Settings';
 import { T3K_API } from '../t3k/config';
 import type { Model } from '../types/tone';
 import type { ToneBlock } from '../types/chain';
-import { isInsertSlot } from '../types/chain';
+import { NUM_SCENES, isInsertSlot } from '../types/chain';
+import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts';
+import { useKeyboardShortcutsEnabled } from './uiPreferences';
 
 export const Plugin: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -273,6 +275,28 @@ export const Plugin: React.FC = () => {
     }),
     [presetStore, closeTunerThen, showChainThen]
   );
+
+  // Global keyboard shortcuts (layer 3, see useGlobalShortcuts).
+  const shortcutsEnabled = useKeyboardShortcutsEnabled();
+  useGlobalShortcuts(shortcutsEnabled, {
+    undo: handleUndo,
+    redo: handleRedo,
+    presetStep: (direction) => {
+      const list = headerPresetStore.presets;
+      if (list.length === 0) return;
+      const index = activePreset ? list.findIndex((p) => p.id === activePreset.id) : -1;
+      const next =
+        index < 0
+          ? direction === 1
+            ? 0
+            : list.length - 1
+          : (index + direction + list.length) % list.length;
+      void headerPresetStore.actions.load(list[next].id);
+    },
+    selectScene: (index) => void actions.selectScene(index),
+    sceneStep: (direction) =>
+      void actions.selectScene((scenes.active + direction + NUM_SCENES) % NUM_SCENES),
+  });
 
   const openToneBrowser = useCallback(() => setShowToneBrowser(true), []);
 
