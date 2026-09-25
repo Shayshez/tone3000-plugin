@@ -106,13 +106,18 @@ void installContextMenuGuard() {
 // then works natively); until that happens, hand every tracked mouseMoved:
 // to the WKWebView, whose :hover rules and cursor updates are driven by
 // exactly these events.
-@interface T3KHoverForwarder : NSObject {
+//
+// Objective-C class names are process-global, and JUCE only randomizes its
+// own: named plainly, this class clashes with the official TONE3000 build's
+// copy when a host loads both plugins ("implemented in both ... One of the
+// duplicates must be removed or renamed"). Hence the fork-specific name.
+@interface T3KPlumHoverForwarder : NSObject {
  @public
   NSView* webView;  // unretained; the forwarder dies with the view
 }
 @end
 
-@implementation T3KHoverForwarder
+@implementation T3KPlumHoverForwarder
 
 - (void)mouseEntered:(NSEvent*)event {
   (void)event;
@@ -169,7 +174,7 @@ void installHoverMouseForwarding(void* nsViewPtr) {
   if (webView == nil || objc_getAssociatedObject(webView, &kForwarderKey) != nil)
     return;
 
-  T3KHoverForwarder* forwarder = [[T3KHoverForwarder alloc] init];
+  T3KPlumHoverForwarder* forwarder = [[T3KPlumHoverForwarder alloc] init];
   forwarder->webView = webView;
   NSTrackingArea* area = [[NSTrackingArea alloc]
       initWithRect:NSZeroRect
