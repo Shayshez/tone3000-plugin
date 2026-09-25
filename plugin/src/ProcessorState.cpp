@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "AppIdentity.h"
 
 #include <cstring>
 
@@ -40,10 +41,10 @@ juce::PropertiesFile::Options userSettingsOptions() {
   // PresetManager, the logs and the WebKit storage).
   options.folderName =
       juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-          .getChildFile("TONE3000")
+          .getChildFile(kAppFolderName)
           .getFullPathName();
 #else
-  options.folderName = "TONE3000";
+  options.folderName = kAppFolderName;
 #endif
   return options;
 }

@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "AppIdentity.h"
 #include "ForkVersion.h"
 #if !HEADLESS
 #include "Editor.h"
@@ -423,7 +424,11 @@ TONE3000Processor::~TONE3000Processor() {
 // JUCE SETTINGS
 // #############
 const juce::String TONE3000Processor::getName() const {
-  return "TONE3000";
+#ifdef JucePlugin_Name
+  return JucePlugin_Name;
+#else
+  return kAppFolderName;  // test builds have no JUCE plugin defines
+#endif
 }
 
 bool TONE3000Processor::acceptsMidi() const {
@@ -2505,6 +2510,6 @@ juce::var TONE3000Processor::pollDualAutoBalance(const std::string& blockId) {
 // UI's copy/reveal actions always target the same file.
 juce::File TONE3000Processor::getLogFile() {
   return juce::FileLogger::getSystemLogFileFolder()
-      .getChildFile("TONE3000")
+      .getChildFile(kAppFolderName)
       .getChildFile("TONE3000.log");
 }

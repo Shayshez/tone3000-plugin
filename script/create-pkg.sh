@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a macOS .pkg installer wizard for TONE3000 (Standalone, VST3, AU, AAX, CLAP).
+# Build a macOS .pkg installer wizard for TONE3000 Plum (Standalone, VST3, AU, AAX, CLAP).
 #
 # Two modes:
 #
@@ -40,9 +40,21 @@
 
 set -euo pipefail
 
-# Version comes from the repo-root VERSION file (single source of truth).
-VERSION="$(tr -d '[:space:]' < "$(dirname "$0")/../VERSION")"
-PKG_NAME="TONE3000-v${VERSION}"
+# Fork identity: must match plugin/CMakeLists.txt (T3K_PRODUCT_NAME,
+# PLUGIN_NAME, T3K_BUNDLE_ID) and plugin/include/AppIdentity.h (data folder).
+PRODUCT="TONE3000-Plum"          # bundle file names
+DISPLAY_NAME="TONE3000 Plum"     # installer titles
+PKG_ID="com.plumaudio.tone3000plum"
+DATA_FOLDER="TONE3000 Plum"
+
+# Upstream VERSION it's based on + this fork's build number (commits since
+# FORK_BASE, same count cmake/ForkVersion.cmake compiles into the plugin).
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UPSTREAM_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+FORK_BUILD="$(git -C "$REPO_ROOT" rev-list --count "$(tr -d '[:space:]' < "$REPO_ROOT/FORK_BASE")..HEAD")"
+# pkg receipt version: numeric and increasing with every fork build.
+VERSION="${UPSTREAM_VERSION}.${FORK_BUILD}"
+PKG_NAME="${PRODUCT}-build${FORK_BUILD}-macos"
 RELEASE="${RELEASE:-./build/plugin/TONE3000_artefacts/Release}"
 STAGE="${STAGE:-./build/pkg-stage}"
 COMPONENTS_DIR="${COMPONENTS_DIR:-./build/pkg-components}"
@@ -66,8 +78,8 @@ if [[ ! -d "$RELEASE" ]]; then
   exit 1
 fi
 
-if [[ ! -d "$RELEASE/Standalone/TONE3000.app" ]]; then
-  echo "Standalone build not found at $RELEASE/Standalone/TONE3000.app"
+if [[ ! -d "$RELEASE/Standalone/${PRODUCT}.app" ]]; then
+  echo "Standalone build not found at $RELEASE/Standalone/${PRODUCT}.app"
   exit 1
 fi
 
@@ -127,43 +139,43 @@ mkdir -p "$COMPONENTS_DIR"
 # 1. Stage artefacts at their final layout
 
 echo "Staging Standalone..."
-ditto "$RELEASE/Standalone/TONE3000.app" "$STAGE/standalone/Applications/TONE3000.app"
+ditto "$RELEASE/Standalone/${PRODUCT}.app" "$STAGE/standalone/Applications/${PRODUCT}.app"
 
 HAVE_VST3=0
 HAVE_AU=0
 HAVE_AAX=0
 HAVE_CLAP=0
 
-if [[ -d "$RELEASE/VST3/TONE3000.vst3" ]]; then
+if [[ -d "$RELEASE/VST3/${PRODUCT}.vst3" ]]; then
   echo "Staging VST3..."
-  ditto "$RELEASE/VST3/TONE3000.vst3" "$STAGE/vst3/TONE3000.vst3"
+  ditto "$RELEASE/VST3/${PRODUCT}.vst3" "$STAGE/vst3/${PRODUCT}.vst3"
   HAVE_VST3=1
 fi
 
-if [[ -d "$RELEASE/AU/TONE3000.component" ]]; then
+if [[ -d "$RELEASE/AU/${PRODUCT}.component" ]]; then
   echo "Staging AU..."
-  ditto "$RELEASE/AU/TONE3000.component" "$STAGE/au/TONE3000.component"
+  ditto "$RELEASE/AU/${PRODUCT}.component" "$STAGE/au/${PRODUCT}.component"
   HAVE_AU=1
 fi
 
-if [[ -d "$RELEASE/AAX/TONE3000.aaxplugin" ]]; then
+if [[ -d "$RELEASE/AAX/${PRODUCT}.aaxplugin" ]]; then
   echo "Staging AAX..."
-  ditto "$RELEASE/AAX/TONE3000.aaxplugin" "$STAGE/aax/TONE3000.aaxplugin"
+  ditto "$RELEASE/AAX/${PRODUCT}.aaxplugin" "$STAGE/aax/${PRODUCT}.aaxplugin"
   HAVE_AAX=1
 fi
 
-if [[ -d "$RELEASE/CLAP/TONE3000.clap" ]]; then
+if [[ -d "$RELEASE/CLAP/${PRODUCT}.clap" ]]; then
   echo "Staging CLAP..."
-  ditto "$RELEASE/CLAP/TONE3000.clap" "$STAGE/clap/TONE3000.clap"
+  ditto "$RELEASE/CLAP/${PRODUCT}.clap" "$STAGE/clap/${PRODUCT}.clap"
   HAVE_CLAP=1
 fi
 
 HAVE_PRESETS=0
 if compgen -G "${FACTORY_PRESETS_SRC}/*.t3kpreset" > /dev/null; then
   echo "Staging factory presets..."
-  mkdir -p "$STAGE/presets/Library/Application Support/TONE3000/Presets/Factory"
+  mkdir -p "$STAGE/presets/Library/Application Support/${DATA_FOLDER}/Presets/Factory"
   cp "${FACTORY_PRESETS_SRC}"/*.t3kpreset \
-    "$STAGE/presets/Library/Application Support/TONE3000/Presets/Factory/"
+    "$STAGE/presets/Library/Application Support/${DATA_FOLDER}/Presets/Factory/"
   HAVE_PRESETS=1
 else
   echo "No factory presets in $FACTORY_PRESETS_SRC (skipping)."
@@ -174,17 +186,17 @@ xattr -cr "$STAGE" 2>/dev/null || true
 # 2. Sign each staged bundle
 
 echo "Signing staged bundles..."
-sign_bundle "$STAGE/standalone/Applications/TONE3000.app"
-[[ $HAVE_VST3 -eq 1 ]] && sign_bundle "$STAGE/vst3/TONE3000.vst3"
-[[ $HAVE_AU   -eq 1 ]] && sign_bundle "$STAGE/au/TONE3000.component"
+sign_bundle "$STAGE/standalone/Applications/${PRODUCT}.app"
+[[ $HAVE_VST3 -eq 1 ]] && sign_bundle "$STAGE/vst3/${PRODUCT}.vst3"
+[[ $HAVE_AU   -eq 1 ]] && sign_bundle "$STAGE/au/${PRODUCT}.component"
 if [[ $HAVE_AAX -eq 1 ]]; then
-  if aax_already_signed "$STAGE/aax/TONE3000.aaxplugin"; then
+  if aax_already_signed "$STAGE/aax/${PRODUCT}.aaxplugin"; then
     echo "AAX already signed by PACE wraptool; leaving its signature intact."
   else
-    sign_bundle "$STAGE/aax/TONE3000.aaxplugin"
+    sign_bundle "$STAGE/aax/${PRODUCT}.aaxplugin"
   fi
 fi
-[[ $HAVE_CLAP -eq 1 ]] && sign_bundle "$STAGE/clap/TONE3000.clap"
+[[ $HAVE_CLAP -eq 1 ]] && sign_bundle "$STAGE/clap/${PRODUCT}.clap"
 
 # 3. Build component .pkg files (one per install location)
 
@@ -192,7 +204,7 @@ echo "Building component packages..."
 
 pkgbuild \
   --root "$STAGE/standalone" \
-  --identifier "com.tone3000.standalone" \
+  --identifier "${PKG_ID}.standalone" \
   --version "$VERSION" \
   --install-location "/" \
   "$COMPONENTS_DIR/_standalone.pkg"
@@ -200,7 +212,7 @@ pkgbuild \
 if [[ $HAVE_VST3 -eq 1 ]]; then
   pkgbuild \
     --root "$STAGE/vst3" \
-    --identifier "com.tone3000.vst3" \
+    --identifier "${PKG_ID}.vst3" \
     --version "$VERSION" \
     --install-location "/Library/Audio/Plug-Ins/VST3" \
     "$COMPONENTS_DIR/_vst3.pkg"
@@ -209,7 +221,7 @@ fi
 if [[ $HAVE_AU -eq 1 ]]; then
   pkgbuild \
     --root "$STAGE/au" \
-    --identifier "com.tone3000.au" \
+    --identifier "${PKG_ID}.au" \
     --version "$VERSION" \
     --install-location "/Library/Audio/Plug-Ins/Components" \
     "$COMPONENTS_DIR/_au.pkg"
@@ -218,7 +230,7 @@ fi
 if [[ $HAVE_AAX -eq 1 ]]; then
   pkgbuild \
     --root "$STAGE/aax" \
-    --identifier "com.tone3000.aax" \
+    --identifier "${PKG_ID}.aax" \
     --version "$VERSION" \
     --install-location "/Library/Application Support/Avid/Audio/Plug-Ins" \
     "$COMPONENTS_DIR/_aax.pkg"
@@ -227,7 +239,7 @@ fi
 if [[ $HAVE_CLAP -eq 1 ]]; then
   pkgbuild \
     --root "$STAGE/clap" \
-    --identifier "com.tone3000.clap" \
+    --identifier "${PKG_ID}.clap" \
     --version "$VERSION" \
     --install-location "/Library/Audio/Plug-Ins/CLAP" \
     "$COMPONENTS_DIR/_clap.pkg"
@@ -239,7 +251,7 @@ if [[ $HAVE_PRESETS -eq 1 ]]; then
   pkgbuild \
     --root "$STAGE/presets" \
     --scripts "$INSTALLER_DIR/macos/presets-scripts" \
-    --identifier "com.tone3000.factorypresets" \
+    --identifier "${PKG_ID}.factorypresets" \
     --version "$VERSION" \
     --install-location "/" \
     "$COMPONENTS_DIR/_presets.pkg"
@@ -253,7 +265,7 @@ RES="$INSTALLER_DIR/Resources"
 {
   echo '<?xml version="1.0" encoding="utf-8"?>'
   echo '<installer-gui-script minSpecVersion="2">'
-  echo "  <title>TONE3000 ${VERSION}</title>"
+  echo "  <title>${DISPLAY_NAME} (build ${FORK_BUILD})</title>"
   # hostArchitectures: without arm64 listed, Installer.app on Apple Silicon
   # evaluates the distribution under Rosetta 2 and prompts to install it.
   # productbuild only injects this default when it synthesizes the XML
@@ -287,54 +299,54 @@ RES="$INSTALLER_DIR/Resources"
   echo '  </choices-outline>'
 
   cat <<XML
-  <choice id="standalone" title="Standalone App" description="Installs TONE3000.app to /Applications.">
-    <pkg-ref id="com.tone3000.standalone" />
+  <choice id="standalone" title="Standalone App" description="Installs ${PRODUCT}.app to /Applications.">
+    <pkg-ref id="${PKG_ID}.standalone" />
   </choice>
-  <pkg-ref id="com.tone3000.standalone" version="${VERSION}" auth="root">_standalone.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.standalone" version="${VERSION}" auth="root">_standalone.pkg</pkg-ref>
 XML
 
   if [[ $HAVE_VST3 -eq 1 ]]; then
     cat <<XML
-  <choice id="vst3" title="VST3 Plug-In" description="Installs TONE3000.vst3 to /Library/Audio/Plug-Ins/VST3.">
-    <pkg-ref id="com.tone3000.vst3" />
+  <choice id="vst3" title="VST3 Plug-In" description="Installs ${PRODUCT}.vst3 to /Library/Audio/Plug-Ins/VST3.">
+    <pkg-ref id="${PKG_ID}.vst3" />
   </choice>
-  <pkg-ref id="com.tone3000.vst3" version="${VERSION}" auth="root">_vst3.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.vst3" version="${VERSION}" auth="root">_vst3.pkg</pkg-ref>
 XML
   fi
 
   if [[ $HAVE_AU -eq 1 ]]; then
     cat <<XML
-  <choice id="au" title="Audio Unit (AU)" description="Installs TONE3000.component to /Library/Audio/Plug-Ins/Components.">
-    <pkg-ref id="com.tone3000.au" />
+  <choice id="au" title="Audio Unit (AU)" description="Installs ${PRODUCT}.component to /Library/Audio/Plug-Ins/Components.">
+    <pkg-ref id="${PKG_ID}.au" />
   </choice>
-  <pkg-ref id="com.tone3000.au" version="${VERSION}" auth="root">_au.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.au" version="${VERSION}" auth="root">_au.pkg</pkg-ref>
 XML
   fi
 
   if [[ $HAVE_AAX -eq 1 ]]; then
     cat <<XML
-  <choice id="aax" title="AAX (Pro Tools)" description="Installs TONE3000.aaxplugin to /Library/Application Support/Avid/Audio/Plug-Ins.">
-    <pkg-ref id="com.tone3000.aax" />
+  <choice id="aax" title="AAX (Pro Tools)" description="Installs ${PRODUCT}.aaxplugin to /Library/Application Support/Avid/Audio/Plug-Ins.">
+    <pkg-ref id="${PKG_ID}.aax" />
   </choice>
-  <pkg-ref id="com.tone3000.aax" version="${VERSION}" auth="root">_aax.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.aax" version="${VERSION}" auth="root">_aax.pkg</pkg-ref>
 XML
   fi
 
   if [[ $HAVE_CLAP -eq 1 ]]; then
     cat <<XML
-  <choice id="clap" title="CLAP Plug-In" description="Installs TONE3000.clap to /Library/Audio/Plug-Ins/CLAP.">
-    <pkg-ref id="com.tone3000.clap" />
+  <choice id="clap" title="CLAP Plug-In" description="Installs ${PRODUCT}.clap to /Library/Audio/Plug-Ins/CLAP.">
+    <pkg-ref id="${PKG_ID}.clap" />
   </choice>
-  <pkg-ref id="com.tone3000.clap" version="${VERSION}" auth="root">_clap.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.clap" version="${VERSION}" auth="root">_clap.pkg</pkg-ref>
 XML
   fi
 
   if [[ $HAVE_PRESETS -eq 1 ]]; then
     cat <<XML
-  <choice id="presets" title="Factory Presets" description="Installs read-only TONE3000 presets to /Library/Application Support/TONE3000/Presets/Factory.">
-    <pkg-ref id="com.tone3000.factorypresets" />
+  <choice id="presets" title="Factory Presets" description="Installs read-only ${DISPLAY_NAME} presets to /Library/Application Support/${DATA_FOLDER}/Presets/Factory.">
+    <pkg-ref id="${PKG_ID}.factorypresets" />
   </choice>
-  <pkg-ref id="com.tone3000.factorypresets" version="${VERSION}" auth="root">_presets.pkg</pkg-ref>
+  <pkg-ref id="${PKG_ID}.factorypresets" version="${VERSION}" auth="root">_presets.pkg</pkg-ref>
 XML
   fi
 
@@ -400,5 +412,5 @@ elif [[ -n "$SIGN_ID_APP" ]]; then
 else
   echo "Ad-hoc only. Recipients: right-click the .pkg in Finder → Open → Open."
 fi
-echo "After install, TONE3000.app lives in /Applications and the UI loads"
+echo "After install, ${PRODUCT}.app lives in /Applications and the UI loads"
 echo "normally (no App Translocation)."

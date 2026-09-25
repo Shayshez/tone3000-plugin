@@ -1,4 +1,8 @@
-# TONE3000 Plugin - Multi-platform build
+# TONE3000 Plum (Plum Audio's unofficial fork build) - macOS + Windows.
+# Unsigned unless the signing secrets exist; AAX is off (it needs PACE
+# signing to load in Pro Tools) and Linux is off until its tarball/install
+# script is renamed for the fork (script/installer/linux still says TONE3000).
+# Needs the VITE_T3K_PUBLISHABLE_KEY secret in a `builds` environment.
 # Builds VST3, Standalone, AU (macOS), and AAX (macOS/Windows, PACE-signed
 # when secrets are configured) on macOS, Windows, and Linux. macOS is
 # universal via per-arch builds + lipo, since dual -arch clang invocations are
@@ -51,27 +55,23 @@ jobs:
             runs-on: windows-latest
             os: windows
             arch: x64
-          - name: Linux x64
-            runs-on: ubuntu-24.04
-            os: linux
-            arch: x64
-          - name: Linux aarch64
-            runs-on: ubuntu-24.04-arm
-            os: linux
-            arch: aarch64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          # Full history: the fork build number counts commits since FORK_BASE.
+          fetch-depth: 0
 
       # Single source of truth: the repo-root VERSION file (CMake and the
       # packaging scripts read it directly; CI exports it for the steps that
-      # can't).
+      # can't), plus the fork build number (cmake/ForkVersion.cmake).
       - name: Read version
         shell: bash
-        run: echo "T3K_VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+        run: |
+          echo "T3K_VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+          echo "T3K_FORK_BUILD=$(git rev-list --count "$(tr -d '[:space:]' < FORK_BASE)..HEAD")" >> "$GITHUB_ENV"
 
       # Compiler cache: reuses object-file compilation results from previous
       # runs (keyed on compiler input, not source paths), so unchanged JUCE /
@@ -134,7 +134,7 @@ jobs:
           cmake -B build-arm64 -S . \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DBUILD_AAX=ON \
+            -DBUILD_AAX=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache \
@@ -179,7 +179,7 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DBUILD_AAX=ON \
+            -DBUILD_AAX=OFF \
             -DASIO_SDK_PATH="$ASIO_SDK_PATH" \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
@@ -214,7 +214,7 @@ jobs:
           cmake -B build-arm64 -S . \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DBUILD_AAX=ON \
+            -DBUILD_AAX=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache \
@@ -226,7 +226,7 @@ jobs:
           cmake -B build-x86_64 -S . \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DBUILD_AAX=ON \
+            -DBUILD_AAX=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache \
@@ -238,7 +238,7 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DBUILD_AAX=ON \
+            -DBUILD_AAX=OFF \
             -DASIO_SDK_PATH="$ASIO_SDK_PATH" \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
@@ -387,10 +387,10 @@ jobs:
           set -euo pipefail
           ./script/create-pkg.sh
 
-          # Tag the installer with platform + arch (matches the Windows/Linux
-          # artifact naming: TONE3000-v<version>-<platform>-<arch>).
-          SRC=$(ls build/TONE3000-v*.pkg | head -n 1)
-          DEST="build/$(basename "${SRC%.pkg}")-macos-universal.pkg"
+          # Tag the installer with its arch (matches the Windows naming:
+          # TONE3000-Plum-build<N>-<platform>-<arch>).
+          SRC=$(ls build/TONE3000-Plum-build*-macos.pkg | head -n 1)
+          DEST="build/$(basename "${SRC%.pkg}")-universal.pkg"
           mv "$SRC" "$DEST"
           echo "Renamed installer to $DEST"
 
@@ -408,8 +408,8 @@ jobs:
         if: matrix.os == 'macos' && success()
         uses: actions/upload-artifact@v4
         with:
-          name: TONE3000-v${{ env.T3K_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: build/TONE3000-v*-macos-universal.pkg
+          name: TONE3000-Plum-build${{ env.T3K_FORK_BUILD }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/TONE3000-Plum-build*-macos-universal.pkg
           if-no-files-found: error
 
       # Windows signing uses Azure Artifact Signing (the Windows analog of
@@ -506,7 +506,7 @@ jobs:
           if (-not (Test-Path $iscc)) {
             choco install innosetup -y --no-progress
           }
-          & $iscc /DVersion=$env:T3K_VERSION `
+          & $iscc /DVersion=$env:T3K_VERSION /DForkBuild=$env:T3K_FORK_BUILD `
             /DArtefactsDir="$env:GITHUB_WORKSPACE\build\plugin\TONE3000_artefacts\${{ env.BUILD_TYPE }}" `
             /DOutputDir="$env:GITHUB_WORKSPACE\build" `
             script\installer\windows\tone3000.iss
@@ -532,8 +532,8 @@ jobs:
         if: matrix.os == 'windows' && success()
         uses: actions/upload-artifact@v4
         with:
-          name: TONE3000-v${{ env.T3K_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: build/TONE3000-v*-${{ matrix.os }}-${{ matrix.arch }}.exe
+          name: TONE3000-Plum-build${{ env.T3K_FORK_BUILD }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/TONE3000-Plum-build*-${{ matrix.os }}-${{ matrix.arch }}.exe
           if-no-files-found: error
 
       # Linux: tarball with install script (the usual convention on Linux).
@@ -575,6 +575,8 @@ jobs:
   # launchers, so this job builds cold.
   ios-simulator:
     name: iOS Simulator
+    # Off for the fork's desktop-only builds.
+    if: false
     runs-on: macos-14
     environment: builds
     env:

@@ -1,4 +1,5 @@
 #include "PresetManager.h"
+#include "AppIdentity.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -16,7 +17,7 @@ juce::File presetsRootDir() {
 #if JUCE_MAC
   base = base.getChildFile("Application Support");
 #endif
-  return base.getChildFile("TONE3000").getChildFile("Presets");
+  return base.getChildFile(kAppFolderName).getChildFile("Presets");
 }
 
 }  // namespace
@@ -34,17 +35,20 @@ juce::File PresetManager::defaultSystemFactoryDir() {
   // Shared all-users location the installers write to. A missing dir just
   // means no shipped presets; scans treat it as empty.
 #if JUCE_MAC
-  return juce::File("/Library/Application Support/TONE3000/Presets/Factory");
+  return juce::File("/Library/Application Support")
+      .getChildFile(kAppFolderName)
+      .getChildFile("Presets")
+      .getChildFile("Factory");
 #elif JUCE_WINDOWS
   // ProgramData; matches the Inno Setup {commonappdata} destination.
   return juce::File::getSpecialLocation(juce::File::commonApplicationDataDirectory)
-      .getChildFile("TONE3000")
+      .getChildFile(kAppFolderName)
       .getChildFile("Presets")
       .getChildFile("Factory");
 #elif JUCE_LINUX
   // The tarball installs per-user (into factoryDir); this path is the hook
   // for system-wide/distro packaging.
-  return juce::File("/usr/share/TONE3000/Presets/Factory");
+  return juce::File("/usr/share").getChildFile(kAppFolderName).getChildFile("Presets/Factory");
 #else
   return {};
 #endif

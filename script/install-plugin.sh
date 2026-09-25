@@ -21,7 +21,7 @@ esac
 os="$(uname -s)"
 case "$format" in
   VST3)
-    bundle="TONE3000.vst3"
+    bundle="TONE3000-Plum.vst3"
     case "$os" in
       # System-wide folder, same as the .pkg: some hosts (LUNA) only scan
       # /Library for VST3 and ignore ~/Library entirely.
@@ -31,7 +31,7 @@ case "$format" in
     esac
     ;;
   AU)
-    bundle="TONE3000.component"
+    bundle="TONE3000-Plum.component"
     if [ "$os" != "Darwin" ]; then
       echo "AU is macOS only (detected $os)" >&2
       exit 1
@@ -41,7 +41,7 @@ case "$format" in
     dest_dir="/Library/Audio/Plug-Ins/Components"
     ;;
   AAX)
-    bundle="TONE3000.aaxplugin"
+    bundle="TONE3000-Plum.aaxplugin"
     if [ "$os" != "Darwin" ]; then
       echo "AAX is macOS only in this script (detected $os)" >&2
       exit 1
@@ -78,11 +78,11 @@ run cp -R "$src" "$dest_dir/"
 echo "Installed $bundle ($build_type) to $dest_dir"
 
 # Also drop shipped factory presets into the user Factory folder so a local
-# plugin install (without the .pkg) still shows the TONE3000 preset section.
+# plugin install (without the .pkg) still shows the TONE3000 Plum preset section.
 factory_src="resources/factory-presets"  # cwd is the repo root (cd at top)
 case "$os" in
-  Darwin) factory_dest="$HOME/Library/Application Support/TONE3000/Presets/Factory" ;;
-  Linux)  factory_dest="${XDG_CONFIG_HOME:-$HOME/.config}/TONE3000/Presets/Factory" ;;
+  Darwin) factory_dest="$HOME/Library/Application Support/TONE3000 Plum/Presets/Factory" ;;
+  Linux)  factory_dest="${XDG_CONFIG_HOME:-$HOME/.config}/TONE3000 Plum/Presets/Factory" ;;
   *) factory_dest="" ;;
 esac
 if [[ -n "$factory_dest" ]] && compgen -G "${factory_src}/*.t3kpreset" > /dev/null; then

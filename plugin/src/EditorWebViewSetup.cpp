@@ -1,4 +1,5 @@
 #include "EditorWebViewSetup.h"
+#include "AppIdentity.h"
 #include "Editor.h"
 #include "ForkVersion.h"
 
@@ -109,7 +110,7 @@ void GuardedWebView::pageFinishedLoading(const juce::String&) {
 // used by PresetManager.
 static juce::File webView2DataFolder() {
   const auto folder = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-                          .getChildFile("TONE3000")
+                          .getChildFile(kAppFolderName)
                           .getChildFile("WebView2");
   folder.createDirectory();
   return folder;

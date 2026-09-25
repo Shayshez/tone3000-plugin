@@ -90,7 +90,7 @@ for format in "${formats[@]}"; do
         continue
       fi
       if [ "$format" = "AU" ]; then
-        src="$artefacts/AU/TONE3000.component"
+        src="$artefacts/AU/TONE3000-Plum.component"
         if [ ! -d "$src" ]; then
           echo "Not found: $src (build it first: cmake --build build)" >&2
           failures+=(AU)
@@ -98,13 +98,13 @@ for format in "${formats[@]}"; do
         fi
         dest_dir="$HOME/Library/Audio/Plug-Ins/Components"
         mkdir -p "$dest_dir"
-        rm -rf "$dest_dir/TONE3000.component"
+        rm -rf "$dest_dir/TONE3000-Plum.component"
         cp -R "$src" "$dest_dir/"
         # Restart the registrar so auval sees the fresh copy immediately.
         killall -9 AudioComponentRegistrar 2> /dev/null || true
-        target="$dest_dir/TONE3000.component"
+        target="$dest_dir/TONE3000-Plum.component"
       else
-        target="$artefacts/VST3/TONE3000.vst3"
+        target="$artefacts/VST3/TONE3000-Plum.vst3"
         if [ ! -d "$target" ]; then
           echo "Not found: $target (build it first: cmake --build build)" >&2
           failures+=(VST3)
@@ -124,7 +124,7 @@ for format in "${formats[@]}"; do
         skip CLAP "clap-validator not found; get a release from github.com/free-audio/clap-validator and put it on PATH or in build/tools/"
         continue
       fi
-      target="$artefacts/CLAP/TONE3000.clap"
+      target="$artefacts/CLAP/TONE3000-Plum.clap"
       if [ ! -d "$target" ]; then
         echo "Not found: $target (build it first: cmake --build build)" >&2
         failures+=(CLAP)
@@ -141,7 +141,7 @@ for format in "${formats[@]}"; do
         skip LV2 "lv2lint not installed (Linux: install lv2lint; no macOS validator exists)"
         continue
       fi
-      target="$artefacts/LV2/TONE3000.lv2"
+      target="$artefacts/LV2/TONE3000-Plum.lv2"
       if [ ! -d "$target" ]; then
         echo "Not found: $target (build it first: cmake --build build)" >&2
         failures+=(LV2)

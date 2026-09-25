@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "AppIdentity.h"
 #include "json.hpp"
 #include "NAM/wavenet/a2_fast.h"
 #include <algorithm>
@@ -148,7 +149,7 @@ juce::File localModelsDir() {
 #if JUCE_MAC
   base = base.getChildFile("Application Support");
 #endif
-  return base.getChildFile("TONE3000").getChildFile("LocalModels");
+  return base.getChildFile(kAppFolderName).getChildFile("LocalModels");
 }
 
 // FNV-1a over the file bytes: stable across sessions and platforms without

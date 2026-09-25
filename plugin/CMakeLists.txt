@@ -18,8 +18,17 @@ elseif(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET ST
 endif()
 
 # Required by JUCE (Change these to project specs)
-set(PLUGIN_NAME "TONE3000")            # Name of the plugin (used in the UI)
-set(PLUGIN_CODE T3K0)                # Unique 4-letter code for the plugin
+# Fork identity (Plum Audio's side build, not the official TONE3000 release).
+# Every id below differs from upstream's (TONE3000 / T3K0 / TFTF /
+# com.TONE3000.TONE3000) so this installs and loads side by side with the
+# official plugin instead of replacing it - hosts key plugins on these, so
+# don't change them once builds are out. The app-data folder name lives in
+# plugin/include/AppIdentity.h; the installers in script/ use the same
+# product name.
+set(PLUGIN_NAME "TONE3000 Plum")       # Name hosts show
+set(PLUGIN_CODE T3kP)                # Unique 4-letter code for the plugin
+set(T3K_PRODUCT_NAME "TONE3000-Plum")  # Bundle / binary file names (no spaces for scripts)
+set(T3K_BUNDLE_ID "com.plumaudio.tone3000plum")
 
 # Version comes from the repo-root VERSION file (single source of truth;
 # bump with script/set-version.sh). Read here too so this directory still
@@ -192,8 +201,11 @@ endif()
 # The microphone and Bluetooth permission strings the plugin already declares
 # are the same keys iOS wants, so they are left in the shared block below.
 set(_t3k_ios_args "")
+if (NOT T3K_IOS)
+    set(_t3k_ios_args BUNDLE_ID "${T3K_BUNDLE_ID}")
+endif()
 if (T3K_IOS)
-    set(T3K_IOS_BUNDLE_ID "com.TONE3000.TONE3000" CACHE STRING
+    set(T3K_IOS_BUNDLE_ID "${T3K_BUNDLE_ID}" CACHE STRING
         "Bundle identifier for the iOS app (override to sign under a personal team)")
     set(T3K_IOS_BUILD_NUMBER "1" CACHE STRING
         "CFBundleVersion for the iOS app: bump on every upload of one marketing version")
@@ -221,8 +233,8 @@ else()
 endif()
 
 juce_add_plugin(${PROJECT_NAME}
-    COMPANY_NAME TONE3000
-    PLUGIN_NAME ${PLUGIN_NAME}
+    COMPANY_NAME "Plum Audio"
+    PLUGIN_NAME "${PLUGIN_NAME}"
     IS_SYNTH FALSE
     # Pro Tools insert folders. Unset is None ("Other"). Harmonic is where
     # amp sims live; Effect is the generic folder. JUCE ORs the bits so the
@@ -232,22 +244,22 @@ juce_add_plugin(${PROJECT_NAME}
     # hosts route their MIDI to us, standalone merges enabled MIDI inputs.
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
-    PLUGIN_MANUFACTURER_CODE TFTF
+    PLUGIN_MANUFACTURER_CODE PlmA
     PLUGIN_CODE ${PLUGIN_CODE}
     FORMATS ${_plugin_formats}
     # The LV2 URI is the plugin's permanent identity in LV2 hosts (it keys
     # sessions and presets). Never change it once released.
-    LV2URI "https://www.tone3000.com/plugin"
-    PRODUCT_NAME ${PROJECT_NAME}
+    LV2URI "https://github.com/Shayshez/tone3000-plugin"
+    PRODUCT_NAME ${T3K_PRODUCT_NAME}
     NEEDS_WEB_BROWSER ${NEEDS_WEB_BROWSER_VALUE}
     VST3_AUTO_MANIFEST ${VST3_MANIFEST}
     NEEDS_WEBVIEW2 ${NEEDS_WEBVIEW2_VALUE}
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT "TONE3000 needs microphone access for audio input processing."
+    MICROPHONE_PERMISSION_TEXT "TONE3000 Plum needs microphone access for audio input processing."
     # Without this Info.plist key, macOS TCC kills the app the moment the
     # Bluetooth MIDI pairing dialog touches CoreBluetooth.
     BLUETOOTH_PERMISSION_ENABLED TRUE
-    BLUETOOTH_PERMISSION_TEXT "TONE3000 uses Bluetooth to find and pair Bluetooth MIDI controllers."
+    BLUETOOTH_PERMISSION_TEXT "TONE3000 Plum uses Bluetooth to find and pair Bluetooth MIDI controllers."
     # Publish the launch floor in Info.plist too. The Mach-O slices already
     # carry their minimums (10.15 Intel, 11.0 arm64), but Launch Services and
     # Finder's Get Info read LSMinimumSystemVersion, and without it the app

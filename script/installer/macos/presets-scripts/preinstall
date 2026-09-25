@@ -3,5 +3,5 @@
 # pkg installs overlay files and never remove presets dropped from (or
 # renamed in) the shipped set, so clear the previous factory set first.
 # User presets live under ~/Library and are untouched.
-rm -f "/Library/Application Support/TONE3000/Presets/Factory"/*.t3kpreset
+rm -f "/Library/Application Support/TONE3000 Plum/Presets/Factory"/*.t3kpreset
 exit 0
