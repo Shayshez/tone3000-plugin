@@ -42,8 +42,8 @@ import { MidiMapSettings } from './MidiMapSettings';
 /** Keyboard shortcut cheat sheet (see useGlobalShortcuts). */
 const SHORTCUT_LIST: [string, string][] = [
   ['1 - 4', 'Select scene'],
-  ['⇧[  ⇧]', 'Previous / next scene'],
-  ['[  ]', 'Previous / next preset'],
+  ['[  ]', 'Previous / next scene'],
+  ['⇧[  ⇧]', 'Previous / next preset'],
   ['⌘Z  ⇧⌘Z', 'Undo / redo (plugin)'],
   ['Esc', 'Back (block view, EQ, tuner, Scene Manager)'],
   ['Space', 'Host transport (the plugin keeps the keyboard)'],

@@ -58,7 +58,7 @@ function useHasKeyboardFocus(): boolean {
 }
 
 /** Keyboard-shortcut status: lit while the plugin has keyboard focus (its
-    shortcuts - scenes 1-4, presets [ ] ... - are live), dim otherwise
+    shortcuts - scenes 1-4 and [ ], presets ⇧[ ⇧] ... - are live), dim otherwise
     (keys go to the host until the plugin is clicked). Hidden when the
     shortcuts are switched off in Settings. */
 const KeyboardFocusIndicator: React.FC = () => {

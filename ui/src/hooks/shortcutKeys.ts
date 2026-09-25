@@ -29,7 +29,7 @@ export function resolveShortcut(e: ShortcutKey): ShortcutAction | null {
   if (command || e.altKey) return null; // every other modifier combo belongs to the host
   if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
     const direction = e.code === 'BracketLeft' ? -1 : 1;
-    return e.shiftKey ? { kind: 'sceneStep', direction } : { kind: 'preset', direction };
+    return e.shiftKey ? { kind: 'preset', direction } : { kind: 'sceneStep', direction };
   }
   if (!e.shiftKey && /^Digit[1-4]$/.test(e.code))
     return { kind: 'scene', index: Number(e.code.slice(5)) - 1 };

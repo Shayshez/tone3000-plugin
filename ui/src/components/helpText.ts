@@ -252,7 +252,7 @@ const HELP_DESKTOP = {
   sceneCellChannel: 'Click: pick the channel this block uses in this scene.',
   sceneColumnOpen: 'Click: open this block.',
   keyboardFocusOn:
-    'Keyboard shortcuts active: 1-4 scenes, [ ] presets, ⇧[ ⇧] scene step, ⌘Z undo, Esc back.',
+    'Keyboard shortcuts active: 1-4 scenes, [ ] scene step, ⇧[ ⇧] presets, ⌘Z undo, Esc back.',
   keyboardFocusOff:
     'Keyboard shortcuts paused: the host has the keyboard. Click the plugin to use them.',
   resizeGrip: 'Resize: drag the corner or the right/bottom edge to scale the window (1x to 2x).',

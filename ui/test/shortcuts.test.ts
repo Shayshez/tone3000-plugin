@@ -19,12 +19,12 @@ test('digits 1-4 select scenes, other digits are not ours', () => {
   assert.equal(resolveShortcut(key('Digit1', { shiftKey: true })), null);
 });
 
-test('brackets step presets, shifted brackets step scenes', () => {
-  assert.deepEqual(resolveShortcut(key('BracketLeft')), { kind: 'preset', direction: -1 });
-  assert.deepEqual(resolveShortcut(key('BracketRight')), { kind: 'preset', direction: 1 });
-  assert.deepEqual(resolveShortcut(key('BracketRight', { shiftKey: true })), {
-    kind: 'sceneStep',
-    direction: 1,
+test('brackets step scenes, shifted brackets step presets', () => {
+  assert.deepEqual(resolveShortcut(key('BracketLeft')), { kind: 'sceneStep', direction: -1 });
+  assert.deepEqual(resolveShortcut(key('BracketRight')), { kind: 'sceneStep', direction: 1 });
+  assert.deepEqual(resolveShortcut(key('BracketLeft', { shiftKey: true })), {
+    kind: 'preset',
+    direction: -1,
   });
 });
 

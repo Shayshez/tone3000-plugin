@@ -141,7 +141,7 @@ export const setTunerDisplay = tunerDisplay.set;
 export const useTunerDisplay = tunerDisplay.useValue;
 
 // Global keyboard shortcuts while the plugin has keyboard focus (scenes
-// 1-4, presets [ ], undo, Esc - see useGlobalShortcuts), and Space handing
+// 1-4 and [ ], presets ⇧[ ⇧], undo, Esc - see useGlobalShortcuts), and Space handing
 // the transport to the host without giving up that focus. On by default;
 // the switch exists for hosts where a plain key must always reach the DAW.
 const keyboardShortcuts = boolPref('t3k.keyboardShortcuts', true);

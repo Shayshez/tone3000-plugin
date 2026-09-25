@@ -6,8 +6,8 @@ import { resolveShortcut } from './shortcutKeys';
  * Global keyboard shortcuts ("layer 3"), active while the plugin window has
  * keyboard focus and the Settings switch is on:
  *
- *   1-4        select scene           ⇧[ / ⇧]   previous / next scene
- *   [ / ]      previous / next preset
+ *   1-4        select scene           [ / ]     previous / next scene
+ *   ⇧[ / ⇧]    previous / next preset
  *   ⌘Z / ⇧⌘Z   plugin undo / redo     (Ctrl on Windows/Linux; ⌘Y also redoes)
  *   Esc        back (block view -> gallery; the tuner and the Scene Manager
  *              handle their own Esc)
