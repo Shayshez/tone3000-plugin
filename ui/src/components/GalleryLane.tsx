@@ -110,13 +110,25 @@ export const GalleryLane: React.FC<{
   /** Open the detail takeover with its Stereo Processing panel already
       showing - a Dual Mono tile's own quick-access button, next to EQ's. */
   onOpenStereo: (blockId: string) => void;
+  /** A stereo source feeds the chain, so every block carries stereo from the
+      start, widener or not. */
+  stereoSource: boolean;
   /** Open the tone browser targeting the clicked insert slot. */
   onAdd: (insertBlockId: string) => void;
   /** Paste the copied block into the insert slot at this index; null while
       there's nothing valid to paste (insert action sheets show Paste
       disabled). */
   onPasteBlock?: ((index: number) => void) | null;
-}> = ({ items, tileSize, onOpen, onOpenEq, onOpenStereo, onAdd, onPasteBlock = null }) => (
+}> = ({
+  items,
+  tileSize,
+  onOpen,
+  onOpenEq,
+  onOpenStereo,
+  stereoSource,
+  onAdd,
+  onPasteBlock = null,
+}) => (
   <div style={{ position: 'relative', width: 'max-content' }}>
     <GhostRail slots={items.length} tileSize={tileSize} />
     <div
@@ -152,7 +164,7 @@ export const GalleryLane: React.FC<{
             onOpen={onOpen}
             onOpenEq={onOpenEq}
             onOpenStereo={onOpenStereo}
-            stereo={isDownstreamOfStereoWidener(items, index)}
+            stereo={stereoSource || isDownstreamOfStereoWidener(items, index)}
             slotLeft={adjacentInsertSlots(items, index).left}
             slotRight={adjacentInsertSlots(items, index).right}
             powerMidiTarget={blockPowerMidiTarget(items, index)}

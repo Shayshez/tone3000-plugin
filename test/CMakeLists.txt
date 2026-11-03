@@ -44,6 +44,7 @@ target_sources(DspTests PRIVATE
     src/preset_tests.cpp
     src/processor_tests.cpp
     src/state_cache_tests.cpp
+    src/stereo_chain_tests.cpp
     src/stereo_offset_tests.cpp
     src/swap_fade_tests.cpp
     src/tone_refresh_tests.cpp

@@ -536,7 +536,7 @@ TEST(IrConvolutionTest, TrueStereoDecorrelatesMonoFanoutDoesNot) {
   EXPECT_GT(maxDiff, 1e-4f) << "true-stereo IR produced identical channels";
 
   // Stereo::no on the same file: kernel 0 fans out to every channel, the
-  // mono-fallback contract the RT path relies on upstream of NAM blocks.
+  // contract the RT path relies on for a stereo IR on a mono host bus.
   // Within float noise, not bit-exact: JUCE's per-channel install-fade gains
   // can settle a ULP apart (≈ -120 dB: meaningless, but not zero).
   auto mono = makeConvolver(testFile("reverb-ir-stereo-test.wav"),

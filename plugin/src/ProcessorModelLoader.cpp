@@ -1335,26 +1335,31 @@ TONE3000Processor::PreparedBlockModel TONE3000Processor::prepareBlockModelOffThr
             juce::String(oversampleFactor));
       }
 
-      std::vector<std::unique_ptr<nam::DSP>> instances;
-      instances.reserve(static_cast<size_t>(instanceCount));
-      for (int i = 0; i < instanceCount; ++i) {
-        std::unique_ptr<nam::DSP> rawDsp = nam::get_dsp(config);
-        if (!rawDsp) {
-          juce::Logger::writeToLog("[ModelLoader] Failed to load NAM model: null DSP returned");
-          return out;
+      // Twice over: the right set is what carries a stereo signal through
+      // the block (see NamEngine.h). It only runs while the channels differ.
+      const auto buildInstances = [&]() {
+        std::vector<std::unique_ptr<nam::DSP>> built;
+        built.reserve(static_cast<size_t>(instanceCount));
+        for (int i = 0; i < instanceCount; ++i) {
+          std::unique_ptr<nam::DSP> rawDsp = nam::get_dsp(config);
+          if (!rawDsp)
+            throw std::runtime_error("null DSP returned");
+          if (rawDsp->NumInputChannels() != 1) {
+            throw std::runtime_error("NAM model must have 1 input channel, but has " +
+                                     std::to_string(rawDsp->NumInputChannels()));
+          }
+          if (rawDsp->NumOutputChannels() != 1) {
+            throw std::runtime_error("NAM model must have 1 output channel, but has " +
+                                     std::to_string(rawDsp->NumOutputChannels()));
+          }
+          built.push_back(std::move(rawDsp));
         }
-        if (rawDsp->NumInputChannels() != 1) {
-          throw std::runtime_error("NAM model must have 1 input channel, but has " +
-                                   std::to_string(rawDsp->NumInputChannels()));
-        }
-        if (rawDsp->NumOutputChannels() != 1) {
-          throw std::runtime_error("NAM model must have 1 output channel, but has " +
-                                   std::to_string(rawDsp->NumOutputChannels()));
-        }
-        instances.push_back(std::move(rawDsp));
-      }
+        return built;
+      };
 
-      auto engine = std::make_unique<NamEngine>(std::move(instances), oversampleFactor);
+      auto instances = buildInstances();
+      auto engine = std::make_unique<NamEngine>(std::move(instances), oversampleFactor,
+                                                buildInstances());
 
       // The chain domain runs everything at the chain rate. A2 models are
       // all trained at 48k; anything else is rare enough that we just run it
@@ -1667,9 +1672,11 @@ void TONE3000Processor::releaseChainEditFadeWhenLoadsSettle() {
   bool loadsQueued = false;
   {
     juce::ScopedLock lock(chainMutex);
-    for (const auto& b : chain)
-      if (b->modelLoading)
+    // Walks into Dual Mono sides: they load like any other block.
+    forEachSceneBlockConst(chain, [&](const ChainBlock& b) {
+      if (b.modelLoading)
         loadsQueued = true;
+    });
   }
 
   struct ReleaseJob : public juce::ThreadPoolJob {
@@ -1696,9 +1703,10 @@ void TONE3000Processor::releaseChainEditFadeWhenLoadsSettle() {
             return jobHasFinished;  // a newer fade session owns the release
 
           int loadingCount = 0;
-          for (const auto& b : processor.chain)
-            if (b->modelLoading)
+          forEachSceneBlockConst(processor.chain, [&](const ChainBlock& b) {
+            if (b.modelLoading)
               ++loadingCount;
+          });
 
           // Progress restarts the stall clock: each landed load buys the
           // remaining ones another window, so the hold scales with the

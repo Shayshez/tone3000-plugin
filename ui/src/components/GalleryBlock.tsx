@@ -362,9 +362,9 @@ export const StereoGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
 /** Bottom-left pill used to mark a tile's identity at a glance, without
     opening the block: a channel glyph (Dual - a Dual Mono wrapper,
     independent L/R inside one mono lane, the original ask this existed
-    for, see DualMonoTileImage below; Stereo - a lane of a two-lane stereo
-    chain, or an ordinary block whose own loaded content is genuinely
-    stereo, e.g. a true stereo IR, see TileSurface's own derivation; Mono -
+    for, see DualMonoTileImage below; Stereo - a block carrying a stereo
+    signal, or one whose own loaded content is genuinely stereo, e.g. a
+    true stereo IR, see TileSurface's own derivation; Mono -
     a single, unlinked channel), plus its block type (NAM/IR/CAB/EQ/DUAL)
     beside it - permanent, not hover-only, since a tile is otherwise all
     picture and no information. Every tile shows both, Dual Mono included -
@@ -472,10 +472,9 @@ const TileSurface: React.FC<{
   onArmHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   onDropOnHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   actions: TileActions;
-  /** Stereo chain mode (two lanes) vs mono (one) - drives an ordinary
-      block's own Mono/Stereo channel badge (see TileChannelBadge). A Dual
-      Mono block ignores this; it always reads "Dual" regardless of chain
-      mode. */
+  /** This block carries a stereo signal - drives an ordinary block's own
+      Mono/Stereo channel badge (see TileChannelBadge). A Dual Mono block
+      ignores this; it always reads "Dual". */
   stereo: boolean;
 }> = ({
   block,
@@ -504,12 +503,11 @@ const TileSurface: React.FC<{
     block.blockType === 'dualMono' &&
     (block.params.dualAlignEnabled || block.params.dualLeftInvert || block.params.dualRightInvert);
 
-  // A block reads Stereo either because the chain itself is two-lane
-  // stereo (each lane a real physical channel), or because its own loaded
-  // content is genuinely stereo regardless of chain mode - a true stereo IR
+  // A block reads Stereo either because a stereo signal reaches it, or
+  // because its own loaded content is genuinely stereo - a true stereo IR
   // (ToneBlock.irNumChannels >= 2, see ChainBlock.tsx's own isMonoIr) keeps
   // independent left/right convolution (convolverStereo, ChainBlock.h) even
-  // inside a single mono lane. Anything else in a mono lane is Mono.
+  // on a mono input. Anything else is Mono.
   const isTrueStereoIr = block.blockType === 'ir' && (block.irNumChannels ?? 1) >= 2;
 
   // A model download/prepare is in flight: `modelLoading` covers switches
@@ -759,8 +757,9 @@ interface GalleryBlockProps {
   /** Dual Mono only: open the detail takeover with its Stereo Processing
       panel already showing - the gallery's quick-access Stereo button. */
   onOpenStereo: (blockId: string) => void;
-  /** True when this block is carrying a real stereo signal (a Dual Mono
-      block, or downstream of one/a stereo IR) - drives an ordinary block's
+  /** True when this block is carrying a real stereo signal (a stereo source
+      feeds the chain, or it's downstream of a Dual Mono block/stereo IR) -
+      drives an ordinary block's
       own Mono/Stereo channel badge (see TileChannelBadge). */
   stereo: boolean;
   /** An empty "+" slot already sits directly left / right of this tile -

@@ -1332,10 +1332,9 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
   beginIdx = juce::jlimit(0, static_cast<int>(blocks.size()), beginIdx);
   endIdx = juce::jlimit(beginIdx, static_cast<int>(blocks.size()), endIdx);
 
-  // Highest index of an enabled+loaded NAM block. Used twice: a stereo IR is only worth
-  // processing in true stereo when there is no NAM downstream to collapse the image back to
-  // mono, and NAM blocks *before* this index hand off at calibrated output level (see the
-  // post-model gain stage below) while the last one keeps loudness normalization.
+  // Highest index of an enabled+loaded NAM block: NAM blocks *before* this index hand off at
+  // calibrated output level (see the post-model gain stage below) while the last one keeps
+  // loudness normalization.
   // Computed over the whole lane even for a partial range: a branched trunk
   // is still one chain split around the tap, not two chains.
   int lastNamIndex = -1;
@@ -1488,7 +1487,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
           }
         }
 
-        // Process with the NAM engine (handles mono conversion internally).
+        // Process with the NAM engine (one amp per channel while they differ).
         // With multi-core on, the engine forks its oversampling phase
         // instances across the worker pool (rtPhasePool, resolved per
         // callback); nested inside a lane fork this is the pool's supported
@@ -1613,11 +1612,9 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
     } else if (block->type == ChainBlockType::IR && block->convolverMono != nullptr) {
       // IR Processing.
       try {
-        // True-stereo only when: the IR file is stereo, the working buffer is stereo, and no
-        // NAM block downstream would collapse the image back to mono. Otherwise apply the IR's
-        // left channel to every audio channel (convolverMono, Stereo::no).
-        const bool noNamAfter = (idx > lastNamIndex);
-        const bool useStereoIr = block->irNumChannels > 1 && numChannels > 1 && noNamAfter &&
+        // True-stereo only when the IR file and the working buffer are both stereo. Otherwise
+        // apply the IR's left channel to every audio channel (convolverMono, Stereo::no).
+        const bool useStereoIr = block->irNumChannels > 1 && numChannels > 1 &&
                                  block->convolverStereo != nullptr;
         auto& convolver = useStereoIr ? *block->convolverStereo : *block->convolverMono;
         // Live input: closes for a spillover bypass, open otherwise (after a
@@ -1633,7 +1630,7 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
         // sound bit-identical to the non-oversampled chain.
         block->irBaseRateIsland.processBaseRateIsland(
             buffer.getArrayOfWritePointers(), numChannels, numSamples,
-            [&convolver, &predelay = block->predelay, &irBlock = *block, noNamAfter,
+            [&convolver, &predelay = block->predelay, &irBlock = *block,
              numChannels](float* const* baseChannels, int baseFrames) {
               // Predelay runs on the wet signal here, right before the
               // convolver, always at the base rate the island already
@@ -1642,7 +1639,8 @@ void TONE3000Processor::processChainOnBuffer(std::vector<std::unique_ptr<ChainBl
               juce::AudioBuffer<float> baseBuffer(baseChannels, numChannels, baseFrames);
               predelay.process(baseBuffer);
 
-              runIrEngines(irBlock, convolver, noNamAfter, baseChannels, numChannels, baseFrames);
+              runIrEngines(irBlock, convolver, /*stereoAllowed=*/true, baseChannels, numChannels,
+                           baseFrames);
             });
 
         // Unit-energy normalization, always on: an IR file's absolute level

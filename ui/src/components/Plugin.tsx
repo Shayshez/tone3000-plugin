@@ -13,6 +13,7 @@ import { useUpdateNotice } from '../hooks/useUpdateNotice';
 import { useUiScale, DESIGN_WIDTH, DESIGN_HEIGHT } from '../hooks/useUiScale';
 import { shouldRestoreToneBrowser } from '../hooks/useT3kSelect';
 import { CHAIN_SCROLL_STORAGE_KEY, ChainView, DETAIL_BLOCK_STORAGE_KEY } from './ChainView';
+import { isDownstreamOfStereoWidener } from './GalleryLane';
 import { Faceplate, PLATE_HEIGHT } from './Faceplate';
 import { HintBar, HINT_HEIGHT } from './HintBar';
 import { ResizeGrip } from './ResizeGrip';
@@ -33,7 +34,7 @@ import Settings, { type SettingsTab } from './Settings';
 import { T3K_API } from '../t3k/config';
 import type { Model } from '../types/tone';
 import type { ToneBlock } from '../types/chain';
-import { NUM_SCENES, isInsertSlot } from '../types/chain';
+import { NUM_SCENES } from '../types/chain';
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts';
 import { useKeyboardShortcutsEnabled } from './uiPreferences';
 
@@ -94,19 +95,14 @@ export const Plugin: React.FC = () => {
   // preset replaces the chain; saving/renaming changes the active preset).
   const presetStore = usePresets(refresh);
 
-  // The output carries a real stereo image only when a Dual Mono block
-  // widens it (see hasWideningDualMono below) AND the rig can reproduce it
-  // (stereoOutput: stereo host bus / 2+ channel output device); drives the
-  // output meter's stereo form.
-  // A Dual Mono block widens to independent L/R purely off buffer channel
-  // count (see runDualMono, Processor.cpp). Conservative on purpose: any
-  // Dual Mono block in the chain counts, not only once its two sides
-  // actually diverge - showing L/R needles that happen to move together is
-  // harmless, hiding a channel that can carry real content isn't.
-  const hasWideningDualMono = chain.some(
-    (item) => !isInsertSlot(item) && item.blockType === 'dualMono'
-  );
-  const stereoImage = hasWideningDualMono && stereoOutput;
+  // Stereo holds from wherever it starts all the way to the output: from the
+  // input when a stereo source feeds the chain, otherwise from the first block
+  // that widens the signal (NAM blocks run one amp per channel, see
+  // NamEngine.h). The same rule drives the tile badges (GalleryLane); the
+  // output meter also needs a rig that can reproduce two channels.
+  const stereoSource = stereoInput && inputMode === 'stereo';
+  const stereoImage =
+    stereoOutput && (stereoSource || isDownstreamOfStereoWidener(chain, chain.length));
 
   const setTunerEnabled = useNativeFunction<boolean>('setTunerEnabled');
   const copyToClipboard = useNativeFunction<boolean>('copyToClipboard');
@@ -640,6 +636,7 @@ export const Plugin: React.FC = () => {
                   <ChainActionsProvider value={chainActions}>
                     <ChainView
                       chain={chain}
+                      stereoSource={stereoSource}
                       canPaste={canPaste}
                       sampleRate={sampleRate}
                       namSlimSizeDefault={namSlimSizeDefault}

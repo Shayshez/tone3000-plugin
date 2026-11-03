@@ -40,6 +40,8 @@ export const CHAIN_SCROLL_STORAGE_KEY = 't3k.chainScroll';
 
 interface ChainViewProps {
   chain: ChainItem[];
+  /** A stereo source feeds the chain: every tile's badge reads Stereo. */
+  stereoSource: boolean;
   /** Whether the native block clipboard holds a copied block (enables Paste
       on insert slots). Survives preset switches: the clipboard snapshot is
       self-contained, not a reference into the current chain. */
@@ -95,6 +97,7 @@ const DUP_STAND_IN_ID = '__duplicate-stand-in__';
 
 export const ChainView: React.FC<ChainViewProps> = ({
   chain,
+  stereoSource,
   canPaste,
   sampleRate,
   namSlimSizeDefault,
@@ -532,6 +535,7 @@ export const ChainView: React.FC<ChainViewProps> = ({
               <GalleryLane
                 items={items}
                 tileSize={TILE_SIZE}
+                stereoSource={stereoSource}
                 onOpen={(blockId) => {
                   setInitialDetailView('main');
                   setDetailBlockId(blockId);

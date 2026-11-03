@@ -1,4 +1,33 @@
-# Stereo image: Align (Dual Mono's per-block Stereo Processing)
+# Stereo image
+
+## Stereo through the chain
+
+Stereo holds from wherever it starts all the way to the output:
+
+- **Stereo source** (stereo bus, input mode Stereo): both channels stay
+  independent through every block, from the first one on.
+- **Mono source** (mono device, or input mode L/R): the chain is mono until
+  the first widening block, an enabled stereo IR or Dual Mono block, and
+  stereo from there on.
+
+The tile badges and the output meter's L/R form follow this same rule
+(`stereoSource` and `isDownstreamOfStereoWidener` in the UI).
+
+Every block type is per-channel already except NAM, whose models are
+single-channel. `NamEngine` holds a second, independent instance set for the
+right channel, so a stereo signal runs through two identical amps, one per
+side. That set only runs while the channels differ, by more than -120 dB
+(an upstream mono convolver leaves them a ULP apart): identical channels run
+the left set and fan out, bit for bit the single-amp result at single-amp
+CPU, so a stereo bus fed a mono source pays nothing. The right set idles once
+the channels have matched for 1 s, and fades in from the left output over
+50 ms on waking. Pinned by `test/src/stereo_chain_tests.cpp`.
+
+A stereo source with one input unplugged is exactly that: the empty side stays
+empty through the chain. Input mode L/R is the fix, mirroring the live side
+onto both.
+
+# Align (Dual Mono's per-block Stereo Processing)
 
 Align is a Dual Mono block's own per-block corrective delay, on that block's
 Stereo Processing screen, time-aligning its two children before they
