@@ -244,8 +244,8 @@ const HELP_DESKTOP = {
   sceneLevel:
     'Scene level: output boost/cut for this scene only. Drag or wheel to change, double-click to type, ⌥-click: 0 dB.',
   blockChannel:
-    'Channel A-D: four full versions of this block (model, knobs, EQ). Scenes pick a channel per block.',
-  blockChannelCopy: "Copy this channel's settings onto another channel of the block.",
+    'Channel A-D: four full versions of this block (tone, knobs, EQ). Each can load its own tone of the same kind; scenes pick a channel per block.',
+  blockChannelCopy: "Copy this channel's tone and settings onto another channel of the block.",
   sceneManager:
     'Scene Manager: every scene against every block - bypass and channel at a glance. Click again to close.',
   sceneCellPower: 'Click: bypass/enable this block in this scene.',

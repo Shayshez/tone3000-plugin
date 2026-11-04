@@ -207,6 +207,7 @@ void TONE3000Processor::applyBlockSettings(ChainBlock& block, const juce::ValueT
       if (index >= 0 && index < kNumBlockChannels && index != block.activeChannel)
         block.channels[static_cast<size_t>(index)] = slot.createCopy();
     }
+    syncChannelTones(block);
   }
   block.enabled = static_cast<bool>(blockState.getProperty("enabled", true));
   block.normalizeEnabled = static_cast<bool>(blockState.getProperty("normalize", true));

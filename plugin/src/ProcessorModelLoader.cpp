@@ -1037,6 +1037,19 @@ juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,
   // the majority extension); the first stash URL names it.
   const bool isNam = models.getReference(0)["model_url"].toString().endsWithIgnoreCase(".nam");
 
+  // Into an existing block the block decides what the file is: its kind
+  // never changes (see toneKindConflict), so IR vs Cab isn't the drop's call.
+  juce::String gear = forceGear;
+  {
+    juce::ScopedLock lock(chainMutex);
+    if (const ChainBlock* target = findBlockById(targetInsertId)) {
+      if (target->type == ChainBlockType::CAB)
+        gear = "cab";
+      else if (target->type == ChainBlockType::IR && gear == "cab")
+        gear = "ir";
+    }
+  }
+
   juce::DynamicObject::Ptr tone = new juce::DynamicObject();
   tone->setProperty("id", 0);
   tone->setProperty("local", true);
@@ -1046,8 +1059,8 @@ juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,
   // comment) - inert for a NAM-format tone (irCategoryFromGear/
   // toneEngineType only ever consult gear when format != "nam"), so no
   // extra isNam guard needed here.
-  if (forceGear.isNotEmpty())
-    tone->setProperty("gear", forceGear);
+  if (gear.isNotEmpty())
+    tone->setProperty("gear", gear);
   tone->setProperty("models", models);
 
   const juce::String toneJson = juce::JSON::toString(juce::var(tone.get()));
@@ -1055,6 +1068,9 @@ juce::var TONE3000Processor::finishLocalToneLoad(const juce::String& title,
   // A load targeting an existing tone tile replaces in place (same block id
   // + params). Insert-slot ids (and missing/stale ids) still go through
   // loadTone and consume/create a slot.
+  if (const juce::String conflict = toneKindConflict(targetInsertId, toneJson);
+      conflict.isNotEmpty())
+    return localToneError(title, conflict);
   if (!targetInsertId.empty() && swapTone(targetInsertId, toneJson)) {
     juce::Logger::writeToLog("[LocalLoad] Swapped '" + title + "' into block " +
                              juce::String(targetInsertId) + " (" + juce::String(models.size()) +

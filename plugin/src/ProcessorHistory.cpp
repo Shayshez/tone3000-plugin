@@ -186,12 +186,12 @@ void TONE3000Processor::reconcileChainFromTree(const juce::ValueTree& chainState
         chainBlockTypeFromString(blockState.getProperty("type").toString());
     const int toneId = blockState.getProperty("toneId", 0);
 
-    // Reusable when identity matches: same block, same type, same tone. A
-    // swapped tone (same id, different tone) rebuilds like a fresh block.
+    // Reusable when identity matches: same block, same type. The tone may
+    // differ (channels each hold their own): the block keeps its engines and
+    // model cache, and a changed model reloads below like any model switch.
     std::unique_ptr<ChainBlock> block;
     auto it = existing.find(blockId);
-    if (it != existing.end() && it->second->type == type &&
-        (type == ChainBlockType::INSERT || it->second->toneId == toneId)) {
+    if (it != existing.end() && it->second->type == type) {
       block = std::move(it->second);
       existing.erase(it);
     } else {

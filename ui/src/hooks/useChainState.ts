@@ -189,9 +189,11 @@ export function useChainState() {
         if (res?.blockId) return null;
         return res?.error ?? "Couldn't load the file";
       },
-      /** Replace an existing block's tone in place (keeps position + params). */
+      /** Replace the tone of a block's active channel in place (keeps position
+          + params). Resolves to the reason, as a string, when the tone is of
+          another kind than the block (a block never changes kind). */
       swapTone: (blockId: string, toneJson: string) =>
-        run<boolean>('swapTone', () => native.swapTone(blockId, toneJson)),
+        run<boolean | string>('swapTone', () => native.swapTone(blockId, toneJson)),
       /** Best-effort metadata re-sync from a fresh /tones/{id} payload:
           native merges it into every block holding that tone (stored models
           preserved). Metadata only, not undoable; no-op when unchanged. */

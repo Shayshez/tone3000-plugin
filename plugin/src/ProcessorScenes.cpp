@@ -30,13 +30,34 @@ bool blockHasModel(const ChainBlock& block) {
          block.type == ChainBlockType::CAB;
 }
 
-// The block's stored catalog object for its active model (void if absent).
-juce::var activeModelData(const ChainBlock& block) {
-  if (const auto* models = block.toneVar["models"].getArray())
+// The catalog object a parsed tone holds for modelId (void if absent).
+juce::var toneModelData(const juce::var& toneVar, int modelId) {
+  if (const auto* models = toneVar["models"].getArray())
     for (const auto& m : *models)
-      if (static_cast<int>(m["id"]) == block.activeModelId)
+      if (static_cast<int>(m["id"]) == modelId)
         return m;
   return {};
+}
+
+// The block's stored catalog object for its active model (void if absent).
+juce::var activeModelData(const ChainBlock& block) {
+  return toneModelData(block.toneVar, block.activeModelId);
+}
+
+// True for a slot written before channels held their own tone, under a tone
+// the block has since left: it can only bring its settings (see applyChannel).
+bool slotLostItsTone(const ChainBlock& block, const juce::ValueTree& slot) {
+  return slot.getProperty("toneJson").toString().isEmpty() &&
+         static_cast<int>(slot.getProperty("toneId", block.toneId)) != block.toneId;
+}
+
+// A slot's model object: straight off its parsed tone, else its own record.
+juce::var slotModelData(const ChainBlock& block, int channel) {
+  const juce::ValueTree& slot = block.channels[static_cast<size_t>(channel)];
+  const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
+  const juce::var model = toneModelData(block.channelTones[static_cast<size_t>(channel)].parsed,
+                                        modelId);
+  return model.isObject() ? model : juce::JSON::parse(slot.getProperty("channelModel").toString());
 }
 
 // Settings that shape an IR kernel: a change needs an off-thread rebuild.
@@ -108,9 +129,8 @@ void TONE3000Processor::retireInBackground(std::shared_ptr<void> doomed) {
 
 juce::ValueTree TONE3000Processor::captureChannel(const ChainBlock& block) const {
   juce::ValueTree channel = serializeBlockSettings(block).createCopy();
-  // One tone per block (the block's own toneJson): a channel records only
-  // which tone its model belongs to, plus the model itself.
-  for (const char* prop : {"id", "type", "enabled", "slimSize", "channel", "toneJson"})
+  // Tone and model stay: each channel holds its own.
+  for (const char* prop : {"id", "type", "enabled", "slimSize", "channel"})
     channel.removeProperty(prop, nullptr);
   channel.removeChild(channel.getChildWithName("Channels"), nullptr);
   if (blockHasModel(block)) {
@@ -129,7 +149,7 @@ juce::ValueTree TONE3000Processor::defaultChannel(const ChainBlock& block) const
   // Kept from the live block: identity, content, bypass (scene) and NAM size.
   static const juce::Identifier kept[] = {"id",       "type",          "enabled",
                                           "slimSize", "irCategory",    "toneId",
-                                          "activeModelId", "channel"};
+                                          "toneJson", "activeModelId", "channel"};
   for (int i = 0; i < defaults.getNumProperties(); ++i) {
     const juce::Identifier name = defaults.getPropertyName(i);
     if (std::find(std::begin(kept), std::end(kept), name) == std::end(kept))
@@ -149,12 +169,10 @@ juce::ValueTree TONE3000Processor::defaultChannel(const ChainBlock& block) const
 void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& stored) {
   if (!stored.isValid())
     return;
-  // One tone per block: a channel picks a model of the block's tone. A slot
-  // recorded under another tone (a session saved before this rule) keeps
-  // the block's current model and only brings its settings.
+  // A slot that lost its tone (see slotLostItsTone) keeps the block's current
+  // model and only brings its settings.
   juce::ValueTree channel = stored;
-  if (blockHasModel(block) &&
-      static_cast<int>(stored.getProperty("toneId", block.toneId)) != block.toneId) {
+  if (blockHasModel(block) && slotLostItsTone(block, stored)) {
     channel = stored.createCopy();
     channel.setProperty("toneId", block.toneId, nullptr);
     channel.setProperty("activeModelId", block.activeModelId, nullptr);
@@ -162,6 +180,25 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& s
   }
   // IR kernel params before, to know whether a rebuild is needed.
   const juce::ValueTree before = serializeBlockSettings(block);
+
+  // The channel's own tone, parsed ahead of time (syncChannelTones) so
+  // nothing here parses under the lock. Metadata only: the engine follows
+  // through the model change below.
+  if (const juce::String toneJson = channel.getProperty("toneJson").toString();
+      blockHasModel(block) && toneJson.isNotEmpty() && toneJson != block.toneJson) {
+    const int toneId = static_cast<int>(channel.getProperty("toneId", 0));
+    const auto ready =
+        std::find_if(block.channelTones.begin(), block.channelTones.end(),
+                     [&](const ChainBlock::ChannelTone& tone) { return tone.json == toneJson; });
+    if (ready != block.channelTones.end()) {
+      block.toneId = toneId;
+      block.toneJson = ready->json;
+      block.toneVar = ready->parsed;
+      block.toneSummary = ready->summary;
+    } else {
+      setToneOnBlock(block, toneId, toneJson, juce::JSON::parse(toneJson));
+    }
+  }
 
   // Bypass belongs to the scene, NAM size to the block; no "id" property, so
   // applyBlockSettings leaves the channel slots alone.
@@ -188,6 +225,12 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& s
 
   const int modelId = static_cast<int>(channel.getProperty("activeModelId", 0));
   const bool modelChanges = blockHasModel(block) && modelId != 0 && modelId != block.activeModelId;
+  juce::var modelData;
+  if (modelChanges) {
+    modelData = toneModelData(block.toneVar, modelId);
+    if (!modelData.isObject())
+      modelData = juce::JSON::parse(channel.getProperty("channelModel").toString());
+  }
 
   // IR/Cab: a warm engine for this channel's kernel (model + shape) makes
   // the switch a crossfade instead of a load / rebuild.
@@ -201,14 +244,12 @@ void TONE3000Processor::applyChannel(ChainBlock& block, const juce::ValueTree& s
     if (key != irChannelKey(before, block.type) &&
         swapToWarmIrEngine(block, key, irChannelKey(before, block.type), tailLevel)) {
       if (modelChanges)
-        adoptSwappedModel(block, modelId,
-                          juce::JSON::parse(channel.getProperty("channelModel").toString()));
+        adoptSwappedModel(block, modelId, modelData);
       return;
     }
   }
 
   if (modelChanges) {
-    const juce::var modelData = juce::JSON::parse(channel.getProperty("channelModel").toString());
     if (modelData.isObject() && block.toneVar.isObject() &&
         !(block.type == ChainBlockType::NAM && swapToWarmNamEngine(block, modelId, modelData)))
       switchModelLocked(block, modelId, modelData);  // IR shape re-applies after the load
@@ -267,6 +308,12 @@ void TONE3000Processor::switchSingleBlockChannel(ChainBlock& block, int channel)
   if (channel == block.activeChannel)
     return;
   block.channels[static_cast<size_t>(block.activeChannel)] = captureChannel(block);
+  // Ready for the way back; no parse needed, the block has it all.
+  block.channelTones[static_cast<size_t>(block.activeChannel)] = {block.toneJson, block.toneVar,
+                                                                  block.toneSummary};
+  // A load still in flight belongs to the channel being left: its fresh-load
+  // default Mix must not land on the next one.
+  block.applyDefaultMixOnLoad = false;
   // An unused channel starts from defaults (same tone/model); "Copy To"
   // is the explicit way to start from another channel.
   const juce::ValueTree target = block.channels[static_cast<size_t>(channel)].isValid()
@@ -530,7 +577,9 @@ bool TONE3000Processor::swapToWarmNamEngine(ChainBlock& block, int modelId,
   if (block.xfadeScratch.getNumSamples() < domain)
     block.xfadeScratch.setSize(2, juce::jmax(1, domain), false, false, true);
   block.xfadeOutgoingNam = std::move(block.namEngine);
-  block.xfadeOutgoingModelId = block.activeModelId;
+  // Mid-load, the live engine is still the previous model, not the one the
+  // block names: id 0 keeps it from ever being reused under that name.
+  block.xfadeOutgoingModelId = block.modelLoading ? 0 : block.activeModelId;
   block.namEngine = std::move(incoming);
   block.xfadeGain.reset(chainSampleRate(), kSceneXfadeSeconds);
   block.xfadeGain.setCurrentAndTargetValue(0.0f);
@@ -585,10 +634,15 @@ void TONE3000Processor::settleNamInBackground(const std::string& blockId, int mo
 
 void TONE3000Processor::adoptSwappedModel(ChainBlock& block, int modelId,
                                           const juce::var& modelData) {
+  // A channel's own tone already lists its model; only another model of the
+  // same tone needs the rewrite. (On a copy: channelTones may share this
+  // object.)
   if (modelData.isObject() && block.toneVar.isObject() &&
-      !static_cast<bool>(block.toneVar["local"])) {
+      !static_cast<bool>(block.toneVar["local"]) &&
+      !toneModelData(block.toneVar, modelId).isObject()) {
     juce::Array<juce::var> models;
     models.add(modelData);
+    block.toneVar = juce::var(new juce::DynamicObject(*block.toneVar.getDynamicObject()));
     block.toneVar.getDynamicObject()->setProperty("models", models);
     block.toneJson = juce::JSON::toString(block.toneVar);
     block.toneSummary = makeToneSummary(block.toneVar);
@@ -680,11 +734,14 @@ bool TONE3000Processor::swapToWarmIrEngine(ChainBlock& block, const juce::String
     *slot = IrTail();
   }
   const float outgoingInputGain = block.irInputGain.getCurrentValue();
+  // Mid-load, the live kernel is still the previous model's: an empty key
+  // keeps it from being reused under the name the block now carries.
+  const juce::String tailKey = block.modelLoading ? juce::String() : outgoingKey;
   takeLiveIr(block, slot->engine);
   installLiveIr(block, incoming);
 
   const float liveGain = juce::jlimit(0.0f, 1.0f, block.irEffectiveNormalizationGainLinear);
-  slot->key = outgoingKey;
+  slot->key = tailKey;
   slot->gainRatio = juce::jmin(
       16.0f, tailLevel * juce::jlimit(0.0f, 1.0f, slot->engine.irEffectiveNormalizationGainLinear) /
                  juce::jmax(liveGain, 1.0e-4f));
@@ -721,8 +778,35 @@ bool TONE3000Processor::sceneReferencesModel(const std::string& blockId, int mod
   return block != nullptr && block->channelReferencesModel(modelId);
 }
 
+void TONE3000Processor::syncChannelTones(ChainBlock& block) {
+  for (int c = 0; c < kNumBlockChannels; ++c) {
+    auto& tone = block.channelTones[static_cast<size_t>(c)];
+    const juce::ValueTree& slot = block.channels[static_cast<size_t>(c)];
+    const juce::String json =
+        c == block.activeChannel ? juce::String() : slot.getProperty("toneJson").toString();
+    if (json == tone.json)
+      continue;
+    tone = {};
+    if (json.isEmpty())
+      continue;
+    tone.json = json;
+    tone.parsed = juce::JSON::parse(json);
+    tone.summary = makeToneSummary(tone.parsed);
+  }
+}
+
+void TONE3000Processor::pinLegacyChannelTones(ChainBlock& block) {
+  for (int c = 0; c < kNumBlockChannels; ++c) {
+    juce::ValueTree& slot = block.channels[static_cast<size_t>(c)];
+    if (c != block.activeChannel && slot.isValid() &&
+        slot.getProperty("toneJson").toString().isEmpty() && !slotLostItsTone(block, slot))
+      slot.setProperty("toneJson", block.toneJson, nullptr);
+  }
+}
+
 void TONE3000Processor::refreshWarmEngines() {
   forEachSceneBlock(chain, [&](ChainBlock& b) {
+    syncChannelTones(b);
     if (isIrType(b)) {
       refreshWarmIrEngines(b);
       return;
@@ -733,12 +817,11 @@ void TONE3000Processor::refreshWarmEngines() {
     std::map<int, juce::var> needed;  // model id -> catalog object
     for (int c = 0; c < kNumBlockChannels; ++c) {
       const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
-      if (c == b.activeChannel || !slot.isValid() ||
-          static_cast<int>(slot.getProperty("toneId", b.toneId)) != b.toneId)
-        continue;  // unused, live, or another tone's (see applyChannel)
+      if (c == b.activeChannel || !slot.isValid() || slotLostItsTone(b, slot))
+        continue;  // unused, live, or nothing of its own to play
       const int modelId = static_cast<int>(slot.getProperty("activeModelId", 0));
       if (modelId != 0 && modelId != b.activeModelId)
-        needed.emplace(modelId, juce::JSON::parse(slot.getProperty("channelModel").toString()));
+        needed.emplace(modelId, slotModelData(b, c));
     }
 
     // A finished crossfade's engine goes back to the pool if still needed.
@@ -839,8 +922,7 @@ void TONE3000Processor::refreshWarmIrEngines(ChainBlock& b) {
   std::map<juce::String, juce::ValueTree> needed;  // key -> channel tree
   for (int c = 0; c < kNumBlockChannels; ++c) {
     const juce::ValueTree& slot = b.channels[static_cast<size_t>(c)];
-    if (c == b.activeChannel || !slot.isValid() ||
-        static_cast<int>(slot.getProperty("toneId", b.toneId)) != b.toneId)
+    if (c == b.activeChannel || !slot.isValid() || slotLostItsTone(b, slot))
       continue;
     const juce::String key = irChannelKey(slot, b.type);
     if (key != liveKey && static_cast<int>(slot.getProperty("activeModelId", 0)) != 0)
@@ -907,7 +989,12 @@ void TONE3000Processor::prewarmIrInBackground(const std::string& blockId,
     if (block == nullptr || !isIrType(*block))
       return;
     type = block->type;
-    category = type == ChainBlockType::CAB ? IrCategory::Cab : block->irCategory;
+    // The channel's own: its file may be a different category from the live
+    // one, and Cab truncates the read.
+    const juce::String channelCategory = channel.getProperty("irCategory").toString();
+    category = type == ChainBlockType::CAB ? IrCategory::Cab
+               : channelCategory.isNotEmpty() ? irCategoryFromString(channelCategory)
+                                              : block->irCategory;
     if (modelId == block->activeModelId && block->irRawSamples.getNumSamples() > 0) {
       // Same file, other shape: start from the live model's decoded data.
       sameModel = true;

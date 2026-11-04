@@ -25,7 +25,8 @@ import type { ToneBlock } from '../types/chain';
  *
  * Visual language: the active channel is always BRAND_YELLOW (the same
  * accent as the active scene), a channel holding settings is WHITE, an
- * unused one SUBTLE (picking it starts it at default settings, same model).
+ * unused one SUBTLE (picking it starts it at default settings, same tone).
+ * Each channel can hold its own tone, always of the block's kind.
  */
 
 export const channelLetter = (channel: number | undefined) => CHANNEL_LETTERS[channel ?? 0] ?? 'A';
@@ -35,6 +36,15 @@ export const blockChannel = (block: ToneBlock) => block.params.channel ?? 0;
 /** Slot `c` holds settings (the active one always does). */
 export const channelUsed = (block: ToneBlock, c: number) =>
   c === blockChannel(block) || !!block.params.channelsUsed?.[c];
+
+/** Hint-bar text for slot `c`: what it plays, or how an unused one starts. */
+const channelHelp = (block: ToneBlock, c: number) => {
+  const name = block.params.channelNames?.[c];
+  const what = !channelUsed(block, c)
+    ? 'unused: starts at default settings'
+    : name || HELP.blockChannel;
+  return `Channel ${CHANNEL_LETTERS[c]} - ${what}`;
+};
 
 /** More than one channel in play: worth a letter badge on compact views. */
 export const usesChannels = (block: ToneBlock) =>
@@ -69,7 +79,7 @@ export const channelMenuItems = (
           c === active ? ' ✓' : channelUsed(block, c) ? '' : ' (new)'
         }`,
         icon: letterIcon(c),
-        help: HELP.blockChannel,
+        help: channelHelp(block, c),
         onSelect: () => actions.selectBlockChannel(block.blockId, c),
       })),
     },
@@ -122,11 +132,7 @@ export const ChannelSelector: React.FC<{
               setActive(c);
               actions.selectBlockChannel(block.blockId, c);
             }}
-            {...helpProps(
-              `Channel ${CHANNEL_LETTERS[c]}${
-                used ? '' : ' (unused: starts at default settings)'
-              } - ${HELP.blockChannel}`
-            )}
+            {...helpProps(channelHelp(block, c))}
             style={{
               all: 'unset',
               boxSizing: 'border-box',

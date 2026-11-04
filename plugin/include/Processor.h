@@ -255,10 +255,19 @@ public:
   // derives names from juce::File and never sees escapes; this keeps the URL
   // path identical.
   static juce::String localFileNameFromUrl(const juce::URL& url);
-  // Replace the tone of an existing block in place. Keeps the block's chain
-  // position and user params (enabled/gains/mix); the new tone's first model
-  // is queued for background loading.
+  // Replace the tone of an existing block's active channel in place. Keeps
+  // the block's chain position and user params (enabled/gains/mix) and leaves
+  // its other channels alone; the new tone's first model is queued for
+  // background loading. A block never changes kind this way (see
+  // toneKindConflict): a tone of another kind is refused.
   bool swapTone(const std::string& blockId, const juce::String& toneJsonString);
+  // Why this tone can't load into this block, for the user; empty when it
+  // can. A NAM block takes NAM, an IR block IR, a Cab block Cab: channels
+  // are versions of one block, and a scene switch can only be a crossfade
+  // between engines of the same kind. An untagged local .wav fits both IR and
+  // Cab blocks (the block decides what it is).
+  juce::String toneKindConflict(const std::string& blockId,
+                                const juce::String& toneJsonString);
   // Best-effort tone metadata re-sync: merge a fresh /tones/{id} API payload
   // into every non-local block holding that tone (both lanes). The stored
   // models array is preserved per block (native persists only the active
@@ -1215,6 +1224,13 @@ private:
   // Apply a channel tree to the live block (keeps bypass and NAM size);
   // model changes crossfade from a warm engine when possible.
   void applyChannel(ChainBlock& block, const juce::ValueTree& stored);
+  // Bring channelTones in line with the slots: parses only what changed.
+  // Runs on restore and after every chain change (refreshWarmEngines), so a
+  // channel switch finds its tone ready.
+  static void syncChannelTones(ChainBlock& block);
+  // Slots written before channels held their own tone name only a model of
+  // the block's: pin them to the block's tone before it changes.
+  static void pinLegacyChannelTones(ChainBlock& block);
   // Switch without a history entry (scene switches); caller holds the lock.
   // A Dual Mono block and its side blocks are one channel group: switching
   // the wrapper switches its sides to the same channel.

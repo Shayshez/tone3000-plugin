@@ -17,7 +17,7 @@ import { isDownstreamOfStereoWidener } from './GalleryLane';
 import { Faceplate, PLATE_HEIGHT } from './Faceplate';
 import { HintBar, HINT_HEIGHT } from './HintBar';
 import { ResizeGrip } from './ResizeGrip';
-import { ToastProvider } from './Toast';
+import { ToastProvider, useToast } from './Toast';
 import { MidiLearnProvider } from '../hooks/useMidiLearn';
 import { PluginHeader } from './PluginHeader';
 import { useHintsEnabled } from './helpText';
@@ -37,6 +37,16 @@ import type { ToneBlock } from '../types/chain';
 import { NUM_SCENES } from '../types/chain';
 import { useGlobalShortcuts } from '../hooks/useGlobalShortcuts';
 import { useKeyboardShortcutsEnabled } from './uiPreferences';
+
+/** Raises the toast for a refused tone: the flow that refuses it lives above
+    the ToastProvider, so it can't reach useToast itself. */
+const ToneRefusalToast: React.FC<{ refusal: { reason: string } | null }> = ({ refusal }) => {
+  const toast = useToast();
+  useEffect(() => {
+    if (refusal) toast.show(refusal.reason);
+  }, [refusal, toast]);
+  return null;
+};
 
 export const Plugin: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
@@ -227,10 +237,14 @@ export const Plugin: React.FC = () => {
   const { requireConnection } = connectionGate;
 
   // The add/swap browse flows and their pending targets.
+  // A fresh object per refusal, so the same reason twice still shows.
+  const [toneRefusal, setToneRefusal] = useState<{ reason: string } | null>(null);
+  const onToneRefused = useCallback((reason: string) => setToneRefusal({ reason }), []);
   const loadFlow = useToneLoadFlow({
     actions,
     requireConnection,
     setShowToneBrowser,
+    onToneRefused,
   });
 
   // Loading a preset or resetting to default replaces the chain. Leave any
@@ -511,6 +525,7 @@ export const Plugin: React.FC = () => {
       {/* One app-wide toast pill, floating above the faceplate. Everything
           that raises toasts (preset save, share, auto measure) is inside. */}
       <ToastProvider bottom={PLATE_HEIGHT + (hintsVisible ? HINT_HEIGHT : 0) + 24}>
+        <ToneRefusalToast refusal={toneRefusal} />
         {/* Right-click MIDI Learn on any mappable control (useMidiMenuItems). */}
         <MidiLearnProvider>
           {chrome.renderedBanner && (

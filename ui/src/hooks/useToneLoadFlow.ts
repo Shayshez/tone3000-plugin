@@ -90,6 +90,8 @@ interface UseToneLoadFlowOptions {
   requireConnection: (action: () => void | Promise<void>) => void;
   /** Open or close the in-plugin tone browser. */
   setShowToneBrowser: (show: boolean) => void;
+  /** A picked tone can't go into the target block; `reason` is user-facing. */
+  onToneRefused: (reason: string) => void;
 }
 
 /**
@@ -101,6 +103,7 @@ export function useToneLoadFlow({
   actions,
   requireConnection,
   setShowToneBrowser,
+  onToneRefused,
 }: UseToneLoadFlowOptions) {
   // A fully-resolved tone landed (Select callback or a browser card pick).
   // If a swap was pending, replace that block in place; otherwise add the
@@ -136,6 +139,15 @@ export function useToneLoadFlow({
       // too late (issue #114).
       if (swapBlockId) {
         const swapped = await actions.swapTone(swapBlockId, toneJson);
+        if (typeof swapped === 'string') {
+          // Another kind of tone: the block stays as it is, and the browser
+          // stays open on the same target for another pick.
+          sessionStorage.setItem(SWAP_STORAGE_KEY, swapBlockId);
+          if (navigateToDetail) sessionStorage.setItem(NAVIGATE_ON_PICK_KEY, '1');
+          setShowToneBrowser(true);
+          onToneRefused(swapped);
+          return;
+        }
         if (swapped) {
           if (navigateToDetail) sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, swapBlockId);
           setShowToneBrowser(false);
@@ -175,7 +187,7 @@ export function useToneLoadFlow({
       if (navigateToDetail) sessionStorage.setItem(DETAIL_BLOCK_STORAGE_KEY, blockId);
       setShowToneBrowser(false);
     },
-    [actions, setShowToneBrowser]
+    [actions, setShowToneBrowser, onToneRefused]
   );
 
   // Add: remember the clicked insert slot, then open the browser.

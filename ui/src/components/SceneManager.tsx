@@ -385,7 +385,11 @@ const SceneCell: React.FC<{
             key={c}
             type="button"
             onClick={() => onChannel(c)}
-            {...helpProps(`Channel ${CHANNEL_LETTERS[c]} - ${HELP.sceneCellChannel}`)}
+            {...helpProps(
+              `Channel ${CHANNEL_LETTERS[c]} - ${
+                block.params.channelNames?.[c] || HELP.sceneCellChannel
+              }`
+            )}
             style={{
               all: 'unset',
               cursor: 'pointer',

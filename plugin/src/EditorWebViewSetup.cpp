@@ -325,10 +325,15 @@ juce::WebBrowserComponent::Options buildMainWebViewOptions(TONE3000Editor* edito
           })
       .withNativeFunction(
           // Replace the tone of an existing block (Swap action). Keeps the
-          // block's chain position and user params.
+          // block's chain position and user params. A tone of another kind
+          // is refused: the result is then the reason, as a string.
           "swapTone", guarded(2, false, [editor](const juce::Array<juce::var>& args) {
-            return juce::var(editor->processor.swapTone(args[0].toString().toStdString(),
-                                                        args[1].toString()));
+            const std::string blockId = args[0].toString().toStdString();
+            const juce::String conflict =
+                editor->processor.toneKindConflict(blockId, args[1].toString());
+            if (conflict.isNotEmpty())
+              return juce::var(conflict);
+            return juce::var(editor->processor.swapTone(blockId, args[1].toString()));
           }))
       .withNativeFunction(
           // (toneJson): best-effort metadata re-sync from a fresh /tones/{id}

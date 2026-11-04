@@ -209,6 +209,26 @@ ParsedTone parseToneForLoading(const juce::String& toneJsonString) {
   return out;
 }
 
+// See TONE3000Processor::toneKindConflict.
+juce::String kindConflict(const ChainBlock& block, const ParsedTone& parsed) {
+  if (block.type == ChainBlockType::INSERT || block.type == parsed.type)
+    return {};
+  // An untagged local .wav is whatever the block says it is.
+  if (parsed.local && parsed.gear.isEmpty() && parsed.type == ChainBlockType::IR &&
+      block.type == ChainBlockType::CAB)
+    return {};
+  switch (block.type) {
+    case ChainBlockType::NAM:
+      return "This is a NAM block: it only loads NAM captures";
+    case ChainBlockType::IR:
+      return "This is an IR block: it only loads IRs";
+    case ChainBlockType::CAB:
+      return "This is a Cab block: it only loads Cab IRs";
+    default:
+      return "This block doesn't load files";
+  }
+}
+
 }  // namespace
 
 juce::var TONE3000Processor::makeToneSummary(const juce::var& toneVar) {
@@ -295,6 +315,14 @@ juce::var TONE3000Processor::makeToneSummary(const juce::var& toneVar) {
   out->setProperty("models", models);
 
   return out.get();
+}
+
+juce::String TONE3000Processor::toneKindConflict(const std::string& blockId,
+                                                 const juce::String& toneJsonString) {
+  const ParsedTone parsed = parseToneForLoading(toneJsonString);
+  juce::ScopedLock lock(chainMutex);
+  const ChainBlock* block = findBlockById(blockId);
+  return parsed.valid && block != nullptr ? kindConflict(*block, parsed) : juce::String();
 }
 
 void TONE3000Processor::setToneOnBlock(ChainBlock& block, int toneId, const juce::String& toneJson,
@@ -934,44 +962,38 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
   const ParsedTone parsed = parseToneForLoading(toneJsonString);
   if (!parsed.valid)
     return false;
+  if (kindConflict(*block, parsed).isNotEmpty()) {
+    DBG("swapTone: tone of another kind refused for block: " << blockId);
+    return false;
+  }
 
   pushChainHistory();
 
   // Replace the tone in place: same block id (chain position preserved). A
   // catalog swap keeps the user's params (enabled/gains/mix/envelope) - the
-  // old engines (and the block type they belong to) stay live and keep
-  // processing until the new model is spliced in by
-  // applyPreparedModelToChainBlock (which also stamps the new type);
-  // `modelLoading` drives the UI's loading state meanwhile.
-  // Channels are versions of the same kind of block: a swap to another
-  // kind (amp <-> IR) drops the other channels (below, same-kind swaps move
-  // them to the new tone).
-  if (parsed.type != block->type)
-    for (int c = 0; c < kNumBlockChannels; ++c)
-      if (c != block->activeChannel)
-        block->channels[static_cast<size_t>(c)] = juce::ValueTree();
-  block->modelCache.clear();  // every channel now uses the new tone
+  // old engine stays live and keeps processing until the new model is
+  // spliced in by applyPreparedModelToChainBlock; `modelLoading` drives the
+  // UI's loading state meanwhile.
+  // Only the active channel takes the new tone: the others keep theirs,
+  // along with the cached bytes their warm engines build from.
+  pinLegacyChannelTones(*block);
+  syncChannelTones(*block);
+  {
+    auto doomed = std::make_shared<std::map<int, std::vector<uint8_t>>>();
+    for (auto it = block->modelCache.begin(); it != block->modelCache.end();) {
+      if (block->channelReferencesModel(it->first)) {
+        ++it;
+      } else {
+        doomed->emplace(it->first, std::move(it->second));
+        it = block->modelCache.erase(it);
+      }
+    }
+    retireInBackground(std::move(doomed));
+  }
   setToneOnBlock(*block, parsed.toneId, parsed.toneJson, parsed.toneVar);
   block->activeModelId = parsed.firstModelId;
   block->modelLoading = true;
   block->loadFailed = false;
-  // One tone per block: the other channels keep their settings and move to
-  // the new tone's model too.
-  {
-    auto* model = new juce::DynamicObject();
-    model->setProperty("id", parsed.firstModelId);
-    model->setProperty("name", parsed.modelName);
-    model->setProperty("model_url", parsed.modelUrl);
-    const juce::String modelJson = juce::JSON::toString(juce::var(model), true);
-    for (int c = 0; c < kNumBlockChannels; ++c) {
-      juce::ValueTree& slot = block->channels[static_cast<size_t>(c)];
-      if (c == block->activeChannel || !slot.isValid())
-        continue;
-      slot.setProperty("toneId", parsed.toneId, nullptr);
-      slot.setProperty("activeModelId", parsed.firstModelId, nullptr);
-      slot.setProperty("channelModel", modelJson, nullptr);
-    }
-  }
 
   // Bug fix, 2026-09-17: a *local* file drop onto an already-occupied tile
   // (GalleryBlock.tsx's own drop, including the split IR/Cab zone) kept
@@ -1002,7 +1024,7 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
   // no effect at all once swapped onto an occupied tile - exactly mirrors
   // loadTone's own resolution now, so both cases behave identically
   // whether the drop lands on an empty slot or an existing tile.
-  if (parsed.type == ChainBlockType::IR) {
+  if (block->type == ChainBlockType::IR) {
     if (parsed.local && parsed.gear.isEmpty()) {
       block->irCategoryNeedsDurationGuess = true;
     } else {
@@ -1014,7 +1036,7 @@ bool TONE3000Processor::swapTone(const std::string& blockId, const juce::String&
   DBG("Swapped tone on block " << blockId << " -> tone " << parsed.toneId);
 
   bumpChainRevision();
-  queueToneLoad(blockId, parsed.firstModelId, parsed.modelUrl, parsed.modelName, parsed.type);
+  queueToneLoad(blockId, parsed.firstModelId, parsed.modelUrl, parsed.modelName, block->type);
   refreshWarmEngines();
 
   return true;
@@ -1114,6 +1136,8 @@ void TONE3000Processor::switchModelLocked(ChainBlock& blockRef, int modelId,
   if (!static_cast<bool>(block->toneVar["local"])) {
     juce::Array<juce::var> models;
     models.add(modelData);
+    // A copy: channelTones may share this object (a channel's own tone).
+    block->toneVar = juce::var(new juce::DynamicObject(*block->toneVar.getDynamicObject()));
     block->toneVar.getDynamicObject()->setProperty("models", models);
     block->toneJson = juce::JSON::toString(block->toneVar);
     block->toneSummary = makeToneSummary(block->toneVar);
@@ -1470,6 +1494,15 @@ void TONE3000Processor::loadToneInBackground(const std::string& blockId, int fir
       prepareBlockModelOffThread(type, modelData, filename, namSlimSize, knownCategory);
   const bool applied = prepared.success;
 
+  // Left for another channel meanwhile: nothing to install, and no reason
+  // to dip the wet path of the channel now playing.
+  {
+    juce::ScopedLock lock(chainMutex);
+    const ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr || block->activeModelId != firstModelId)
+      return;
+  }
+
   // A swapped tone's previous engine may still be audibly processing; let
   // the audio thread fade it out before the outcome is applied. On success
   // the wet path mutes in place (the dry input is never exposed, see
@@ -1536,10 +1569,15 @@ void TONE3000Processor::switchModelInBackground(const std::string& blockId, int 
       return;
     }
 
-    // Key the prepare off the *tone's* format, not block->type: during an
-    // in-flight tone swap the block keeps its previous type (that engine is
-    // still processing) while this job builds the new tone's engine.
+    // A tone can't change the block's kind (see toneKindConflict), so the
+    // tone's format only matters for a state saved mid-swap by an older
+    // build. IR vs Cab is always the block's call: a local .wav in a Cab
+    // block carries no gear tag.
     blockTypeForPrepare = toneEngineType(block->toneVar, block->type);
+    if (blockTypeForPrepare == ChainBlockType::IR && block->type == ChainBlockType::CAB)
+      blockTypeForPrepare = ChainBlockType::CAB;
+    else if (blockTypeForPrepare == ChainBlockType::CAB && block->type == ChainBlockType::IR)
+      blockTypeForPrepare = ChainBlockType::IR;
     namSlimSize = block->namSlimSize;
     if (blockTypeForPrepare == ChainBlockType::IR && !block->irCategoryNeedsDurationGuess)
       knownCategory = block->irCategory;
@@ -1574,6 +1612,20 @@ void TONE3000Processor::switchModelInBackground(const std::string& blockId, int 
   PreparedBlockModel prepared = prepareBlockModelOffThread(blockTypeForPrepare, modelData, filename,
                                                            namSlimSize, knownCategory);
   const bool applied = prepared.success;
+
+  // Left for another channel meanwhile: keep the bytes, but don't dip the
+  // wet path of the channel now playing.
+  {
+    juce::ScopedLock lock(chainMutex);
+    ChainBlock* block = findBlockById(blockId);
+    if (block == nullptr)
+      return;
+    if (block->activeModelId != modelId) {
+      if (needsFetch)
+        block->modelCache[modelId] = modelData;
+      return;
+    }
+  }
 
   // The outgoing model keeps processing until this moment; fade it out on
   // the audio thread so the outcome can't click. On success the wet path
@@ -1752,6 +1804,8 @@ void TONE3000Processor::convertBlockTypeInBackground(const std::string& blockId,
       block->irCategory = IrCategory::IrPlayer;
       block->irCategoryNeedsDurationGuess = false;
     }
+    // The other channels' warm kernels were built for the previous kind.
+    refreshWarmEngines();
   }
   // `prepared` now holds the block's *previous* engines (if any); they are
   // destroyed here, after the lock; teardown is too heavy to hold it.
@@ -1814,6 +1868,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
     juce::var eq;
     int channel = 0;                  // active channel A-D (see Scenes)
     juce::Array<juce::var> channelsUsed;  // per slot: holds settings?
+    juce::Array<juce::var> channelNames;  // per slot: what it plays ("" if unused)
     bool rtFailed = false;
     // DUAL_MONO only: the two fixed child slots (each 0 or 1 row - see
     // ChainBlock::dualLeft/dualRight) and recombine controls.
@@ -1949,9 +2004,25 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
         row.reverse = block->reverseEnabled;
         row.eq = block->eq.toVar();
         row.channel = block->activeChannel;
-        for (int c = 0; c < kNumBlockChannels; ++c)
-          row.channelsUsed.add(c == block->activeChannel ||
-                               block->channels[static_cast<size_t>(c)].isValid());
+        for (int c = 0; c < kNumBlockChannels; ++c) {
+          const bool live = c == block->activeChannel;
+          const juce::ValueTree& slot = block->channels[static_cast<size_t>(c)];
+          row.channelsUsed.add(live || slot.isValid());
+          const auto& tone = block->channelTones[static_cast<size_t>(c)];
+          const juce::var& toneVar = live || tone.json.isEmpty() ? block->toneVar : tone.parsed;
+          const int modelId = live ? block->activeModelId
+                                   : static_cast<int>(slot.getProperty("activeModelId", 0));
+          juce::String name;
+          if (live || slot.isValid()) {
+            name = toneVar["title"].toString();
+            if (const auto* models = toneVar["models"].getArray())
+              for (const auto& model : *models)
+                if (static_cast<int>(model["id"]) == modelId &&
+                    model["name"].toString() != name)
+                  name << " / " << model["name"].toString();
+          }
+          row.channelNames.add(name);
+        }
 
         if (block->type == ChainBlockType::DUAL_MONO) {
           copyLane(block->dualLeft, row.dualLeft);
@@ -2104,6 +2175,7 @@ juce::var TONE3000Processor::getChainState(int knownRevision) const {
       params->setProperty("eq", row.eq);
       params->setProperty("channel", row.channel);
       params->setProperty("channelsUsed", row.channelsUsed);
+      params->setProperty("channelNames", row.channelNames);
       params->setProperty("dualLeftPan", row.dualLeftPan);
       params->setProperty("dualRightPan", row.dualRightPan);
       params->setProperty("dualWidth", row.dualWidth);

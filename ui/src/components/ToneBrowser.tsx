@@ -633,6 +633,9 @@ export const ToneBrowser: React.FC<ToneBrowserProps> = ({
       } catch (err) {
         console.error('Failed to load picked tone', err);
         setPickError('Failed to load that tone. Please try again.');
+      } finally {
+        // A pick that lands closes the browser; one the block refused leaves
+        // it open, and the cards must take the next pick.
         setPickingId(null);
       }
     },

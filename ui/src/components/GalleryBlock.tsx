@@ -217,20 +217,19 @@ interface TileActions {
   onRetryLoad: () => void;
 }
 
-/** The two-half IR/Cab drop target shown while a file drag is armed -
-    shared by AddTile (an empty slot) and GalleryBlock's own occupied-tile
-    drop (see TileSurface) so both entry points route a dropped local .wav
-    the same way: IR always lands a plain IR block (content-duration guess
-    decides Cab/IrPlayer within it, same as before this existed); Cab forces
-    a real ChainBlockType::CAB block regardless of the file's own length
-    (see loadLocalTone's forceGear param) - no more "drop, then notice it
-    guessed wrong, then convert" two-step, on an empty slot or an existing
-    tile alike. */
+/** The drop target shown while a file drag is armed. On an empty slot
+    (AddTile) it splits in two: IR always lands a plain IR block (content-
+    duration guess decides Cab/IrPlayer within it); Cab forces a real
+    ChainBlockType::CAB block regardless of the file's own length (see
+    loadLocalTone's forceGear param). On an occupied tile (TileSurface) the
+    block's kind is already settled and never changes, so `only` shows that
+    one kind across the whole tile; native refuses any other. */
 const SplitFileDropZone: React.FC<{
   hoverHalf: 'ir' | 'cab' | null;
   onArmHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
   onDropOnHalf: (category: 'ir' | 'cab') => (e: React.DragEvent) => void;
-}> = ({ hoverHalf, onArmHalf, onDropOnHalf }) => {
+  only?: { category: 'ir' | 'cab'; label: string };
+}> = ({ hoverHalf, onArmHalf, onDropOnHalf, only }) => {
   const half = (category: 'ir' | 'cab', label: string) => (
     <div
       onDragOver={onArmHalf(category)}
@@ -257,6 +256,12 @@ const SplitFileDropZone: React.FC<{
       </span>
     </div>
   );
+  if (only)
+    return (
+      <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+        {half(only.category, only.label)}
+      </div>
+    );
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%' }}>
       {half('ir', 'IR')}
@@ -555,6 +560,10 @@ const TileSurface: React.FC<{
               hoverHalf={hoverHalf}
               onArmHalf={onArmHalf}
               onDropOnHalf={onDropOnHalf}
+              only={{
+                category: block.blockType === 'cab' ? 'cab' : 'ir',
+                label: BLOCK_TYPE_LABEL[block.blockType],
+              }}
             />
           </div>
         ) : (
@@ -921,7 +930,19 @@ export const GalleryBlock: React.FC<GalleryBlockProps> = React.memo(
               },
               ...channelMenuItems(block, actions),
               ...addSlotMenuItems(index, slotLeft, slotRight, actions),
-              ...blockTypeMenuItems(blockId, actions, toast),
+              // Files go in as the block's own kind: Load File/Folder direct,
+              // no Cab/IR choice to make.
+              ...(block.blockType === 'nam' || block.blockType === 'ir' || block.blockType === 'cab'
+                ? localLoadMenuItems(
+                    block.blockType === 'cab' ? 'cab' : 'ir',
+                    blockId,
+                    actions,
+                    toast
+                  )
+                : []),
+              ...blockTypeMenuItems(blockId, actions, toast).filter(
+                (item) => item.label !== 'Cab' && item.label !== 'IR'
+              ),
               ...powerMidi,
             ]}
           />

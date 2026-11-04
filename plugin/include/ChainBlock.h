@@ -264,13 +264,21 @@ struct ChainBlock {
   }
 
   // True when one of the block's other (inactive) channels uses modelId: its
-  // bytes must stay cached and its engine warm (see Scenes & Channels).
+  // bytes must stay cached and its engine warm (see Scenes & Channels). A
+  // channel's own tone counts too: a local tone's model list is the dropped
+  // files, with no API to page them back in from.
   bool channelReferencesModel(int modelId) const {
-    for (int c = 0; c < static_cast<int>(channels.size()); ++c)
-      if (c != activeChannel && channels[static_cast<size_t>(c)].isValid() &&
-          static_cast<int>(channels[static_cast<size_t>(c)].getProperty("activeModelId", 0)) ==
-              modelId)
+    for (int c = 0; c < static_cast<int>(channels.size()); ++c) {
+      if (c == activeChannel || !channels[static_cast<size_t>(c)].isValid())
+        continue;
+      if (static_cast<int>(channels[static_cast<size_t>(c)].getProperty("activeModelId", 0)) ==
+          modelId)
         return true;
+      if (const auto* models = channelTones[static_cast<size_t>(c)].parsed["models"].getArray())
+        for (const auto& model : *models)
+          if (static_cast<int>(model["id"]) == modelId)
+            return true;
+    }
     return false;
   }
 
@@ -653,13 +661,24 @@ struct ChainBlock {
 
   // Channels (Fractal-style): up to kNumBlockChannels full versions of this
   // block - model, knobs, EQ, IR shape, Dual Mono image... everything except
-  // bypass (a scene's call) and identity/tone. Scenes pick a channel per
+  // bypass (a scene's call) and identity. Scenes pick a channel per
   // block. The ACTIVE channel is the live block itself; its slot here may be
   // stale and is refreshed on switch-away/serialize. An invalid slot has
   // never been used and starts as a copy of the live block when selected.
   // See TONE3000Processor's CHANNELS section (ProcessorScenes.cpp).
   int activeChannel = 0;
   std::array<juce::ValueTree, 4> channels;
+
+  // Each channel holds its own tone (always of the block's kind). This is
+  // the parsed form of a slot's "toneJson", kept ready so a channel switch
+  // never parses JSON under chainMutex, which the audio thread waits on.
+  // Runtime only; see syncChannelTones.
+  struct ChannelTone {
+    juce::String json;
+    juce::var parsed;
+    juce::var summary;
+  };
+  std::array<ChannelTone, 4> channelTones;
 
   // Spectrum analyzer for the EQ editor backdrop. Only fed by the audio thread
   // while the UI has this block's EQ view open (atomic enabled flag).

@@ -225,8 +225,11 @@ export interface BlockParams {
       version of the block: model and every setting except bypass. */
   channel?: number;
   /** Per channel slot: whether it holds settings yet (the active one always
-      does; an unused slot starts at default settings with the same model). */
+      does; an unused slot starts at default settings with the current tone
+      and model). */
   channelsUsed?: boolean[];
+  /** Per channel slot: the tone (and model) it plays, empty when unused. */
+  channelNames?: string[];
   /** DUAL_MONO only: recombine controls for the block's two fixed child
       slots (see ToneBlock.dualLeft/dualRight). Normalized 0..1, constant-
       power pan (0 = hard left, 1 = hard right); defaults hard-left/hard-

@@ -15,7 +15,7 @@ import type { Model, Tone } from '../types/tone';
 
 interface UseT3kSelectOptions {
   /** Called when a selection has been resolved into a Tone (with embedded models). */
-  onToneSelected?: (tone: Tone & { models: Model[] }, accessToken: string) => void;
+  onToneSelected?: (tone: Tone & { models: Model[] }, accessToken: string) => void | Promise<void>;
   /** Called whenever a fresh access token is available (initial + refresh). */
   onAccessTokenUpdated?: (accessToken: string) => void;
   /**
@@ -313,7 +313,9 @@ export const useT3kSelect = ({
         fetchToneAndModels(toneId),
         client.getAccessToken(),
       ]);
-      onToneSelected?.(tone, accessToken);
+      // Awaited: the browser's pick stays busy until the tone has landed or
+      // been refused.
+      await onToneSelected?.(tone, accessToken);
     },
     [client, fetchToneAndModels, onToneSelected]
   );

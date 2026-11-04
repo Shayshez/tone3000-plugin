@@ -108,8 +108,8 @@ TEST(LocalLoadTest, FolderLoadsAsOneTonePerFileModelsSurviveSwitch) {
 
 TEST(LocalLoadTest, DropOnExistingToneBlockSwapsInPlace) {
   TONE3000Processor proc;
-  const juce::var first =
-      proc.loadLocalTone("a2-amp-test", filesOf({testFileEntry("a2-amp-test.nam")}));
+  const juce::var first = proc.loadLocalTone("reverb-ir-mono-test",
+                                             filesOf({testFileEntry("reverb-ir-mono-test.wav")}));
   ASSERT_TRUE(first["blockId"].toString().isNotEmpty());
   ASSERT_TRUE(waitForChainLoaded(proc));
   const juce::String blockId = first["blockId"].toString();
@@ -203,7 +203,7 @@ TEST(LocalLoadTest, SwapResetsMixToNewCategoryDefaultNotStaleValue) {
 TEST(LocalLoadTest, ForceGearIrTakesEffectOnSwapOntoOccupiedTile) {
   TONE3000Processor proc;
   const juce::var first =
-      proc.loadLocalTone("a2-amp-test", filesOf({testFileEntry("a2-amp-test.nam")}));
+      proc.loadLocalTone("cab-ir-test-2", filesOf({testFileEntry("cab-ir-test-2.wav")}));
   ASSERT_TRUE(first["blockId"].toString().isNotEmpty());
   ASSERT_TRUE(waitForChainLoaded(proc));
   const juce::String blockId = first["blockId"].toString();
@@ -343,13 +343,62 @@ TEST(LocalLoadTest, PathLoadsSingleFileAndSwapsInPlace) {
   // Targeting an existing tone block replaces in place, like a drop on a tile.
   const juce::String blockId = res["blockId"].toString();
   const juce::var swapped =
-      proc.loadLocalTonePath(testFile("cab-ir-test.wav"), blockId.toStdString());
+      proc.loadLocalTonePath(testFile("a2-am-test-2.nam"), blockId.toStdString());
   EXPECT_EQ(swapped["blockId"].toString(), blockId);
   ASSERT_TRUE(waitForChainLoaded(proc));
   block = firstToneBlock(proc);
   EXPECT_EQ(block["blockId"].toString(), blockId);
-  EXPECT_EQ(block["tone"]["format"].toString(), juce::String("ir"));
-  EXPECT_EQ(block["tone"]["title"].toString(), juce::String("cab-ir-test"));
+  EXPECT_EQ(block["tone"]["format"].toString(), juce::String("nam"));
+  EXPECT_EQ(block["tone"]["title"].toString(), juce::String("a2-am-test-2"));
+}
+
+// A block never changes kind through a load: the file is refused with a
+// reason, and no second block appears either.
+TEST(LocalLoadTest, DropOfAnotherKindIsRefused) {
+  TONE3000Processor proc;
+  const juce::var amp = proc.loadLocalTonePath(testFile("a2-amp-test.nam"));
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  const std::string ampId = amp["blockId"].toString().toStdString();
+
+  const juce::var refused = proc.loadLocalTonePath(testFile("cab-ir-test.wav"), ampId);
+  EXPECT_TRUE(refused["error"].toString().contains("NAM block"));
+  EXPECT_EQ(firstToneBlock(proc)["tone"]["title"].toString(), juce::String("a2-amp-test"));
+  const juce::var state = proc.getChainState(-1);
+  int tones = 0;
+  if (const auto* lane = state["chain"].getArray())
+    for (const auto& item : *lane)
+      if (item["kind"].toString() == "tone")
+        ++tones;
+  EXPECT_EQ(tones, 1);
+}
+
+// The block decides IR vs Cab, not the file or the drop: a .wav stays in the
+// kind of block it lands on, whichever way it would otherwise be read.
+TEST(LocalLoadTest, WavOntoACabOrIrBlockKeepsTheBlocksKind) {
+  TONE3000Processor proc;
+  const juce::var first = proc.loadLocalTone(
+      "cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}), {}, "cab");
+  ASSERT_TRUE(waitForChainLoaded(proc));
+  ASSERT_EQ(firstToneBlock(proc)["blockType"].toString(), juce::String("cab"));
+  const std::string id = first["blockId"].toString().toStdString();
+
+  const juce::var swapped =
+      proc.loadLocalTone("cab-ir-test-2", filesOf({testFileEntry("cab-ir-test-2.wav")}), id);
+  EXPECT_TRUE(swapped["error"].isVoid()) << swapped["error"].toString().toStdString();
+  ASSERT_TRUE(waitForSwapSettled(proc));
+  EXPECT_EQ(firstToneBlock(proc)["blockType"].toString(), juce::String("cab"));
+  EXPECT_EQ(firstToneBlock(proc)["tone"]["title"].toString(), juce::String("cab-ir-test-2"));
+
+  TONE3000Processor irProc;
+  const juce::var ir = irProc.loadLocalTone(
+      "reverb-ir-mono-test", filesOf({testFileEntry("reverb-ir-mono-test.wav")}));
+  ASSERT_TRUE(waitForChainLoaded(irProc));
+  const juce::var toIr =
+      irProc.loadLocalTone("cab-ir-test", filesOf({testFileEntry("cab-ir-test.wav")}),
+                           ir["blockId"].toString().toStdString(), "cab");
+  EXPECT_TRUE(toIr["error"].isVoid());
+  ASSERT_TRUE(waitForSwapSettled(irProc));
+  EXPECT_EQ(firstToneBlock(irProc)["blockType"].toString(), juce::String("ir"));
 }
 
 // The tile menu's Cab/IR rows (blockTypeMenuItems, GalleryBlock.tsx) reach
